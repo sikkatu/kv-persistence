@@ -1,0 +1,39 @@
+// mimo-v2.6-pro-l2-adapter.json
+//
+// L2 (persistent, NVMe) adapter spec for kv-persistence on MiMo-V2.6-Pro.
+// nixl_store_dynamic is the ONLY L2 adapter documented to persist data across
+// both lmcache AND vLLM restarts: on startup its in-memory index is empty and
+// every lookup falls through to the deterministic file on disk (lazy index
+// rebuild). persist_enabled defaults to true and is stated here explicitly so
+// the value cannot drift silently with upstream defaults.
+//
+// backend: POSIX  — plain file I/O, works on any local filesystem. GDS is NOT
+//   recommended here: the task calls for the simplest reliable NVMe-backed
+//   configuration before persistence is proven, and the host PCIe topology
+//   (Gen 4, one GPU at x8) would not benefit yet.
+//
+// file_path  — MUST live on local NVMe (KVP_CACHE_ROOT). Never a network mount.
+// max_capacity_gb — the HARD budget; stores above it are rejected. Required for
+//   the eviction controller to compute usage. Default 750, ceiling 1 TB.
+//
+// eviction — opt-in per adapter. LRU over KV-chunk keys; a background thread
+//   watches get_usage() and, above trigger_watermark, evicts down by
+//   eviction_ratio. This is the automatic maintenance path; the finer
+//   value-based policy in implementation/kvpersist/retention.py ranks entries
+//   when per-entry statistics are available.
+
+{
+  "type": "nixl_store_dynamic",
+  "backend": "POSIX",
+  "backend_params": {
+    "file_path": "__KVP_CACHE_ROOT__",
+    "use_direct_io": "false",
+    "max_capacity_gb": "__KVP_CACHE_BUDGET_GB__"
+  },
+  "persist_enabled": true,
+  "eviction": {
+    "eviction_policy": "LRU",
+    "trigger_watermark": __KVP_EVICT_TRIGGER_WATERMARK__,
+    "eviction_ratio": __KVP_EVICT_RATIO__
+  }
+}

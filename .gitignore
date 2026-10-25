@@ -1,0 +1,9 @@
+*.pyc
+__pycache__/
+.pytest_cache/
+*.log
+live/
+*.pid
+benchmarks/results/
+configs/generic/cache.env.local
+.DS_Store
