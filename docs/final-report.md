@@ -5,7 +5,7 @@ commit `847f3a7e21c9a39f0d2435c5a81a3148676a2261`, pushed and verified against t
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(28 unit tests), architecture proven against the pinned vLLM build's source
+(29 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on the 4× RTX PRO 6000
@@ -100,7 +100,7 @@ before measuring).
 
 ## Eviction and deduplication test results
 
-* Eviction policy semantics: **VERIFIED offline** (28 unit tests, incl. stale
+* Eviction policy semantics: **VERIFIED offline** (29 unit tests, incl. stale
   before recent, rare before frequent, huge useless first, long reused prefix
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.
