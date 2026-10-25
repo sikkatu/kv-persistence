@@ -1,7 +1,8 @@
 # Final report — kv-persistence
 
 Repository: https://github.com/sikkatu/kv-persistence (branch `main`,
-commit hash recorded at push time by `git log -1`; see *Provenance* below).
+commit `847f3a7e21c9a39f0d2435c5a81a3148676a2261`, pushed and verified against the
+GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
 (28 unit tests), architecture proven against the pinned vLLM build's source
