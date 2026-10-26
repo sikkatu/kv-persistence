@@ -2,6 +2,10 @@
 
 # kv-persistence — Universal Persistent KV Cache for vLLM
 
+<p align="center">
+  <img src="docs/assets/og-template.jpg" alt="kv-persistence — persistent KV cache for vLLM on NVMe" width="820">
+</p>
+
 Persistent, disk-backed KV-cache layer for vLLM: after a restart, reusable prompt KV
 blocks are recovered from NVMe instead of being recomputed. The design goal —
 long chat-app conversations (100k–1M tokens) reopening in seconds instead of tens of

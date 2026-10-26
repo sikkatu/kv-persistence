@@ -2,6 +2,10 @@
 
 # kv-persistence —— 面向 vLLM 的通用持久化缓存
 
+<p align="center">
+  <img src="docs/assets/og-template.jpg" alt="kv-persistence —— 面向 vLLM 的持久化 NVMe KV 缓存" width="820">
+</p>
+
 面向 vLLM 的磁盘持久化 KV 缓存层：重启后可复用的提示词 KV 块从 NVMe 恢复，
 而无需重新计算。设计目标 —— 聊天应用 中的长对话（10 万–100 万 token）几秒即可
 重新打开，而不是几十分钟 —— 在目标硬件上用 `scripts/benchmark.sh` 实测；
