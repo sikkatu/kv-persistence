@@ -5,14 +5,14 @@
 ## Goal
 
 After a vLLM restart, reusable prompt KV blocks are recovered from NVMe and used
-instead of being recomputed. Long Operit histories (100k–1M tokens) must reopen
+instead of being recomputed. Long chat-app histories (100k–1M tokens) must reopen
 fast. Session state must be bounded to a configurable storage budget and keep the
 most valuable prefixes.
 
 ## Logical topology
 
 ```
-Operit (chat client)
+a chat app (OpenAI-compatible client)
    │  OpenAI-compatible /v1/chat/completions (long message history)
    ▼
 vLLM  (TP4, MiMo-V2.6-Pro, production recipe unchanged)

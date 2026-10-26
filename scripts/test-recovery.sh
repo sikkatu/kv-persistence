@@ -46,6 +46,15 @@ api_ready(){ for i in $(seq 1 180); do
     sleep 10; done
   return 1; }
 fail(){ echo "FAIL: $*"; V=$((V+1)); echo "$*" >> "$OUT/failures.txt"; }
+inconc(){ echo "INCONCLUSIVE: $*"; V=9; echo "INCONC: $*" >> "$OUT/failures.txt"; }
+
+disk_read_bytes(){ # physical bytes read from the pinned NVMe device -> independent
+  # proof of disk-sourced reads (not RAM). Requires KVP_CACHE_DEVICE.
+  local dev="${KVP_CACHE_DEVICE:-}"; [ -n "$dev" ] || { echo -1; return; }
+  dev="${dev#/dev/}"; dev="${dev%%[0-9]*p[0-9]*}"; dev="${dev%%p[0-9]*}"
+  [ -r "/sys/block/$dev/stat" ] || { echo -1; return; }
+  awk '{print $3*512}' "/sys/block/$dev/stat" 2>/dev/null || echo -1
+}
 ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
   local label="$1" mark="$2" t0 t1
   t0=$(date +%s.%N)
@@ -80,6 +89,22 @@ echo "== build a long stable prefix (~3000 tokens) =="
 PREFIX="$OUT/prefix.txt"
 python3 -c "fact='The Sumerian sikkatu was a clay cone used to mark the boundary of a building plot.\\n'; open('$PREFIX','w').write(fact*120)"
 
+echo "== MANDATORY identity gate: engine-verified cache key before anything =="
+echo "(server identity must match the RUNNING engine; exit 5 = INCONCLUSIVE = refuse)"
+rc=0
+bash "$HERE/verify-engine-identity.sh" "$CONTAINER" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -eq 5 ]; then
+    echo "VERDICT: INCONCLUSIVE -- engine identity could not be verified (exit 5)."
+    echo "Cache reuse is REFUSED by policy: fixing the value sources and rerunning"
+    echo "is the ONLY path to a verdict. This is not a failure of the cache itself."
+    exit 5
+  fi
+  echo "VERDICT: FAIL -- engine identity MISMATCH in required fields (exit $rc)."
+  echo "KV blocks of the recorded geometry must not be reused; fix identity.env."
+  exit "$rc"
+fi
+
 echo "== COLD baseline (no cache reuse expected) =="
 M0=$(log_mark); B0=$(L2_bytes)
 ask cold "$M0"
@@ -94,6 +119,7 @@ STORED_LINES=$(l2_stored "$M0")
 [ "${STORED_LINES:-0}" -gt 0 ] || fail "scenario pre: no 'stored to L2' log evidence after warm request"
 
 echo "== SCENARIO A: restart vLLM only =="
+A_DISK0=$(disk_read_bytes)
 M_A0=$(log_mark)
 docker restart "$CONTAINER" >/dev/null 2>&1 || PA "docker restart failed"
 api_ready || PA "API did not come back after vLLM restart (scenario impossible)"
@@ -103,8 +129,17 @@ T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))[
 echo "  post-restart L2 read events: $A_RETR, cached_tokens: $A_CACHED, ttft: ${T_A}s (cold: ${T_COLD}s)"
 [ "${A_RETR:-0}" -gt 0 ] || fail "A: no L2/disk read log events AFTER the vLLM restart (got only: $(new_log "$M_A0" | grep -ci retriev || true) generic retrievals)"
 [ "${A_CACHED:-0}" -gt 0 ] || fail "A: cached_tokens==0 after restart (no reuse at all)"
+A_DISK1=$(disk_read_bytes)
+if [ "$A_DISK0" = "-1" ] || [ "$A_DISK1" = "-1" ]; then
+  inconc "A: KVP_CACHE_DEVICE unset/unreadable -- cannot independently prove NVMe-sourced reads (device counters unavailable)"
+else
+  A_DISK_DELTA=$((A_DISK1 - A_DISK0))
+  echo "  physical NVMe bytes read during A: $A_DISK_DELTA"
+  [ "$A_DISK_DELTA" -gt 0 ] || fail "A: zero physical NVMe bytes read during scenario -- L2 cannot be credited as the source"
+fi
 
 echo "== SCENARIO B: restart BOTH services, NVMe kept =="
+B_DISK0=$(disk_read_bytes)
 B_BEFORE=$(L2_bytes)
 bash "$HERE/stop-cache.sh" >/dev/null 2>&1 || PA "stop-cache.sh failed"
 bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA "start-cache.sh failed (cache service did not restart)"
@@ -121,6 +156,14 @@ echo "  post-full-restart L2 read events: $B_RETR, cached_tokens: $B_CACHED, ttf
 [ "${B_CACHED:-0}" -gt 0 ] || fail "B: cached_tokens==0 after full restart"
 B_AFTER=$(L2_bytes)
 [ "$B_AFTER" -ge "$B_BEFORE" ] || fail "B: L2 shrank during restart -- data loss suspected ($B_BEFORE -> $B_AFTER)"
+B_DISK1=$(disk_read_bytes)
+if [ "$B_DISK0" = "-1" ] || [ "$B_DISK1" = "-1" ]; then
+  inconc "B: KVP_CACHE_DEVICE unset/unreadable -- cannot independently prove NVMe-sourced reads (device counters unavailable)"
+else
+  B_DISK_DELTA=$((B_DISK1 - B_DISK0))
+  echo "  physical NVMe bytes read during B: $B_DISK_DELTA"
+  [ "$B_DISK_DELTA" -gt 0 ] || fail "B: zero physical NVMe bytes read during scenario -- L2 cannot be credited as the source"
+fi
 
 # ---- exclude alternative explanations ----------------------------------
 cached_of(){ python3 -c "import json;print(json.load(open('$1'))['usage'].get('prompt_tokens_details',{}).get('cached_tokens',0))" 2>/dev/null || echo 0; }
@@ -134,8 +177,13 @@ echo
 echo "================ SUMMARY ================"
 cat "$OUT"/*.summary.json 2>/dev/null || true
 if [ "$V" -eq 0 ]; then
-  echo "VERDICT: PASS -- disk-backed KV recovery proven (L2 read events after each restart, data retained)"
+  echo "VERDICT: PASS -- disk-backed KV recovery proven (L2 read events + physical NVMe reads after each restart, data retained)"
   exit 0
+elif [ "$V" -eq 9 ]; then
+  echo "VERDICT: INCONCLUSIVE -- not all evidence sources were available to prove disk-sourced reads (see $OUT/failures.txt)."
+  echo "Not a cache failure and not a PASS: set KVP_CACHE_DEVICE (and MODEL_DIR) so device counters and identity are verifiable, then rerun. An unproven disk source must never be reported as PASS."
+  cat "$OUT/failures.txt" 2>/dev/null || true
+  exit 5
 else
   echo "VERDICT: FAIL ($V failed checks) -- see $OUT/failures.txt"
   cat "$OUT/failures.txt" 2>/dev/null || true

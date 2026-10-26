@@ -1,0 +1,17 @@
+Persistent KV Cache for vLLM
+Copyright 2026 sikkatu
+
+This product includes software developed by sikkatu
+(https://github.com/sikkatu/kv-persistence).
+
+When you use, distribute, or publish fork or derivative of this software,
+this NOTICE file must be retained and reproduced (in the associated NOTICE,
+documentation of the redistribution or derivative, or output display of the
+application or service built on this software), including at least:
+
+  * the author's name:  sikkatu
+  * the project name:   kv-persistence
+  * the repository URL: https://github.com/sikkatu/kv-persistence
+
+This attribution requirement complies with Section 4(d) of the Apache License,
+Version 2.0 (text in LICENSE), and deliberately reiterates it for clarity.

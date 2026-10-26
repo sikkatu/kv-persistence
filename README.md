@@ -4,7 +4,7 @@
 
 Persistent, disk-backed KV-cache layer for vLLM: after a restart, reusable prompt KV
 blocks are recovered from NVMe instead of being recomputed. The design goal —
-long Operit conversations (100k–1M tokens) reopening in seconds instead of tens of
+long chat-app conversations (100k–1M tokens) reopening in seconds instead of tens of
 minutes — is measured on target hardware in `scripts/benchmark.sh`; results are
 published in [docs/benchmarks.md](docs/benchmarks.md) once the acceptance run
 completes (see [Status](#status)).
@@ -30,14 +30,15 @@ layer is model-agnostic; model-specific settings live under `configs/<model>/` o
 ## What it does
 
 ```
-Operit → vLLM (TP4) → KV connector (LMCacheMPConnector)
+Chat client → vLLM (TP4) → KV connector (LMCacheMPConnector)
        → lmcache server (standalone process) → L2 (nixl_store_dynamic, POSIX) → NVMe
 ```
 
 * **Persistence across restarts** — data survives a vLLM restart AND a full cache-service
   restart (`persist_enabled=true`; on-disk index is rebuilt lazily from file names).
-* **Bounded storage** — hard cap (750 GB default, 1 TB ceiling), soft-threshold (90 %)
-  automatic LRU eviction; the cache never wipes itself on startup.
+* **Bounded storage** — hard cap (1.5 TB default, configurable to whatever the NVMe
+  device holds), soft-threshold (90 %) automatic LRU eviction; the cache never wipes
+  itself on startup.
 * **Compatibility namespaces** — model revision, tokenizer, KV dtype, block layout and
   chat template are part of the cache key: incompatible deployments never read each
   other's KV data; anything uncertain is a cache miss, never a wrong hit.
@@ -102,4 +103,7 @@ the operator. Unverified features are labelled `NEEDS TESTING` / `BLOCKED` in
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE). Anyone using this project or publishing
+a fork must carry the [NOTICE](NOTICE) content (author: **sikkatu** / project:
+**kv-persistence** / https://github.com/sikkatu/kv-persistence), per Apache-2.0
+Section 4(d).

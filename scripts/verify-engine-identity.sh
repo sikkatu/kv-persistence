@@ -1,67 +1,98 @@
 #!/usr/bin/env bash
-# verify-engine-identity.sh -- post-launch gate: compare identity pins against the
-# ACTUALLY RUNNING engine before any saved KV data is trusted.
-#
-# Why: a syntactically valid identity.env does not guarantee that the engine
-# serving traffic has the same KV geometry (block size, kv heads, head dim, TP,
-# max-model-len, dtype). Review demanded a separate verification stage because
-# these values only exist after vLLM starts. Reuses docs-declared single digest
-# algorithm via kvpersist; exits non-zero on ANY mismatch (cache-miss policy:
-# same here -- wrong identity means a different namespace must be recomputed).
-#
-# Usage:
-#   bash scripts/verify-engine-identity.sh                 # reads live/api_key
-#   bash scripts/verify-engine-identity.sh <container> <api-base>
+# verify-engine-identity.sh -- MANDATORY gate before cache data is stored or reused.
+# Exit codes: 0 = verified, 4 = MISMATCH, 5 = INCONCLUSIVE
 set -Eeuo pipefail
-die(){ echo "ERROR: $*" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-_kvp_seed(){ [ -f "$1" ] || return 0; local line name val
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue;; esac
-    line="${line#export }"; name="${line%%=*}"; [ "$name" = "$line" ] && continue
-    name="$(printf '%s' "$name" | tr -d ' ')"; [ -z "$name" ] && continue
-    if [ -z "${!name:-}" ]; then val="${line#*=}"; val="${val%% #*}"; val="${val//\"/}"; export "$name=$val"; fi
-  done < "$1"; }
-_kvp_seed "$ROOT/configs/generic/cache.env"
-_kvp_seed "$ROOT/configs/generic/cache.env.local"
-_kvp_seed "$ROOT/configs/mimo-v2.6-pro/identity.env"
 CONTAINER="${1:-mimo-pro-tp4-kvp}"
-API="${2:-http://127.0.0.1:30007}"
-KEY="${API_KEY:-}"; [ -f "$PWD/live/api_key" ] && [ -z "$KEY" ] && KEY="$(head -n1 "$PWD/live/api_key" | tr -d '[:space:]')"
-[ -n "$KEY" ] || die "API_KEY unavailable (live/api_key)"
-LOGS="$(docker logs "$CONTAINER" 2>&1 | tail -n 4000)" || die "cannot read logs of container $CONTAINER"
-
-python3 - "$ROOT" <<PYEOF || die "engine identity mismatch or unreadable -- do NOT reuse cached data"
-import os, re, sys
-logs = """$LOGS"""
+CONFIG="$ROOT/configs/mimo-v2.6-pro/identity.env"
+MODEL_DIR="${MODEL_DIR:-${KVP_MODEL_DIR:-}}"
+python3 - "$ROOT" "$CONFIG" "$CONTAINER" "$MODEL_DIR" <<'PYEOF'
+import json, re, subprocess, sys
+root, config, container, model_dir = sys.argv[1:5]
+sys.path.insert(0, root + "/implementation")
 vals = {}
-for line in open(sys.argv[1] + "/configs/mimo-v2.6-pro/identity.env").read().splitlines():
+for line in open(config):
     m = re.match(r"^([A-Z][A-Z0-9_]*)=(.*)$", line.strip())
-    if m: vals[m.group(1)] = m.group(2)
-bad = []
-def check(label, expect, found):
-    if found is None or str(found) != str(expect):
-        bad.append("%s: identity=%s engine=%s" % (label, expect, found))
-m = re.search(r"GPU KV cache size:\s*([0-9.]+)\s*MiB", logs)  # informational
-m = re.search(r"max_model_len[= ]\s*(\d+)", logs)
-check("max_model_len", vals.get("KVP_MAX_MODEL_LEN"), m.group(1) if m else None)
-m = re.search(r"Using (?:CUDA )?graphs? .*?block size\D{0,20}(\d+)", logs) or re.search(r"cache_pages?\D{0,20}num_pages\D{0,20}(\d+)", logs)
-m = re.search(r"[Bb]lock [Ss]ize:?\s*(\d+)", logs)
-check("block_size", vals.get("KVP_BLOCK_SIZE"), m.group(1) if m else None)
-m = re.search(r"[Nn]um[_ ](?:_kv|kv)_?[hH]eads?:?\s*(\d+)", logs)
-check("num_kv_heads", vals.get("KVP_NUM_KV_HEADS"), m.group(1) if m else None)
-m = re.search(r"[hH]ead _?[dD]im:?\s*(\d+)", logs)
-check("head_dim", vals.get("KVP_HEAD_DIM"), m.group(1) if m else None)
-m = re.search(r"[tT]ensor [Pp]arallel(?: Size:?)?\s*=?\s*(\d+)", logs)
-check("tp_size", vals.get("KVP_TP_SIZE"), m.group(1) if m else None)
-m = re.search(r"[Kk]v[ _-]?[Cc]ache[ _-]?(?:dtype|data_type):?\s*=?\s*(\w+)", logs)
-if m: check("kv_cache_dtype", vals.get("KVP_KV_CACHE_DTYPE"), m.group(1).lower())
+    if m:
+        vals[m.group(1)] = m.group(2).strip()
+
+def docker_args():
+    try:
+        out = subprocess.run(["docker", "inspect", "--format", "{{json .Config.Cmd}}", container],
+                             capture_output=True, text=True, timeout=15)
+        if out.returncode == 0:
+            return json.loads(out.stdout.strip() or "[]") or []
+    except Exception:
+        pass
+    return None  # None = could not read container
+
+def arg(cmd, name):
+    if cmd is None:
+        return "UNAVAILABLE"
+    for i, a in enumerate(cmd):
+        if a == name and i + 1 < len(cmd):
+            return cmd[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return "MISSING"
+
+def model_cfg(field):
+    if not model_dir:
+        return "UNAVAILABLE"
+    try:
+        cfg = json.load(open(model_dir + "/config.json"))
+        return cfg.get(field, "MISSING")
+    except Exception:
+        return "UNAVAILABLE"
+
+cmd = docker_args()
+checks = []
+checks.append(("max_model_len", vals.get("KVP_MAX_MODEL_LEN"), arg(cmd, "--max-model-len")))
+checks.append(("tp_size", vals.get("KVP_TP_SIZE"), arg(cmd, "--tensor-parallel-size")))
+kvd = arg(cmd, "--kv-cache-dtype") if cmd is not None else "UNAVAILABLE"
+if kvd == "UNAVAILABLE":
+    kvd_seen = "UNAVAILABLE"
+elif kvd in ("auto", "MISSING"):
+    kvd_seen = "auto(default)"
+else:
+    kvd_seen = kvd.lower()
+checks.append(("kv_cache_dtype", vals.get("KVP_KV_CACHE_DTYPE"), kvd_seen))
+nh = model_cfg("num_key_value_heads")
+hd = model_cfg("head_dim")
+if hd == "MISSING":
+    hidden = model_cfg("hidden_size")
+    nh_all = model_cfg("num_attention_heads")
+    hd = hidden // nh_all if isinstance(hidden, int) and isinstance(nh_all, int) else "UNAVAILABLE"
+checks.append(("num_kv_heads", vals.get("KVP_NUM_KV_HEADS"), nh))
+checks.append(("head_dim", vals.get("KVP_HEAD_DIM"), hd))
+
+bad, inconc = [], []
+for label, expect, found in checks:
+    if found == "UNAVAILABLE":
+        inconc.append(f"{label}: source unavailable (no container/model_dir) -- identity={expect}")
+        continue
+    if found == "MISSING":
+        inconc.append(f"{label}: engine/config has no value for this field -- identity={expect}")
+        continue
+    if str(found) != str(expect):
+        bad.append(f"{label}: identity={expect} != engine/config={found}")
+
+print(f"engine identity check (container={container}, model_dir={model_dir or 'unset'})")
+for label, expect, found in checks:
+    print(f"  {label}: identity={expect}  engine/config={found}")
 if bad:
-    print("ENGINE IDENTITY MISMATCH:")
-    for b in bad: print(" ", b)
-    print("Repair configs/mimo-v2.6-pro/identity.env via scripts/setup-identity.sh values,")
-    print("then re-run; cached data of the OLD geometry stays isolated by namespace.")
+    print("\nENGINE IDENTITY MISMATCH -- cache reuse is FORBIDDEN:")
+    for b in bad:
+        print("  !!! " + b)
+    print("Fix configs/mimo-v2.6-pro/identity.env (scripts/setup-identity.sh), rerun.")
     sys.exit(4)
-print("engine identity matches identity.env (all compared fields)")
+if inconc:
+    print("\nINCONCLUSIVE -- values could not be verified; cache reuse is REFUSED by policy:")
+    for u in inconc:
+        print("  ??? " + u)
+    print("Set MODEL_DIR and/or start the container, then rerun. Passing requires")
+    print("verified values, not the absence of errors.")
+    sys.exit(5)
+print("\nidentity verified against running engine -- cache reuse allowed")
 PYEOF

@@ -1,6 +1,6 @@
-"""Operit request-format probe: measures the *stable* token prefix of Operit chat requests.
+"""Chat request-format probe: measures the *stable* token prefix of chat-app requests.
 
-Operit serializes conversations to OpenAI-style /v1/chat/completions calls.
+chat apps serialize conversations to OpenAI-style /v1/chat/completions calls.
 This tool rebuilds exactly that serialization, tokenizes it with the model's
 tokenizer and reports how many leading tokens are stable across sends (the part
 that prefix caching / the persistent cache can reuse).
@@ -10,9 +10,9 @@ prefix (timestamps, tool-call IDs, message ordering). The task requires
 verifying stability from the real serialization instead of assuming it.
 
 Usage:
-    python3 operit_probe.py --tokenizer /path/to/model_dir --request-file req1.json --request-file req2.json
+    python3 prompt_probe.py --tokenizer /path/to/model_dir --request-file req1.json --request-file req2.json
 
-Each request file is a JSON body exactly as Operit would POST it. The probe
+Each request file is a JSON body exactly as your chat app POSTs it. The probe
 prints report JSON: per-request token count, common-prefix length in tokens,
 and the SHA-256 of the common prefix token ids. No prompt text is ever printed.
 """
@@ -68,7 +68,7 @@ def load_tokenizer(path: str):
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Operit stable-prefix probe")
+    ap = argparse.ArgumentParser(description="chat-app stable-prefix probe")
     ap.add_argument("--tokenizer", required=True, help="local model/tokenizer directory")
     ap.add_argument("--request-file", action="append", required=True, dest="requests")
     args = ap.parse_args(argv)

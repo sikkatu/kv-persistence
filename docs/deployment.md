@@ -10,8 +10,8 @@ onto the 4-GPU host (Debian). The host runs the production recipe from
 
 * Debian host with 4× RTX PRO 6000, Docker, `nvidia-smi`, the pinned vLLM image
   (`IMAGE` with `@sha256:` digest) and the model directory `MODEL_DIR`.
-* Local NVMe with at least `KVP_CACHE_BUDGET_GB` (default 750) free, physical
-  ceiling 1 TB.
+* Local NVMe with at least `KVP_CACHE_BUDGET_GB` (default 1.5 TB) free on the
+  pinned device — preflight checks this against `KVP_CACHE_DEVICE`.
 * Production recipe cloned read-only (e.g. `~/recipes`).
 * Python 3.12 on the host (for `kvpersist` admin + scripts).
 

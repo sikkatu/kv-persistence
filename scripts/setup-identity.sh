@@ -26,27 +26,53 @@ echo "model dir : $MODEL_DIR"
 echo "config    : $CONFIG"
 
 # --- 1. revisions (weights + tokenizer) ---------------------------------
+# Two distinct kinds of identity, NOT interchangeable:
+#   * HF commit SHA  -- the true upstream revision, when you track remote provenance
+#     (set KVP_MODEL_REVISION before running this script)
+#   * local checkpoint fingerprint -- a deterministic digest of the LOCAL files,
+#     covering everything that defines the served weights: config.json, every
+#     *.index.json, AND the sizes + names of every shard the index declares
+#     (so a changed shard with an unchanged index still rotates the fingerprint).
+# The local fingerprint is deliberately labelled "local fingerprint", not a commit SHA.
 REV="${KVP_MODEL_REVISION:-}"
 if [ -z "$REV" ]; then
-  echo "-- resolving weights revision from the pinned local files"
-  # LOCAL model dir is the authoritative source: hash the weight index. This
-  # downloads nothing and proves which checkpoint is actually on disk.
+  echo "-- resolving LOCAL CHECKPOINT FINGERPRINT (not a commit SHA) from files on disk"
   REV="$(python3 - "$MODEL_DIR" <<'PY'
 import glob, hashlib, json, os, sys
 d = sys.argv[1]
-idx = sorted(glob.glob(os.path.join(d, "*.index.json")))
-if not idx:
-    sys.exit("no *.index.json in model dir: cannot derive local revision")
 h = hashlib.sha256()
-for p in idx:
-    with open(p, "rb") as fh:
-        h.update(fh.read())
+def feed(path, label):
+    h.update(label.encode()); h.update(b"\0")
+    if os.path.isfile(path):
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    h.update(b"\0")
+# config.json defines architecture -> part of identity
+feed(os.path.join(d, "config.json"), "config.json")
+# every weight index + every shard it declares (name + size, cheap but effective)
+indexes = sorted(glob.glob(os.path.join(d, "*.index.json")))
+if not indexes:
+    sys.exit("no *.index.json in model dir: cannot derive local fingerprint")
+for idx in indexes:
+    feed(idx, os.path.basename(idx))
+    try:
+        with open(idx, "r", encoding="utf-8") as fh:
+            wm = json.load(fh).get("weight_map", {})
+    except Exception as exc:
+        sys.exit(f"unreadable index {idx}: {exc}")
+    for shard in sorted(set(wm.values())):
+        sp = os.path.join(d, shard)
+        # shard name + exact size: a swapped or re-exported shard changes this
+        size = os.path.getsize(sp) if os.path.isfile(sp) else -1
+        h.update(f"{shard}\0{size}\0".encode())
 print(h.hexdigest()[:40])
 PY
-)"
-  [ -n "$REV" ] || die "could not derive a local revision; set KVP_MODEL_REVISION externally"
-  echo "  local checkpoint fingerprint: $REV (sha256 of weight index, first 40 hex)"
-  echo "  NOTE: substitute the HF commit SHA here if you additionally track remote provenance"
+)" || die "cannot derive local checkpoint fingerprint from $MODEL_DIR"
+  [ -n "$REV" ] || die "empty local fingerprint; set KVP_MODEL_REVISION externally"
+  echo "  local checkpoint fingerprint: $REV"
+  echo "  NOTE: this is a FILE fingerprint, not an HF commit SHA. If you track"
+  echo "  remote provenance, set KVP_MODEL_REVISION to the real commit SHA instead."
 else
   printf '%s' "$REV" | grep -Eq '^[0-9a-f]{40}$' || die "KVP_MODEL_REVISION not 40-hex: '$REV'"
 fi

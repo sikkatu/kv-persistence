@@ -29,7 +29,7 @@ treat the cache root as if it contained the conversation text itself).
 * Do not copy `KVP_CACHE_ROOT` between machines (namespaces embed host-independent
   model identity — but permissions and secret-derived content do not travel).
 * Do not add prompt text to logs while debugging; add keys/counts instead (the
-  `operit_probe.py` tool follows this rule).
+  `prompt_probe.py` tool follows this rule).
 * Treat value-per-namespace stats as metadata about users' prompts (lengths/dates)
   and keep access to `budget-report.sh status` output as private as the cache.
 

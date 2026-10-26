@@ -16,7 +16,7 @@ not reachable during this work session. Nothing untested is claimed as working.
 
 ## Architecture and selected backend
 
-Operit → vLLM (TP4, production recipe untouched) → `LMCacheMPConnector`
+Chat client → vLLM (TP4, production recipe untouched) → `LMCacheMPConnector`
 (loaded via `kv_connector_module_path` = `lmcache.integration.vllm.lmcache_mp_connector`,
 kv_role=kv_both) → standalone `lmcache server` (MP mode) → L2 tier
 `nixl_store_dynamic` backend `POSIX` → NVMe. L1 = host RAM buffer (64 GB default).

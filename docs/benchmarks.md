@@ -17,8 +17,8 @@ does NOT satisfy the primary milestone.
 | 5 | BOTH services restarted, NVMe data kept | full persistence (the acceptance criterion) |
 
 Prompt scales: synthetic 32K / 128K / 256K tokens (`scripts/benchmark.sh
-<scenario> <tokens>`), plus real Operit histories when available
-(`implementation/operit_probe.py` quantifies the stable prefix first — dynamic
+<scenario> <tokens>`), plus real long chat-app histories when available
+(`implementation/prompt_probe.py` quantifies the stable prefix first — dynamic
 values like timestamps are NOT part of the reusable prefix). 1M prompts are run
 only if the hardware window allows meaningful execution.
 
@@ -91,6 +91,22 @@ Rule: only PERSIST hits prove the project works. The verdict script fails with
 exit 1 when a scenario's post-restart request shows reuse WITHOUT L2 evidence —
 that combination points at RAM/prefix-cache only and must not be published as
 disk-backed recovery.
+
+## Physical evidence of NVMe-sourced reads (not just log text)
+
+Log parsing alone (words like `Retrieved`/`L2`) is inherently version-dependent
+and was flagged in review as a risk of false PASS. `test-recovery.sh` therefore
+CORROBORATES log evidence with an independent physical signal: the read-sector
+counter of the pinned NVMe device (`KVP_CACHE_DEVICE`, read from
+`/sys/block/<dev>/stat` field 3) measured across each scenario. A scenario that
+shows cache reuse with ZERO physical NVMe bytes read cannot credit L2 as the
+source.
+
+When `KVP_CACHE_DEVICE` is not set or the counter is unreadable, the run is
+**INCONCLUSIVE** (exit 5): neither PASS nor FAIL, because an unproven disk
+source must never be reported as success. INCONCLUSIVE is resolved by fixing
+the evidence sources (set `KVP_CACHE_DEVICE`, provide `MODEL_DIR`) and
+rerunning — not by lowering the bar.
 
 ## Acceptance verdict rule
 

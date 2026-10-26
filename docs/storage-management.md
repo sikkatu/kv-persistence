@@ -6,11 +6,29 @@
 
 | Guard | Value (default) | Enforced by |
 |---|---|---|
-| Hard cap | `KVP_CACHE_BUDGET_GB=750` GB | `max_capacity_gb` in the L2 adapter: stores above limit are REJECTED |
-| Physical ceiling | 1 TB NVMe allocation | operational rule from the project brief |
+| Hard cap | `KVP_CACHE_BUDGET_GB=1500` GB (1.5 TB) | `max_capacity_gb` in the L2 adapter: stores above limit are REJECTED |
+| Physical ceiling | whatever the pinned NVMe device holds (checked by preflight) | `KVP_CACHE_DEVICE` + free-space check |
 | Soft threshold | 0.9 of budget | `trigger_watermark` — eviction starts here |
 | Reclaim target | 0.85 of budget per cycle | `eviction_ratio` 0.1 of used capacity per cycle |
 | Per-namespace quota | `quotas.json` in cache root (optional) | `kvp-admin quota` policy layer |
+
+The 1.5 TB default is deliberately generous: more prefill history stays on NVMe,
+so reopening a conversation saves recomputation time and energy on the first
+load. Raise it further only if the pinned device has the free space (preflight
+verifies this against `KVP_CACHE_DEVICE`).
+
+## How long can a conversation be?
+
+Two different limits must not be confused:
+
+* **Per-conversation token limit (~1M)** — bounded by the model's context window
+  (`max_position_embeddings` in the model's `config.json`), NOT by this cache.
+  A single conversation cannot exceed what the model can hold in one context.
+* **How much history the cache retains on disk** — bounded ONLY by
+  `KVP_CACHE_BUDGET_GB`. There is no token limit here: as long as a topic's
+  prefill chain fits the budget, it is kept on NVMe and reused. A model update
+  that raises the context window automatically benefits from existing cache —
+  nothing in kv-persistence caps the number of tokens or conversations.
 
 The budget applies ONLY to persistent KV-cache data. Model weights, OS files and
 other application data are outside the cache root and are never accounted or

@@ -3,7 +3,7 @@
 # kv-persistence —— 面向 vLLM 的通用持久化缓存
 
 面向 vLLM 的磁盘持久化 KV 缓存层：重启后可复用的提示词 KV 块从 NVMe 恢复，
-而无需重新计算。设计目标 —— Operit 中的长对话（10 万–100 万 token）几秒即可
+而无需重新计算。设计目标 —— 聊天应用 中的长对话（10 万–100 万 token）几秒即可
 重新打开，而不是几十分钟 —— 在目标硬件上用 `scripts/benchmark.sh` 实测；
 验收运行完成后结果发布于 [docs/benchmarks.md](docs/benchmarks.md)
 （见[状态](#状态)）。
@@ -29,13 +29,13 @@ English readers: [README.md](README.md) · Русский: [README.ru.md](README
 ## 作用
 
 ```
-Operit → vLLM (TP4) → KV 连接器（LMCacheMPConnector）
+聊天应用 → vLLM (TP4) → KV 连接器（LMCacheMPConnector）
        → lmcache 服务（独立进程）→ L2（nixl_store_dynamic，POSIX）→ NVMe
 ```
 
 * **跨重启持久化** —— 数据可挺过 vLLM 重启*以及*缓存服务完整重启
   （`persist_enabled=true`；磁盘索引按文件名惰性重建）。
-* **受限存储** —— 硬上限（默认 750 GB，天花板 1 TB），软阈值（90%）
+* **受限存储** —— 硬上限（默认 1.5 TB，可按 NVMe 容量调整），软阈值（90%）
   自动 LRU 淘汰；缓存绝不在启动时自行清空。
 * **兼容性命名空间** —— 模型版本、分词器、KV 类型、块布局与聊天模板都是
   缓存键的一部分：不兼容的部署绝不互读 KV 数据；任何不确定性都导致未命中，
@@ -101,4 +101,6 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 
 ## 许可证
 
-MIT —— 见 [LICENSE](LICENSE)。
+Apache-2.0 —— 见 [LICENSE](LICENSE)。任何使用本项目或发布衍生分支者必须
+保留 [NOTICE](NOTICE) 内容（作者: **sikkatu** / 项目: **kv-persistence** /
+https://github.com/sikkatu/kv-persistence），依 Apache-2.0 第 4(d) 条。

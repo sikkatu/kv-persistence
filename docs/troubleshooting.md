@@ -63,7 +63,7 @@ files manually inside the cache root while the service runs.
 
 ## Ports / reachability (remote client)
 
-For Operit on another machine, the ENGINE port (default 30007) must be allow-
+For a chat client on another machine, the ENGINE port (default 30007) must be allow-
 listed (e.g. ufw rule for your VPN subnet + `BIND`/`API_KEY` rules from the
 production recipe). The cache's HTTP frontend (8080) is deliberately loopback
 only — do NOT expose it; use SSH port forwarding for remote diagnostics:
@@ -82,8 +82,8 @@ and-deduplication.md). Guessed tuning values will not fix policy bugs — see
 ## Everything is slow and reuses little
 
 Measure what part of the prompt is actually stable: run
-`python3 implementation/operit_probe.py --tokenizer "$MODEL_DIR" --request-file
-a.json --request-file b.json` with two REAL request bodies exported from Operit.
+`python3 implementation/prompt_probe.py --tokenizer "$MODEL_DIR" --request-file
+a.json --request-file b.json` with two REAL request bodies exported from your chat client.
 If `stable_prefix_tokens` is small, caching cannot help (timestamps/tool ids may
 differ); adjust serialization or accept the limitation — do not force caching
 by truncating history (forbidden by the project rules).
