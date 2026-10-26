@@ -1,3 +1,5 @@
+> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.zh)
+
 # Troubleshooting
 
 Quick checks first:

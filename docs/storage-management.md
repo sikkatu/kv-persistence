@@ -1,3 +1,5 @@
+> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Storage-and-Eviction) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Storage-and-Eviction.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Storage-and-Eviction.zh)
+
 # Storage management
 
 ## Budget model

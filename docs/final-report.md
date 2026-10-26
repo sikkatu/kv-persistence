@@ -1,3 +1,5 @@
+> This page is the in-repo technical record. Full docs in three languages: [wiki](https://github.com/sikkatu/kv-persistence/wiki) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Home.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Home.zh)
+
 # Final report — kv-persistence
 
 Repository: https://github.com/sikkatu/kv-persistence (branch `main`,

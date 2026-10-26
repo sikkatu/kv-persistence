@@ -1,0 +1,101 @@
+> [English](README.md) | **Русский** | [中文](README.zh.md)
+
+# kv-persistence — универсальный постоянный KV-кэш для vLLM
+
+Постоянный слой KV-кэша на диске для vLLM: после перезапуска переиспользуемые
+KV-блоки промптов восстанавливаются с NVMe, а не пересчитываются. Длинные беседы
+в Operit (100 тыс.–1 млн токенов) открываются за секунды, а не за десятки минут.
+
+**📖 Документация (EN / RU / ZH) — в Wiki:**
+[Главная](https://github.com/sikkatu/kv-persistence/wiki) ·
+[Быстрый старт](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.ru) ·
+[Архитектура](https://github.com/sikkatu/kv-persistence/wiki/Architecture.ru) ·
+[Конфигурация](https://github.com/sikkatu/kv-persistence/wiki/Configuration.ru) ·
+[Персистентность и восстановление](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery.ru) ·
+[Хранилище и эвикция](https://github.com/sikkatu/kv-persistence/wiki/Storage-and-Eviction.ru) ·
+[Интеграция с рецептами](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.ru) ·
+[Безопасность](https://github.com/sikkatu/kv-persistence/wiki/Security.ru) ·
+[Устранение неполадок](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.ru) ·
+[FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ.ru)
+
+English readers: [README.md](README.md) · 中文读者: [README.zh.md](README.zh.md)
+
+Основная цель: MiMo-V2.6-Pro на 4 × NVIDIA RTX PRO 6000 (рецепт
+`sikkatu/recipes` `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit`). Слой кэша
+модельно-агностичен; специфичные для модели настройки лежат только в
+`configs/<model>/`.
+
+## Что делает
+
+```
+Operit → vLLM (TP4) → KV-коннектор (LMCacheMPConnector)
+       → lmcache-сервер (отдельный процесс) → L2 (nixl_store_dynamic, POSIX) → NVMe
+```
+
+* **Персистентность при рестартах** — данные переживают рестарт vLLM И полный
+  рестарт сервиса кэша (`persist_enabled=true`; дисковый индекс лениво
+  восстанавливается из имён файлов).
+* **Ограниченное хранилище** — жёсткий лимит (750 ГБ, потолок 1 ТБ), мягкий порог
+  (90 %) с автоматической LRU-эвикцией; кэш никогда сам себя не стирает при старте.
+* **Пространства совместимости** — ревизия модели, токенизатор, KV-тайп, геометрия
+  блоков и чат-шаблон входят в ключ кэша: несовместимые конфигурации никогда не
+  читают чужие KV-данные; неопределённость даёт промах, а не неверное попадание.
+* **Модельно-агностичное ядро** — политика кэша отделена от интеграции с моделью;
+  новая модель добавляет конфигурацию, а не код. KV-данные разных моделей не
+  делятся никогда.
+
+## Карта документации
+
+| Тема | Wiki (EN/RU/ZH) | В репозитории (EN) |
+|---|---|---|
+| Установка → настройка → запуск → проверка | [Быстрый старт](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.ru) | [docs/deployment.md](docs/deployment.md) |
+| Топология, поток данных, модель отказов | [Архитектура](https://github.com/sikkatu/kv-persistence/wiki/Architecture.ru) | [docs/architecture.md](docs/architecture.md) |
+| Все ручки, лимиты, квоты | [Конфигурация](https://github.com/sikkatu/kv-persistence/wiki/Configuration.ru) | [docs/storage-management.md](docs/storage-management.md) |
+| Приёмочные сценарии A/B | [Персистентность и восстановление](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery.ru) | [docs/benchmarks.md](docs/benchmarks.md) |
+| `KV_PERSIST=1` в лаунчерах рецепта | [Интеграция с рецептами](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.ru) | [docs/compatibility.md](docs/compatibility.md) |
+| Правила безопасности | [Безопасность](https://github.com/sikkatu/kv-persistence/wiki/Security.ru) | [docs/security.md](docs/security.md) |
+| Честный статус и пробелы | — | [docs/final-report.md](docs/final-report.md) |
+
+## Быстрый старт
+
+```bash
+git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
+cd ~/kv-persistence
+bash scripts/preflight.sh               # проверка хоста, хранилища и идентичности
+bash scripts/start-cache.sh             # сервис постоянного кэша (NVMe)
+bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (нужны IMAGE, MODEL_DIR)
+bash scripts/test-recovery.sh           # приёмка: рестарт → доказательство переиспользования
+```
+
+Постоянный переключатель в production-рецепте — `KV_PERSIST=1` в `tp4.env`
+(см. вики «Интеграция с рецептами»); откат — удаление этой одной строки.
+
+## Структура репозитория
+
+| Путь | Содержимое |
+|---|---|
+| `docs/` | англоязычная техническая документация (все языки — в вики) |
+| `configs/generic/` | настройки кэша и lmcache-сервера, EN/RU/ZH-переводы комментариев |
+| `configs/mimo-v2.6-pro/` | пины идентичности MiMo и шаблон L2-адаптера, EN/RU/ZH |
+| `scripts/` | preflight, старт/стоп кэша, лаунчер, тест восстановления, бенчмарк, админ-CLI |
+| `implementation/` | пакет `kvpersist`: идентичность, бюджеты, ранжирование, админ-CLI |
+| `tests/` | unit (29, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
+
+## Статус
+
+Реализация завершена; офлайн-тесты зелёные. Приёмочные hardware-прогоны на хосте с
+4 GPU заскриптованы (`scripts/test-recovery.sh`, `scripts/benchmark.sh`) и выполняются
+эксплуатирующей стороной. Непроверенные возможности помечены `NEEDS TESTING` /
+`BLOCKED` в [docs/final-report.md](docs/final-report.md) — непроверенное не
+выдаётся за работающее.
+
+## Правила проектирования
+
+* Production-рецепт (`sikkatu/recipes`) для проекта **только для чтения**.
+* Никаких неаутентифицированных эндпоинтов управления; корень кэша `0700`.
+* В дереве нет учётных данных, токенов, текстов промптов и данных кэша.
+* Все задокументированные команды работают как есть, без ручных дополнений.
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).

@@ -1,3 +1,5 @@
+> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.zh)
+
 # Compatibility
 
 Status labels: **VERIFIED** (checked on the actual pinned runtime), **NEEDS

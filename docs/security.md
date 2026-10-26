@@ -1,3 +1,5 @@
+> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Security) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Security.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Security.zh)
+
 # Security and data handling
 
 ## Threat model

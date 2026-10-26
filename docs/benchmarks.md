@@ -1,3 +1,5 @@
+> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery.zh)
+
 # Benchmarks
 
 Measurement rules: every number must state request conditions (cold/warm,

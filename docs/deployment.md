@@ -1,3 +1,5 @@
+> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.zh)
+
 # Deployment
 
 Linear path — no steps to add by hand. Commands are meant to be copied verbatim
