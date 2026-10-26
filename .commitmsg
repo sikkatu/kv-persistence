@@ -1,0 +1,7 @@
+fix(test-recovery): store/retrieve evidence regex tightened to action-shaped events
+
+The old l2_stored() matched ANY log line containing "l2" -- per review that
+could never distinguish real storage activity from incidental wording. Both
+helpers now require an explicit read-from-L2 or write-to-L2 phrase:
+  reads  : (retriev|loaded|restore|prefetch|read) with (l2|disk|secondary|file)
+  writes : (stored|storing|wrote|written|writing|save*) with (l2|disk|secondary|file)

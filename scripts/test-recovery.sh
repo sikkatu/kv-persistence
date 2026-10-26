@@ -35,8 +35,16 @@ L2_bytes(){ # Sum bytes of cache data files EXCEPT the service's own log/pid,
   find "$L2" -type f ! -name 'lmcache-server.log' ! -name 'lmcache-server.pid' \
        -printf '%s\n' 2>/dev/null | awk '{s+=$1} END{print s+0}'
 }
-l2_retrievals(){ new_log "$1" | grep -ci '\(retriev\|loaded\|restore\).*\(L2\|disk\|l2\|secondary\|file\)' || true; }
-l2_stored(){ new_log "$1" | grep -ci '\(stored\|wrote\|write\|stored to\|l2\)' || true; }
+# BOTH helpers require an explicit STORE/READ-from-L2 EVENT, not any line
+# merely containing one of these words (review: the old l2_stored() matched any
+# line with "l2", so it could never distinguish storage activity from a log
+# line that just happened to mention L2). Tightened to action-shaped phrases.
+l2_retrievals(){ # read-from-L2 events appended after the scenario's log mark
+  new_log "$1" | grep -ciE '(retriev|loaded|restore|prefetch|read)[a-z]*[^a-z]{0,20}(from |to )?(l2|disk|secondary|file)' || true
+}
+l2_stored(){ # write-to-L2 events appended after the scenario's log mark
+  new_log "$1" | grep -ciE '(stored|storing|wrote|written|writing|save[a-z]*)[^a-z]{0,20}(to |into )?(l2|disk|secondary|file)' || true
+}
 api_ready(){ for i in $(seq 1 180); do
     curl -fsS --max-time 3 -H "Authorization: Bearer $KEY" "$API/v1/models" >/dev/null 2>&1 && return 0
     [ $((i % 6)) -eq 0 ] && echo "  waiting for API... $((i*10))s"
