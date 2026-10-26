@@ -141,6 +141,7 @@ before measuring).
 ## Provenance
 
 * Commit hash of this report: run `git log -1 --format=%H` in the repository.
-* The kv-persistence token and recipes token used for push must be revoked after
-  this work session and re-issued fine-grained (Contents: Read and write) —
-  they were shared in chat and per the security rule must be rotated.
+* Push credentials are NOT stored in this repository (verified: zero
+  `github_pat_` occurrences in tree and in git history). Credentials used by
+  maintainers follow the same rotate-after-use policy documented in
+  docs/security.md.
