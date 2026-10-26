@@ -110,6 +110,44 @@ Run: bash scripts/setup-identity.sh \"$KVP_MODEL_DIR\"   (fills and verifies all
   esac
 fi
 
+echo "-- runtime prerequisites (review 4: before the cache can be trusted) --"
+# Python 3.12 is the documented interpreter (Debian 12 ships 3.11 -- see
+# docs/deployment.md); require it by version, not just "python3 exists".
+if command -v python3.12 >/dev/null 2>&1; then
+  note "python3.12 $(python3.12 --version 2>&1 | cut -d' ' -f2)"
+elif command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3,12) else 1)'; then
+  note "python3 $(python3 --version 2>&1 | cut -d' ' -f2) (>= 3.12)"
+else
+  warn "Python 3.12 not found -- Debian 12 system python3 is 3.11; install 3.12 first (docs/deployment.md step 0)"
+fi
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import venv' 2>/dev/null; then
+  note "python3 venv module available"
+else
+  warn "python3 venv module missing -- install python3-venv (Debian: separate package)"
+fi
+# Free space >= budget on the cache root filesystem.
+if [ -n "${BUDGET_GB:-}" ] && [ -n "${FREE_GB:-}" ]; then
+  if [ "$FREE_GB" -lt "$BUDGET_GB" ]; then
+    warn "free space ${FREE_GB} GB < budget ${BUDGET_GB} GB on $(df -P "$ROOT_PATH" | awk 'NR==2{print $6}') -- raises the risk of refusing stores mid-flight"
+  fi
+fi
+# Cache root perms must be 0700.
+PERMS="$(stat -c '%a' "$ROOT_PATH" 2>/dev/null || echo '?')"
+case "$PERMS" in
+  700|0700) note "cache root permissions $PERMS" ;;
+  *) warn "cache root permissions are $PERMS (expected 700) -- other users may read prompt-derived KV data" ;;
+esac
+# Listener check: lmcache request port and HTTP port must bind loopback only.
+if command -v ss >/dev/null 2>&1; then
+  for P in "${LMCACHE_PORT:-5555}" "${LMCACHE_HTTP_PORT:-8080}"; do
+    LISTEN="$(ss -ltnH 2>/dev/null | awk -v p=":$P" '$4 ~ p"$"' | head -1)"
+    if [ -n "$LISTEN" ] && ! printf '%s' "$LISTEN" | grep -q '127.0.0.1\|::1\|localhost'; then
+      warn "port $P appears bound to a non-loopback address ($LISTEN) -- cache management must stay local-only"
+    fi
+  done
+else
+  note "ss unavailable -- listener loopback check skipped (cannot verify cache service binds)"
+fi
 echo "-- runtime tools --"
 command -v python3 >/dev/null && note "python3 $(python3 --version 2>&1 | cut -d' ' -f2)" || warn "python3 missing"
 command -v lmcache >/dev/null && note "lmcache CLI present ($(lmcache --help >/dev/null 2>&1 && echo ok || echo broken))" \

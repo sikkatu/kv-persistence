@@ -1,4 +1,4 @@
-> 🌐 Единые языковые версии: **English** | [Русский](eviction-and-deduplication.ru.md) | [中文](eviction-and-deduplication.zh.md)
+> 🌐 Language versions: **English** | [Русский](eviction-and-deduplication.ru.md) | [中文](eviction-and-deduplication.zh.md)
 
 # Eviction and deduplication
 

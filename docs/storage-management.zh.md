@@ -9,7 +9,7 @@
 | 硬上限 | `KVP_CACHE_BUDGET_GB=1500` GB（1.5 TB） | L2 适配器的 `max_capacity_gb` —— 超出的写入被拒绝 |
 | 物理上限 | 固定 NVMe 设备的容量（预检确认） | 通过 `KVP_CACHE_DEVICE` 检查可用空间 |
 | 软阈值 | 预算的 0.9 | `trigger_watermark` —— 自动淘汰从此开始 |
-| 回收目标 | 每周期回收至预算的 0.85 | `eviction_ratio` 为已用容量的 0.1 |
+| 回收目标 | 一个周期后约为预算的 0.81（0.9 阈值 × 已用容量的 0.9） | `eviction_ratio` 为已用容量的 0.1 |
 | 命名空间配额 | 可选，`quotas.json` | `kvp-admin quota` 策略层 |
 
 预算仅涵盖持久 KV 缓存数据。模型权重、系统和其他文件不在此核算，

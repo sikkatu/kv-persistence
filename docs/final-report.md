@@ -1,4 +1,4 @@
-> 🌐 Единые языковые версии: **English** | [Русский](final-report.ru.md) | [中文](final-report.zh.md)
+> 🌐 Language versions: **English** | [Русский](final-report.ru.md) | [中文](final-report.zh.md)
 
 > This page is the in-repo technical record. Full docs in three languages: [wiki](https://github.com/sikkatu/kv-persistence/wiki) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Home.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Home.zh)
 
@@ -93,13 +93,13 @@ on the first post-restart request, TTFT drop vs cold baseline, and
 Pending measurement on hardware (formula: `used_bytes ÷ persisted tokens`,
 reported by `benchmark.sh` + `budget-report.sh status` per run). Theoretical
 footprint for the current dtype (bf16) is
-`2 × num_kv_heads × head_dim × 2(K,V) × layers / tp_size` bytes/token — exact
+`2 x num_kv_heads x head_dim x 2(K,V) x layers` bytes/token of TOTAL KV (per-token across all TP ranks; NVMe stores the whole tensor, NOT per-rankdivided). For hybrid-attention models per-group geometry differs —
 layer/head counts for MiMo-V2.6-Pro are recorded from the model config during
 the hardware run, before any capacity promises are made.
 
 ## Cache budget and observed capacity
 
-Configured: 750 GB default (hard), 1 TB physical ceiling. Observed usage:
+Configured: 1500 GB default (hard), bound = free space on the pinned NVMe (preflight-verified). Observed usage:
 pending hardware run. Bytes-per-token estimate will be filled from real
 measurements (per the brief: do not promise a fixed number of conversations
 before measuring).

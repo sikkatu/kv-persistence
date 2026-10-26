@@ -1,4 +1,4 @@
-> 🌐 Единые языковые версии: **English** | [Русский](benchmarks.ru.md) | [中文](benchmarks.zh.md)
+> 🌐 Language versions: **English** | [Русский](benchmarks.ru.md) | [中文](benchmarks.zh.md)
 
 # Benchmarks
 

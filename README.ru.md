@@ -44,7 +44,7 @@ KV-блоки промптов восстанавливаются с NVMe, а н
 * **Ограниченное хранилище** — жёсткий лимит (1.5 ТБ по умолчанию, настраивается под
   объём NVMe), мягкий порог (90 %) с автоматической LRU-эвикцией; кэш никогда сам себя
   не стирает при старте.
-* **Пространства совместимости** — ревизия модели, токенизатор, KV-тайп, геометрия
+* **Пространства совместимости** — ревизия модели, токенизатор, KV-тип, геометрия
   блоков и чат-шаблон входят в ключ кэша: несовместимые конфигурации никогда не
   читают чужие KV-данные; неопределённость даёт промах, а не неверное попадание.
 * **Модельно-агностичное ядро** — политика кэша отделена от интеграции с моделью;
@@ -57,7 +57,7 @@ KV-блоки промптов восстанавливаются с NVMe, а н
 |---|---|---|
 | Установка → настройка → запуск → проверка | [Быстрый старт](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.ru) | [docs/deployment.md](docs/deployment.md) |
 | Топология, поток данных, модель отказов | [Архитектура](https://github.com/sikkatu/kv-persistence/wiki/Architecture.ru) | [docs/architecture.md](docs/architecture.md) |
-| Все ручки, лимиты, квоты | [Конфигурация](https://github.com/sikkatu/kv-persistence/wiki/Configuration.ru) | [docs/storage-management.md](docs/storage-management.md) |
+| Все параметры, лимиты, квоты | [Конфигурация](https://github.com/sikkatu/kv-persistence/wiki/Configuration.ru) | [docs/storage-management.md](docs/storage-management.md) |
 | Приёмочные сценарии A/B | [Персистентность и восстановление](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery.ru) | [docs/benchmarks.md](docs/benchmarks.md) |
 | `KV_PERSIST=1` в лаунчерах рецепта | [Интеграция с рецептами](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.ru) | [docs/compatibility.md](docs/compatibility.md) |
 | Правила безопасности | [Безопасность](https://github.com/sikkatu/kv-persistence/wiki/Security.ru) | [docs/security.md](docs/security.md) |

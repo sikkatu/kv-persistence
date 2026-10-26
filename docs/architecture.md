@@ -1,4 +1,4 @@
-> 🌐 Языковые версии: **English** | [Русский](architecture.ru.md) | [中文](architecture.zh.md)
+> 🌐 Language versions: **English** | [Русский](architecture.ru.md) | [中文](architecture.zh.md)
 
 > Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Architecture) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Architecture.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Architecture.zh)
 
@@ -43,7 +43,7 @@ L2 persistent tier:  nixl_store_dynamic / POSIX  →  NVMe
 `nixl_store_dynamic` opens and registers files per operation instead of
 pre-allocating at init. This is exactly what is needed for persistence: cached
 KV metadata (deterministic file names on disk) survives restarts of either
-process; there is no fd-count limit at 750 GB scale. `nixl_store`'s pre-allocated
+process; there is no fd-count limit at 1.5 TB scale. `nixl_store`'s pre-allocated
 registry does not survive restarts. This behavior is documented upstream and
 re-verified in docs/compatibility.md.
 

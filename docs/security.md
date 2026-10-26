@@ -1,4 +1,4 @@
-> 🌐 Единые языковые версии: **English** | [Русский](security.ru.md) | [中文](security.zh.md)
+> 🌐 Language versions: **English** | [Русский](security.ru.md) | [中文](security.zh.md)
 
 # Security and data handling
 

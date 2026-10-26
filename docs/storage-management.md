@@ -1,4 +1,4 @@
-> 🌐 Единые языковые версии: **English** | [Русский](storage-management.ru.md) | [中文](storage-management.zh.md)
+> 🌐 Language versions: **English** | [Русский](storage-management.ru.md) | [中文](storage-management.zh.md)
 
 # Storage management
 
@@ -9,7 +9,7 @@
 | Hard cap | `KVP_CACHE_BUDGET_GB=1500` GB (1.5 TB) | `max_capacity_gb` in the L2 adapter: stores above limit are REJECTED |
 | Physical ceiling | whatever the pinned NVMe device holds (checked by preflight) | `KVP_CACHE_DEVICE` + free-space check |
 | Soft threshold | 0.9 of budget | `trigger_watermark` — eviction starts here |
-| Reclaim target | 0.85 of budget per cycle | `eviction_ratio` 0.1 of used capacity per cycle |
+| Reclaim target | ~0.81 of budget after one cycle (0.9 trigger x 0.9 kept of used) | `eviction_ratio` 0.1 of used capacity per cycle |
 | Per-namespace quota | `quotas.json` in cache root (optional) | `kvp-admin quota` policy layer |
 
 The 1.5 TB default is deliberately generous: more prefill history stays on NVMe,
@@ -26,9 +26,11 @@ Two different limits must not be confused:
   A single conversation cannot exceed what the model can hold in one context.
 * **How much history the cache retains on disk** — bounded ONLY by
   `KVP_CACHE_BUDGET_GB`. There is no token limit here: as long as a topic's
-  prefill chain fits the budget, it is kept on NVMe and reused. A model update
-  that raises the context window automatically benefits from existing cache —
-  nothing in kv-persistence caps the number of tokens or conversations.
+  prefill chain fits the budget, it is kept on NVMe and reused. NOTE: a model
+  update that changes `max_model_len` (or any other identity field) moves the
+  deployment to a NEW namespace — earlier cache data is NOT auto-reused after
+  such a change, because the KV geometry the model uses would differ. That is
+  isolation by design (see docs/architecture.md), not a data limitation.
 
 The budget applies ONLY to persistent KV-cache data. Model weights, OS files and
 other application data are outside the cache root and are never accounted or

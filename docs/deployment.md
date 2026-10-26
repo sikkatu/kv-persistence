@@ -1,4 +1,4 @@
-> 🌐 Единые языковые версии: **English** | [Русский](deployment.ru.md) | [中文](deployment.zh.md)
+> 🌐 Language versions: **English** | [Русский](deployment.ru.md) | [中文](deployment.zh.md)
 
 # Deployment
 

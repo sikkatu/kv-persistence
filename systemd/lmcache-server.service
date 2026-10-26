@@ -1,0 +1,38 @@
+# systemd/lmcache-server.service -- cache-service unit for systemd deployments.
+# Install:
+#   sudo cp systemd/lmcache-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lmcache-server
+# Logs: journalctl -u lmcache-server -f   ; Restart handling managed by systemd.
+#
+# Why systemd instead of `setsid nohup`: survives reboot, restarts automatically
+# on failure, and logs land in journald. scripts/start-cache.sh remains for
+# non-systemd hosts (session-affine `setsid nohup` mode).
+
+[Unit]
+Description=LMCache server (persistent KV cache for vLLM, kv-persistence)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Run as the same non-root user that runs Docker (see docs/security.md on the
+# chosen user and cache-dir ownership); never as a public/wide binding service.
+User=%i
+EnvironmentFile=/etc/kv-persistence.env   # optional file with KVP_* / LMCACHE_* overrides
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env lmcache server \
+  --host 127.0.0.1 --port 5555 \
+  --l1-size-gb 64 \
+  --eviction-policy LRU \
+  --eviction-trigger-watermark 0.9 \
+  --eviction-ratio 0.1 \
+  --chunk-size 256 \
+  --l2-adapter /var/lib/kv-persistence/l2/l2-adapter.rendered.json
+Restart=on-failure
+RestartSec=5
+# Cannot be kill -9'd by accident loops; give it time to flush files on SIGTERM.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

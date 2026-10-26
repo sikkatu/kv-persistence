@@ -1,4 +1,4 @@
-> 🌐 Единые языковые версии: **English** | [Русский](compatibility.ru.md) | [中文](compatibility.zh.md)
+> 🌐 Language versions: **English** | [Русский](compatibility.ru.md) | [中文](compatibility.zh.md)
 
 # Compatibility matrix
 
