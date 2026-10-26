@@ -74,10 +74,9 @@ echo "-- runtime tools --"
 command -v python3 >/dev/null && note "python3 $(python3 --version 2>&1 | cut -d' ' -f2)" || warn "python3 missing"
 command -v lmcache >/dev/null && note "lmcache CLI present ($(lmcache --help >/dev/null 2>&1 && echo ok || echo broken))" \
   || warn "lmcache CLI not on PATH (install per docs/deployment.md)"
-python3 - <<'PY' 2>/dev/null && note "kvpersist package importable" || warn "kvpersist not importable (PYTHONPATH=implementation)"
-import sys; sys.path.insert(0, "implementation")
-import kvpersist
-PY
+PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'import kvpersist' 2>/dev/null \
+  && note "kvpersist package importable" \
+  || warn "kvpersist not importable from $ROOT/implementation"
 
 echo
 if [ "$FAIL" = 0 ]; then
