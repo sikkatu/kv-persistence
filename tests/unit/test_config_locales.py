@@ -5,8 +5,8 @@ COMMENTS ONLY. Every variable name, its value and its order must match the
 English reference exactly, so switching language can never change behaviour.
 """
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2] / "configs"
 PAIRS = [
@@ -15,7 +15,9 @@ PAIRS = [
     ROOT / "mimo-v2.6-pro" / "identity.env",
 ]
 
-ASSIGN = re.compile(r"^([A-Z][A-Z0-9_]*)=(.*)$")
+# an assignment line: optional leading '# ' (commented example knobs count too),
+# NAME=... — same convention as the recipes locale-parity test
+ASSIGN = re.compile(r"^#?\s*([A-Z][A-Z0-9_]*)=(.*)$")
 
 
 def _pairs(text: str):

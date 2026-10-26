@@ -3,8 +3,10 @@
 # kv-persistence —— 面向 vLLM 的通用持久化缓存
 
 面向 vLLM 的磁盘持久化 KV 缓存层：重启后可复用的提示词 KV 块从 NVMe 恢复，
-而无需重新计算。Operit 中的长对话（10 万–100 万 token）几秒即可重新打开，
-而不是几十分钟。
+而无需重新计算。设计目标 —— Operit 中的长对话（10 万–100 万 token）几秒即可
+重新打开，而不是几十分钟 —— 在目标硬件上用 `scripts/benchmark.sh` 实测；
+验收运行完成后结果发布于 [docs/benchmarks.md](docs/benchmarks.md)
+（见[状态](#状态)）。
 
 **📖 文档（EN / RU / ZH）位于 Wiki：**
 [首页](https://github.com/sikkatu/kv-persistence/wiki) ·
@@ -58,11 +60,16 @@ Operit → vLLM (TP4) → KV 连接器（LMCacheMPConnector）
 ```bash
 git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
+bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"   # 填写并核验身份固定项
 bash scripts/preflight.sh               # 校验主机、存储与身份
 bash scripts/start-cache.sh             # 持久缓存服务（NVMe）
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV 连接器（需 IMAGE、MODEL_DIR）
-bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证明
+bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据（exit 0 = PASS）
 ```
+
+每条命令都会在出错时明确拒绝，而不是留下半成品环境：`setup-identity.sh`
+负责写入并核验身份值，`preflight.sh` 校验物理 NVMe 设备，
+`test-recovery.sh` 以机器判定收尾。
 
 生产配方中的常驻开关是 `tp4.env` 里的 `KV_PERSIST=1`
 （见 wiki「配方集成」）；回滚只需删除这一行。

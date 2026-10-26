@@ -72,6 +72,26 @@ The automatic recorder emits one JSON object per request — copy
 | 5 after both restarts | 32K | – | – | – | – | – | – |
 | … 128K / 256K rows … | | | | | | | |
 
+## Cache-outcome taxonomy (what a run must distinguish)
+
+Successful generation ≠ successful caching. Every acceptance run classifies each
+request into EXACTLY one outcome — `scripts/test-recovery.sh` enforces this in
+its checks and its final verdict:
+
+| Outcome | Evidence required | Counts as success? |
+|---|---|---|
+| **PERSIST hit** | `Retrieved`-from-L2 log events after a restart + `cached_tokens > 0` + no L2 rewrite of the same data | YES — the project's purpose |
+| Memory (L1/RAM) hit | `cached_tokens > 0`, no post-restart L2 evidence | NO (not persistence proof) |
+| Plain prefix-cache hit | engine `cached_tokens > 0` without LMCache events | NO |
+| Cache miss (recompute) | no reuse, fresh prefill | expected on cold runs |
+| Incompatible data | different namespace, clean miss | correct, safe behaviour |
+| Read/recovery error | adapter/connector error lines, `fail` check | NO — hard failure |
+
+Rule: only PERSIST hits prove the project works. The verdict script fails with
+exit 1 when a scenario's post-restart request shows reuse WITHOUT L2 evidence —
+that combination points at RAM/prefix-cache only and must not be published as
+disk-backed recovery.
+
 ## Acceptance verdict rule
 
 PASS for the primary milestone requires ALL of:

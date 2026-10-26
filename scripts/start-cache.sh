@@ -54,7 +54,35 @@ lmcache server \
   --l2-adapter "$ADAPTER_JSON" \
   >>"$LOG" 2>&1 &
 echo $! > "$PIDF"
-echo "lmcache server started: pid $(cat "$PIDF"), log $LOG"
+SERVER_PID="$(cat "$PIDF")"
+echo "lmcache server started: pid $SERVER_PID, log $LOG"
 echo "request port : $LMCACHE_HOST:$LMCACHE_PORT"
 echo "HTTP frontend: 127.0.0.1:${LMCACHE_HTTP_PORT} (management/metrics)"
+
+# -- readiness: a written pid is NOT proof the service works ---------------
+echo "-- waiting for cache-service readiness (adapter load + request port)"
+READY=0
+for i in $(seq 1 30); do
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "ERROR: lmcache server died within ${i}s of startup. Last log lines:" >&2
+    tail -n 40 "$LOG" >&2 || true
+    exit 1
+  fi
+  if grep -Eiq 'traceback|fatal error|cannot load|failed to (open|register|parse)' "$LOG" 2>/dev/null; then
+    echo "ERROR: lmcache server reported a startup error (adapter load or port bind). Last log lines:" >&2
+    tail -n 40 "$LOG" >&2 || true
+    kill "$SERVER_PID" 2>/dev/null || true
+    exit 1
+  fi
+  # request port (ZMQ, TCP transport) must be bound for vLLM to connect
+  if command -v ss >/dev/null; then
+    ss -ltn 2>/dev/null | grep -q ":$LMCACHE_PORT " && READY=1
+  elif command -v bash >/dev/null; then
+    timeout 1 bash -c "exec 3<>/dev/tcp/$LMCACHE_HOST/$LMCACHE_PORT" 2>/dev/null && READY=1
+  fi
+  [ "$READY" = 1 ] && break
+  sleep 1
+done
+[ "$READY" = 1 ] || { echo "ERROR: request port $LMCACHE_HOST:$LMCACHE_PORT not listening after 30s -- the service is up but not accepting connections." >&2; tail -n 20 "$LOG" >&2 || true; exit 1; }
+echo "cache service READY: process alive, no adapter errors, port $LMCACHE_PORT listening"
 echo "NOTE: the HTTP frontend is intentionally loopback-only; do not proxy it without auth."

@@ -3,8 +3,12 @@
 # kv-persistence — универсальный постоянный KV-кэш для vLLM
 
 Постоянный слой KV-кэша на диске для vLLM: после перезапуска переиспользуемые
-KV-блоки промптов восстанавливаются с NVMe, а не пересчитываются. Длинные беседы
-в Operit (100 тыс.–1 млн токенов) открываются за секунды, а не за десятки минут.
+KV-блоки промптов восстанавливаются с NVMe, а не пересчитываются. Целевой
+эффект — длинные беседы в Operit (100 тыс.–1 млн токенов) открываются за секунды,
+а не за десятки минут — измеряется на целевом оборудовании скриптом
+`scripts/benchmark.sh`; результаты публикуются в
+[docs/benchmarks.md](docs/benchmarks.md) по завершении приёмочного прогона
+(см. [Статус](#статус)).
 
 **📖 Документация (EN / RU / ZH) — в Wiki:**
 [Главная](https://github.com/sikkatu/kv-persistence/wiki) ·
@@ -61,11 +65,17 @@ Operit → vLLM (TP4) → KV-коннектор (LMCacheMPConnector)
 ```bash
 git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
+bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"   # заполнение И проверка пинов идентичности
 bash scripts/preflight.sh               # проверка хоста, хранилища и идентичности
 bash scripts/start-cache.sh             # сервис постоянного кэша (NVMe)
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (нужны IMAGE, MODEL_DIR)
-bash scripts/test-recovery.sh           # приёмка: рестарт → доказательство переиспользования
+bash scripts/test-recovery.sh           # приёмка: рестарт → доказательство переиспользования (exit 0 = PASS)
 ```
+
+Каждая команда громко отказывается вместо полурабочей установки: значения
+идентичности записывает и проверяет `setup-identity.sh`, `preflight.sh`
+контролирует физическое NVMe-устройство, а `test-recovery.sh` завершается
+машинным вердиктом.
 
 Постоянный переключатель в production-рецепте — `KV_PERSIST=1` в `tp4.env`
 (см. вики «Интеграция с рецептами»); откат — удаление этой одной строки.

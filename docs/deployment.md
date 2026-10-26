@@ -27,10 +27,27 @@ cd ~/kv-persistence
 ```bash
 cp configs/generic/cache.env configs/generic/cache.env.local
 $EDITOR configs/generic/cache.env.local        # KVP_CACHE_ROOT must be on NVMe
-$EDITOR configs/mimo-v2.6-pro/identity.env     # fill KVP_MODEL_REVISION (40-hex)
+$EDITOR configs/mimo-v2.6-pro/identity.env     # only if you pin the HF SHA yourself
 ```
 
-To obtain the model revision (this downloads NOTHING):
+**Identity values are filled and verified automatically** — do not assemble them
+by hand:
+
+```bash
+bash "$REPO/scripts/setup-identity.sh" "$HOME/models/MiMo-V2.6-Pro-MOPD"
+```
+
+One command covers ALL mandatory fields (`KVP_MODEL_REVISION`,
+`KVP_TOKENIZER_REVISION`, `KVP_CHAT_TEMPLATE_DIGEST`), writes them into
+`configs/mimo-v2.6-pro/identity.env` and verifies the result (the cache
+namespace must compute). Tokenizer revision is derived from the tokenizer files
+themselves when no separate commit SHA is known — and the script refuses to
+guess anything uncertain. Setting `KVP_MODEL_REVISION` in the environment first
+overrides the file-derived fingerprint (use the HF commit SHA if you track
+remote provenance).
+
+To obtain the HF commit SHA for `KVP_MODEL_REVISION` override (downloads
+NOTHING):
 
 ```bash
 curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
@@ -42,9 +59,14 @@ curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
 ```bash
 python3 -m venv ~/.venvs/lmcache
 ~/.venvs/lmcache/bin/pip install --upgrade pip
-~/.venvs/lmcache/bin/pip install lmcache
+~/.venvs/lmcache/bin/pip install -r "$REPO/requirements-lmcache.txt"
 export PATH="$HOME/.venvs/lmcache/bin:$PATH"
 ```
+
+The LMCache version is **pinned** in `requirements-lmcache.txt` (`lmcache==X.Y.Z`)
+together with the documented vLLM image combination — an unpinned install can
+resolve to a release that changed the MP-connector protocol or the L2 adapter
+behaviour. Do not upgrade lmcache without replaying `scripts/test-recovery.sh`.
 
 > LMCache must be the release channel matched to the pinned vLLM/PyTorch
 > runtime of the production image — see docs/compatibility.md. If plain pip

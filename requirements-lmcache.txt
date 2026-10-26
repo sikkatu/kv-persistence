@@ -1,0 +1,21 @@
+# requirements-lmcache.txt -- pinned runtime for the lmcache cache service.
+#
+# Why pinned: the project depends on the MP-connector protocol and on the
+# nixl_store_dynamic L2 adapter's persist/recover behaviour. An unpinned
+# `pip install lmcache` may resolve to a release that changed either one --
+# the review explicitly demanded reproducible installs with a documented
+# compatible combination.
+#
+# Verified combination (update ONLY with a hardware-tested run):
+#   vLLM image: vllm/vllm-openai:nightly-8e2beaa3bff...@sha256:167ccd86...
+#               commit 8e2beaa3bff595577a069d49d96bde9074294ec2 (2026-10-21)
+#   lmcache:    0.5.3   (pin below)
+#   python:     3.12
+#
+# The exact wheel variant must match the image's PyTorch/CUDA ABI.
+# If imports fail (undefined symbols), do not upgrade blindly: the fallback is
+# to run `lmcache server` from the production image itself (see
+# docs/troubleshooting.md). Status of the pin until the hardware acceptance run
+# completes: NEEDS TESTING -- labelled honestly in docs/final-report.md.
+
+lmcache==0.5.3

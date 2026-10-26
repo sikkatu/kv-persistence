@@ -3,8 +3,11 @@
 # kv-persistence — Universal Persistent KV Cache for vLLM
 
 Persistent, disk-backed KV-cache layer for vLLM: after a restart, reusable prompt KV
-blocks are recovered from NVMe instead of being recomputed. Long Operit conversations
-(100k–1M tokens) reopen in seconds instead of tens of minutes.
+blocks are recovered from NVMe instead of being recomputed. The design goal —
+long Operit conversations (100k–1M tokens) reopening in seconds instead of tens of
+minutes — is measured on target hardware in `scripts/benchmark.sh`; results are
+published in [docs/benchmarks.md](docs/benchmarks.md) once the acceptance run
+completes (see [Status](#status)).
 
 **📖 Documentation (EN / RU / ZH) lives in the Wiki:**
 [Home](https://github.com/sikkatu/kv-persistence/wiki) ·
@@ -58,11 +61,16 @@ Operit → vLLM (TP4) → KV connector (LMCacheMPConnector)
 ```bash
 git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
+bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
 bash scripts/start-cache.sh             # persistent cache service (NVMe)
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (needs IMAGE, MODEL_DIR)
-bash scripts/test-recovery.sh           # acceptance: restart → cache reuse proof
+bash scripts/test-recovery.sh           # acceptance: restart → cache reuse proof (exit 0 = PASS)
 ```
+
+Each command refuses loudly instead of producing a half-working setup: identity
+values are written and verified by `setup-identity.sh`, `preflight.sh` checks the
+physical NVMe device and `test-recovery.sh` ends with a machine verdict.
 
 Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 (see wiki *Recipes Integration*); rollback is removing that one line.

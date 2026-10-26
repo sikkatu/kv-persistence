@@ -52,15 +52,17 @@ index rebuild on startup (documented upstream behavior of this adapter).
 ## Commands
 
 ```bash
-# install: docs/deployment.md §1-§3 (venv + lmcache pip install)
+# install: docs/deployment.md §1–§4 (identity setup + lmcache venv from pinned requirements)
+bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"  # fills AND verifies identity
 bash scripts/preflight.sh
 bash scripts/start-cache.sh
 export IMAGE='…@sha256:<digest>'; export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
 bash scripts/run-vllm-with-persist.sh
+bash scripts/verify-engine-identity.sh          # gate: engine geometry == identity pins
 
-# acceptance tests
-bash scripts/test-recovery.sh            # scenarios A and B
-bash scripts/benchmark.sh cold 32768     # per config, see docs/benchmarks.md
+# acceptance tests -- machine verdict; exit 0 = PASS
+bash scripts/test-recovery.sh                   # scenarios A and B (v2 protocol)
+bash scripts/benchmark.sh cold 32768           # per config, see docs/benchmarks.md
 
 # monitoring / storage
 bash scripts/budget-report.sh status
@@ -114,19 +116,25 @@ before measuring).
 
 1. Hardware acceptance (Tests 1–16) not executed in this session — no route to
    the host. This is the ONLY reason the overall status is PARTIAL, not PASS.
+   The v2 `test-recovery.sh` now enforces the acceptance protocol mechanically:
+   log-position markers, L2-vs-L1 evidence distinction, store-before-restart
+   verification, hard-fail API readiness waits and a PASS/FAIL exit code per the
+   review's protocol.
 2. Value-based retention ranking applies where per-entry stats are available;
    LMCache's in-service LRU is used otherwise (documented, honest split).
-3. LMCache wheel ABI must match the pinned image's PyTorch/CUDA; if it does not,
-   `lmcache server` is run from the production image (documented in
-   troubleshooting). This exact combination is NEEDS TESTING on host.
+3. LMCache is version-pinned (`requirements-lmcache.txt`, `lmcache==0.5.3`); the
+   exact wheel must match the production image ABI. If it does not, `lmcache
+   server` runs from the production image (documented fallback). This exact
+   combination is NEEDS TESTING on host.
 4. Dedup is safe at chunk granularity (key equals object identity); there is no
    caller-side refcount — the liveness trade-off is documented in
    `docs/eviction-and-deduplication.md`.
-5. 1M-token prompts: only run if the hardware window allows meaningful
-   execution (the brief permits deferring).
-6. `{KV_CACHE_DTYPE, KVP_KV_CACHE_DTYPE}` must be switched to `fp16` if the
-   brief's serving setting is to be the effective one; all numbers must then be
-   re-measured.
+5. 1M-token prompts: only run if the hardware window allows meaningful execution.
+6. `{KV_CACHE_DTYPE, KVP_KV_CACHE_DTYPE}` must switch to `fp16` if the brief's
+   serving setting is to be the effective one; all numbers must then be
+   re-measured. KV-geometry values (block size, heads, dim, TP, max-model-len)
+   are now cross-checked against the RUNNING engine by
+   `scripts/verify-engine-identity.sh` before any cached data is trusted.
 
 ## Provenance
 
