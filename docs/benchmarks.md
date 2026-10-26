@@ -57,7 +57,7 @@ Repeat each configuration ≥ 3 times and record medians; results land in
 ## Results
 
 Not yet recorded on target hardware (KV-persistence validation host access is
-required and is planned once SSH/VPN connectivity to 192.168.230.3 is available).
+required and is planned once SSH/VPN connectivity to the target host is available).
 The automatic recorder emits one JSON object per request — copy
 `benchmarks/results/*/bench.jsonl` here after the run and fill the table below.
 

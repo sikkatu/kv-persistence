@@ -9,7 +9,7 @@ GitHub remote API).
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on the 4× RTX PRO 6000
-host**, because network/SSH access to the target machine (192.168.230.3) was
+host**, because network/SSH access to the target machine was
 not reachable during this work session. Nothing untested is claimed as working.
 
 ## Architecture and selected backend
