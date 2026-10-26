@@ -11,10 +11,18 @@
 
 # Идентичность модели
 KVP_MODEL_ID=XiaomiMiMo/MiMo-V2.6-Pro-MOPD
-# ОБЯЗАТЕЛЬНО: полный 40-символьный SHA коммита фактически отдаваемых весов.
-# Получить так:
-#   curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
-#     | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+# ОБЯЗАТЕЛЬНО, 40 hex. Допустимы ОБА формата, но они означают разное —
+# в одном деплое используется только один:
+#   a) ОТПЕЧАТОК ЛОКАЛЬНОГО ЧЕКПОЙНТА (что пишет setup-identity.sh, если не
+#      задано): детерминированный дайджест config.json + всех weight-index +
+#      всех шардов (имя+размер), реально лежащих на диске. Это НЕ SHA коммита —
+#      он идентифицирует именно используемые файлы.
+#   b) SHA коммита апстрима — ТОЛЬКО если вы осознанно отслеживаете
+#      происхождение с HF, задайте ДО запуска setup-identity.sh:
+#        curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
+#          | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+#      Замечание: HEAD ветки репозитория — это не обязательно ревизия ваших
+#      локально скачанных файлов.
 KVP_MODEL_REVISION=
 
 # Идентичность токенизатора (тот же репо; ревизия может отличаться от весов, только

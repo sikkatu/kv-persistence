@@ -16,7 +16,15 @@ MODEL_DIR="${1:?usage: setup-identity.sh <local model dir>}"
 [ -d "$MODEL_DIR" ] || die "model dir not found: $MODEL_DIR"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-CONFIG="${CONFIG_FILE:-$ROOT/configs/mimo-v2.6-pro/identity.env}"
+# Site values go to identity.env.local (gitignored) so the tracked identity.env
+# is never modified -- keeping `git pull` conflict-free and the tree clean.
+# CONFIG_FILE still allows explicit targeting when a rebuild of the tracked
+# file is genuinely intended.
+CONFIG="${CONFIG_FILE:-$ROOT/configs/mimo-v2.6-pro/identity.env.local}"
+if [ ! -f "$CONFIG" ]; then
+  cp "$ROOT/configs/mimo-v2.6-pro/identity.env" "$CONFIG" || die "cannot seed $CONFIG from identity.env"
+  echo "seeded $CONFIG from the shipped identity.env template"
+fi
 MODEL_ID="${MODEL_ID:-XiaomiMiMo/MiMo-V2.6-Pro-MOPD}"
 [ -w "$CONFIG" ] || die "cannot write $CONFIG (fix permissions/ownership first)"
 command -v python3 >/dev/null || die "python3 is required"

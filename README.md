@@ -85,7 +85,7 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 | `configs/mimo-v2.6-pro/` | MiMo identity pins and L2 adapter template, EN/RU/ZH |
 | `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
 | `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
-| `tests/` | unit (29, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
+| `tests/` | unit (49, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
 
 ## Status
 
@@ -99,7 +99,8 @@ the operator. Unverified features are labelled `NEEDS TESTING` / `BLOCKED` in
 * The production recipe (`sikkatu/recipes`) is **read-only** for this project.
 * No unauthenticated management endpoints; the cache root is `0700`.
 * No credentials, tokens, prompt text or cache data in the tree.
-* All documented commands work as-is, without manual additions.
+* All documented commands work as-is once precondition variables (`IMAGE`,
+  `MODEL_DIR`, `API_KEY`) are exported — the Quick Start sequences it linearly.
 
 ## License
 

@@ -14,7 +14,7 @@
 //
 // file_path  — MUST live on local NVMe (KVP_CACHE_ROOT). Never a network mount.
 // max_capacity_gb — the HARD budget; stores above it are rejected. Required for
-//   the eviction controller to compute usage. Default 750, ceiling 1 TB.
+//   the eviction controller to compute usage. Default 1500 (1.5 TB).
 //
 // eviction — opt-in per adapter. LRU over KV-chunk keys; a background thread
 //   watches get_usage() and, above trigger_watermark, evicts down by

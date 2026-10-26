@@ -6,5 +6,7 @@ live/
 *.pid
 benchmarks/results/
 configs/generic/cache.env.local
+configs/generic/lmcache-server.env.local
+configs/mimo-v2.6-pro/identity.env.local
 .DS_Store
 tests/**/__pycache__/

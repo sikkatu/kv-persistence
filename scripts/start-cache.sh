@@ -6,13 +6,16 @@ set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-# shellcheck source=/dev/null
-. "$ROOT/configs/generic/cache.env"
-[ -f "$ROOT/configs/generic/cache.env.local" ] && . "$ROOT/configs/generic/cache.env.local"
-# shellcheck source=/dev/null
-. "$ROOT/configs/generic/lmcache-server.env"
+. "$HERE/env.sh"
+_kvp_load_env "$ROOT"
 
 command -v lmcache >/dev/null || die "lmcache CLI missing — see docs/deployment.md"
+# Optional HTTP / serde flags: keep only those THIS build's --help understands,
+# so a build without them still starts rather than crash on an unknown flag.
+LMCACHE_HELP="$(lmcache server --help 2>&1 || true)"
+case "$LMCACHE_HELP" in *--http-host*) : ;; *) unset LMCACHE_HTTP_HOST ;; esac
+case "$LMCACHE_HELP" in *--http-port*) : ;; *) unset LMCACHE_HTTP_PORT ;; esac
+case "$LMCACHE_HELP" in *--l2-serde*|*--serde*) : ;; *) unset LMCACHE_L2_SERDE ;; esac
 BUDGET_GB="${KVP_CACHE_BUDGET_GB:?}"
 ROOT_PATH="${KVP_CACHE_ROOT:?}"
 mkdir -p "$ROOT_PATH"; chmod 700 "$ROOT_PATH"
@@ -44,7 +47,11 @@ fi
 
 LOG="$ROOT_PATH/lmcache-server.log"
 PIDF="$ROOT_PATH/lmcache-server.pid"
-lmcache server \
+# setsid detaches the service from this shell's terminal -- closing the SSH
+# session or dropping the connection will NOT kill the cache service. nohup
+# additionally shields it from HUP. Both matter because the service is meant
+# to outlive the operator's shell.
+setsid nohup lmcache server \
   --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
   --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
   --eviction-policy "$LMCACHE_EVICTION_POLICY" \
@@ -52,6 +59,9 @@ lmcache server \
   --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
   --chunk-size "$LMCACHE_CHUNK_SIZE" \
   --l2-adapter "$ADAPTER_JSON" \
+  ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
+  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
+  ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
   >>"$LOG" 2>&1 &
 echo $! > "$PIDF"
 SERVER_PID="$(cat "$PIDF")"
@@ -61,16 +71,20 @@ echo "HTTP frontend: 127.0.0.1:${LMCACHE_HTTP_PORT} (management/metrics)"
 
 # -- readiness: a written pid is NOT proof the service works ---------------
 echo "-- waiting for cache-service readiness (adapter load + request port)"
+# Log grows append-only (>>): only inspect the bytes appended BY THIS START, so
+# an old error from a previous run can never fail a healthy new server.
+LOG_START_BYTES=$(wc -c < "$LOG" 2>/dev/null || echo 0)
 READY=0
 for i in $(seq 1 30); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "ERROR: lmcache server died within ${i}s of startup. Last log lines:" >&2
-    tail -n 40 "$LOG" >&2 || true
+    tail -n +"$((LOG_START_BYTES > 0 ? LOG_START_BYTES : 1))" "$LOG" >&2 || true
     exit 1
   fi
-  if grep -Eiq 'traceback|fatal error|cannot load|failed to (open|register|parse)' "$LOG" 2>/dev/null; then
+  NEW_BYTES=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+  if [ "$NEW_BYTES" -gt "$LOG_START_BYTES" ] && tail -c "+$((LOG_START_BYTES + 1))" "$LOG" 2>/dev/null | grep -Eiq 'traceback|fatal error|cannot load|failed to (open|register|parse)'; then
     echo "ERROR: lmcache server reported a startup error (adapter load or port bind). Last log lines:" >&2
-    tail -n 40 "$LOG" >&2 || true
+    tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
     kill "$SERVER_PID" 2>/dev/null || true
     exit 1
   fi

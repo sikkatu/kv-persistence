@@ -8,30 +8,8 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # shellcheck source=/dev/null
 # Env contract (same as the recipe launchers): values already exported WIN over
 # the files -- plain '.' sourcing would clobber explicit env like KVP_CACHE_ROOT.
-_kvp_seed(){ # _kvp_seed <env file>: export only names NOT already set
-  [ -f "$1" ] || return 0
-  local line name val
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue ;; esac
-    line="${line#export }"
-    name="${line%%=*}"
-    [ "$name" = "$line" ] && continue
-    name="$(printf '%s' "$name" | tr -d ' ')"
-    [ -z "$name" ] && continue
-    if [ -z "${!name:-}" ]; then
-      val="${line#*=}"
-      val="${val%% #*}"
-      val="${val%\"${val##*[![:space:]]}\"}"
-      val="${val//\"/}"
-      case "$val" in *'$HOME'*|*'${HOME}'*) val="${val//\$HOME/$HOME}"; val="${val//\$\{HOME\}/$HOME}" ;; esac
-      export "$name=$val"
-    fi
-  done < "$1"
-}
-_kvp_seed "$ROOT/configs/generic/cache.env"
-_kvp_seed "$ROOT/configs/generic/cache.env.local"
-_kvp_seed "$ROOT/configs/generic/lmcache-server.env"
-_kvp_seed "$ROOT/configs/mimo-v2.6-pro/identity.env"
+. "$HERE/env.sh"
+_kvp_load_env "$ROOT"
 FAIL=0
 note(){ printf '  [ok] %s\n' "$*"; }
 warn(){ printf '  [!!] %s\n' "$*" >&2; FAIL=1; }
@@ -40,11 +18,10 @@ echo "== kv-persistence preflight =="
 echo "-- storage budget --"
 BUDGET_GB="${KVP_CACHE_BUDGET_GB:?}"
 [ "${BUDGET_GB%.*}" -ge 1 ] 2>/dev/null || die "KVP_CACHE_BUDGET_GB must be >= 1, got '$BUDGET_GB'"
-if [ "${BUDGET_GB%.*}" -gt 1024 ]; then
-  warn "KVP_CACHE_BUDGET_GB=$BUDGET_GB exceeds the 1 TB NVMe ceiling"
-else
-  note "budget ${BUDGET_GB} GB (physical ceiling 1 TB)"
-fi
+# No hard-coded ceiling check here: the real bound is the FREE SPACE on the
+# pinned NVMe device, verified below via KVP_CACHE_DEVICE. A fixed numeric cap
+# would contradict a legitimate large-budget deployment (the default is 1.5 TB).
+note "budget ${BUDGET_GB} GB"
 ROOT_PATH="${KVP_CACHE_ROOT:?}"
 if ! mkdir -p "$ROOT_PATH" 2>/dev/null; then
   die "cannot create cache root $ROOT_PATH -- permission denied (not root?).
@@ -59,7 +36,7 @@ case "$ROOT_PATH" in
   *) warn "cache root $ROOT_PATH is unusual — confirm it is on local NVMe" ;;
 esac
 echo "-- storage location (device-level check) --"
-# The budget is 750 GB: the cache MUST sit on the intended NVMe, not merely on
+# The budget is 1.5 TB: the cache MUST sit on the intended NVMe, not merely on
 # a filesystem with enough free space. KVP_CACHE_DEVICE pins the expected
 # block device (e.g. /dev/nvme1n1 or its partition). findmnt resolves the mount
 # of KVP_CACHE_ROOT; lsblk maps it to the parent disk.
@@ -79,9 +56,16 @@ if command -v findmnt >/dev/null && command -v lsblk >/dev/null; then
       *) warn "cache root device ($PARENT_DISK) does not match KVP_CACHE_DEVICE=$TARGET_DEV -- wrong disk for a ${BUDGET_GB} GB budget" ;;
     esac
   else
-    warn "KVP_CACHE_DEVICE is unset: cannot prove $ROOT_PATH is on the intended NVMe.
-Set KVP_CACHE_DEVICE=/dev/nvmeXnX in cache.env.local after checking with lsblk.
-On a ${BUDGET_GB} GB budget a wrong disk would silently consume the system drive."
+    # Unset KVP_CACHE_DEVICE is an unproven claim, not a config error: preflight
+    # itself does NOT fail on it (a Quick Start run without it must reach
+    # PASSED). It DOES mean test-recovery.sh will reach INCONCLUSIVE instead of
+    # PASS until the variable is set -- see docs/deployment.md step 2.
+    note "KVP_CACHE_DEVICE is unset: cache-device proof unavailable here."
+    echo "      The cache may already sit on the right NVMe -- we just cannot prove it."
+    echo "      To enable the full verification (and PASS in test-recovery.sh), set"
+    echo "      KVP_CACHE_DEVICE=/dev/nvmeXnX in cache.env.local after checking with lsblk."
+    echo "      On a ${BUDGET_GB} GB budget an unnoticed wrong disk would silently consume"
+    echo "      the system drive, so this is strongly recommended before production use."
   fi
 else
   warn "findmnt/lsblk missing -- device-level check skipped (install util-linux to enforce it)"

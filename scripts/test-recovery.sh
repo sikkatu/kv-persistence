@@ -16,28 +16,25 @@ set -Eeuo pipefail
 PA(){ echo "FAIL(A): $*"; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-_kvp_seed(){ [ -f "$1" ] || return 0; local line name val;
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue;; esac
-    line="${line#export }"; name="${line%%=*}"; [ "$name" = "$line" ] && continue
-    name="$(printf '%s' "$name" | tr -d ' ')"; [ -z "$name" ] && continue
-    if [ -z "${!name:-}" ]; then val="${line#*=}"; val="${val%% #*}"; val="${val//\"/}"; export "$name=$val"; fi
-  done < "$1"; }
-_kvp_seed "$ROOT/configs/generic/cache.env"
-_kvp_seed "$ROOT/configs/generic/cache.env.local"
-_kvp_seed "$ROOT/configs/generic/lmcache-server.env"
+. "$HERE/env.sh"
+_kvp_load_env "$ROOT"
 API="${API_BASE:-http://127.0.0.1:30007}"
 KEY="${API_KEY:-}"; [ -f "$PWD/live/api_key" ] && [ -z "$KEY" ] && KEY="$(head -n1 "$PWD/live/api_key" | tr -d '[:space:]')"
 [ -n "$KEY" ] || PA "API_KEY unavailable (live/api_key)"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
-L2="$KVP_CACHE_ROOT/l2"; LOG="$KVP_CACHE_ROOT/lmcache-server.log"
+L2="$KVP_CACHE_ROOT"; LOG="$KVP_CACHE_ROOT/lmcache-server.log"   # adapter writes file_path=KVP_CACHE_ROOT directly
 OUT="$ROOT/benchmarks/results/$(date -u +%Y%m%dT%H%M%SZ)-recovery-v2"
 mkdir -p "$OUT"; echo "results -> $OUT"
 V="0"   # total verdict failures
 # ---- evidence helpers --------------------------------------------------
 log_mark(){ wc -c < "$LOG" 2>/dev/null || echo 0; }
 new_log(){ tail -c +$(( $1 + 1 )) "$LOG" 2>/dev/null || true; }
-L2_bytes(){ du -sb "$L2" 2>/dev/null | cut -f1 || echo 0; }
+L2_bytes(){ # Sum bytes of cache data files EXCEPT the service's own log/pid,
+            # so growth (or absence of it) reflects store activity only.
+  [ -d "$L2" ] || { echo 0; return; }
+  find "$L2" -type f ! -name 'lmcache-server.log' ! -name 'lmcache-server.pid' \
+       -printf '%s\n' 2>/dev/null | awk '{s+=$1} END{print s+0}'
+}
 l2_retrievals(){ new_log "$1" | grep -ci '\(retriev\|loaded\|restore\).*\(L2\|disk\|l2\|secondary\|file\)' || true; }
 l2_stored(){ new_log "$1" | grep -ci '\(stored\|wrote\|write\|stored to\|l2\)' || true; }
 api_ready(){ for i in $(seq 1 180); do
@@ -124,11 +121,15 @@ M_A0=$(log_mark)
 docker restart "$CONTAINER" >/dev/null 2>&1 || PA "docker restart failed"
 api_ready || PA "API did not come back after vLLM restart (scenario impossible)"
 ask afterA "$M_A0"
-A_RETR=$(l2_retrievals "$M_A0"); A_CACHED=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['cached_tokens'])")
+A_RETR=$(l2_retrievals "$M_A0"); A_CACHED=$(cached_of "$OUT/afterA.json")
 T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['ttft_s'])")
 echo "  post-restart L2 read events: $A_RETR, cached_tokens: $A_CACHED, ttft: ${T_A}s (cold: ${T_COLD}s)"
 [ "${A_RETR:-0}" -gt 0 ] || fail "A: no L2/disk read log events AFTER the vLLM restart (got only: $(new_log "$M_A0" | grep -ci retriev || true) generic retrievals)"
-[ "${A_CACHED:-0}" -gt 0 ] || fail "A: cached_tokens==0 after restart (no reuse at all)"
+if [ "$A_CACHED" = "MISSING" ]; then
+  inconc "A: cached_tokens metric unavailable (prompt_tokens_details null/absent) -- cannot say reuse/no-reuse from usage counters alone"
+elif [ "${A_CACHED:-0}" -eq 0 ]; then
+  fail "A: cached_tokens==0 after restart (no reuse at all)"
+fi
 A_DISK1=$(disk_read_bytes)
 if [ "$A_DISK0" = "-1" ] || [ "$A_DISK1" = "-1" ]; then
   inconc "A: KVP_CACHE_DEVICE unset/unreadable -- cannot independently prove NVMe-sourced reads (device counters unavailable)"
@@ -149,11 +150,15 @@ docker restart "$CONTAINER" >/dev/null 2>&1 || PA "docker restart (B) failed"
 api_ready || PA "API did not come back after full restart"
 M_B0=$(log_mark)
 ask afterB "$M_B0"
-B_RETR=$(l2_retrievals "$M_B0"); B_CACHED=$(python3 -c "import json;print(json.load(open('$OUT/afterB.summary.json'))['cached_tokens'])")
+B_RETR=$(l2_retrievals "$M_B0"); B_CACHED=$(cached_of "$OUT/afterB.json")
 T_B=$(python3 -c "import json;print(json.load(open('$OUT/afterB.summary.json'))['ttft_s'])")
 echo "  post-full-restart L2 read events: $B_RETR, cached_tokens: $B_CACHED, ttft: ${T_B}s (cold: ${T_COLD}s)"
 [ "${B_RETR:-0}" -gt 0 ] || fail "B: no L2/disk read log events AFTER both services restarted (index rebuild must prove disk reads)"
-[ "${B_CACHED:-0}" -gt 0 ] || fail "B: cached_tokens==0 after full restart"
+if [ "$B_CACHED" = "MISSING" ]; then
+  inconc "B: cached_tokens metric unavailable (prompt_tokens_details null/absent) -- cannot say reuse/no-reuse from usage counters alone"
+elif [ "${B_CACHED:-0}" -eq 0 ]; then
+  fail "B: cached_tokens==0 after full restart"
+fi
 B_AFTER=$(L2_bytes)
 [ "$B_AFTER" -ge "$B_BEFORE" ] || fail "B: L2 shrank during restart -- data loss suspected ($B_BEFORE -> $B_AFTER)"
 B_DISK1=$(disk_read_bytes)
@@ -166,7 +171,18 @@ else
 fi
 
 # ---- exclude alternative explanations ----------------------------------
-cached_of(){ python3 -c "import json;print(json.load(open('$1'))['usage'].get('prompt_tokens_details',{}).get('cached_tokens',0))" 2>/dev/null || echo 0; }
+cached_of(){ # 0 = report says no reuse. MISSING = field absent/null: that is NOT
+             # proof of no reuse -- it means the metric itself is unavailable
+             # (vLLM build/flag dependent), so callers must not treat it as a fact.
+  python3 -c "
+import json,sys
+d=json.load(open('$1'))
+u=d.get('usage') or {}
+det=u.get('prompt_tokens_details')
+if det is None:
+    print('MISSING'); raise SystemExit
+print(det.get('cached_tokens', 0) if det.get('cached_tokens') is not None else 'MISSING')
+" 2>/dev/null || echo MISSING; }
 A2=$(cached_of "$OUT/afterA.json"); B2=$(cached_of "$OUT/afterB.json")
 if [ "${A2:-0}" -gt 0 ] && [ "${B2:-0}" -gt 0 ] && [ "${A_RETR:-0}" -eq 0 ] && [ "${B_RETR:-0}" -eq 0 ]; then
   fail "cached_tokens>0 but zero L2-read log events: reuse may come from RAM/prefix cache only -- NOT proof of NVMe recovery"

@@ -13,16 +13,30 @@ onto the 4-GPU host (Debian). The host runs the production recipe from
 * Local NVMe with at least `KVP_CACHE_BUDGET_GB` (default 1.5 TB) free on the
   pinned device — preflight checks this against `KVP_CACHE_DEVICE`.
 * Production recipe cloned read-only (e.g. `~/recipes`).
-* Python 3.12 on the host (for `kvpersist` admin + scripts).
+* Python 3.12 on the host (for `kvpersist` admin + scripts and the `lmcache`
+  CLI). On Debian 12 the system Python is 3.11: install a 3.12 interpreter and
+  `python3-venv` separately (e.g. from bookworm-backports or pyenv) and use
+  `python3.12 -m venv` in step 3. The venv must be created by the SAME 3.12
+  interpreter that will run `lmcache`.
 
 ## 1. Get kv-persistence
 
 ```bash
 git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
+export REPO="$PWD"
 ```
 
+`REPO` is used by every later command here. Exported variables (`REPO`,
+`IMAGE`, `MODEL_DIR`) live only in their terminal shell: in a NEW terminal
+repeat these exports before continuing (shell behaviour, not a bug).
+
 ## 2. Configure
+
+Site-local overrides all live in `*.local` files, which win over the shipped
+defaults and are gitignored (`setup-identity.sh` writes `identity.env.local`,
+never the tracked `identity.env`):
+
 
 ```bash
 cp configs/generic/cache.env configs/generic/cache.env.local

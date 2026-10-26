@@ -4,9 +4,8 @@
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-# shellcheck source=/dev/null
-. "$ROOT/configs/generic/cache.env"
-[ -f "$ROOT/configs/generic/cache.env.local" ] && . "$ROOT/configs/generic/cache.env.local"
+. "$HERE/env.sh"
+_kvp_load_env "$ROOT"
 
 PIDF="$KVP_CACHE_ROOT/lmcache-server.pid"
 if [ ! -f "$PIDF" ]; then

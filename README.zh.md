@@ -83,7 +83,7 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 | `configs/mimo-v2.6-pro/` | MiMo 身份固定与 L2 适配器模板，EN/RU/ZH |
 | `scripts/` | 预检、缓存启停、启动器、恢复测试、基准、管理 CLI |
 | `implementation/` | `kvpersist` 包：身份、预算、保留排序、管理 CLI |
-| `tests/` | 单元（29 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
+| `tests/` | 单元（49 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
 
 ## 状态
 
@@ -97,7 +97,8 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 * 生产配方（`sikkatu/recipes`）对本项目**只读**。
 * 无未认证的管理端点；缓存根目录权限 `0700`。
 * 树中不含凭证、令牌、提示词文本或缓存数据。
-* 文档中所有命令均可直接执行，无需手工补充。
+* 导出前置变量（`IMAGE`、`MODEL_DIR`、`API_KEY`）后，文档中所有命令均可直接
+  执行 —— 「快速开始」给出线性流程。
 
 ## 许可证
 
