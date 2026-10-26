@@ -1,7 +1,0 @@
-docs: in-repo localization EN/RU/ZH + wiki links everywhere
-
-- README.ru.md / README.zh.md: full mirrors with per-language wiki URLs
-- configs/*: localized .ru/.zh copies (comments translated; variables and
-  values byte-identical, like recipes tp4.env.example convention)
-- tests/unit/test_config_locales.py: locale parity + no-credentials tests
-- docs/*: banner on every page linking to the multilingual wiki
