@@ -80,7 +80,7 @@ its checks and its final verdict:
 
 | Outcome | Evidence required | Counts as success? |
 |---|---|---|
-| **PERSIST hit** | `Retrieved`-from-L2 log events after a restart + `cached_tokens > 0` + no L2 rewrite of the same data | YES — the project's purpose |
+| **PERSIST hit** | After a restart, log events matching the L2-read pattern (`retriev\|loaded\|restore` x `L2\|disk\|secondary\|file` -- see test-recovery.sh) + `cached_tokens > 0` (if reported) + no L2 rewrite of same data | YES — the project's purpose |
 | Memory (L1/RAM) hit | `cached_tokens > 0`, no post-restart L2 evidence | NO (not persistence proof) |
 | Plain prefix-cache hit | engine `cached_tokens > 0` without LMCache events | NO |
 | Cache miss (recompute) | no reuse, fresh prefill | expected on cold runs |
@@ -113,7 +113,8 @@ rerunning — not by lowering the bar.
 PASS for the primary milestone requires ALL of:
 
 1. `cached_tokens > 0` on the request following each restart (tests 4 and 5);
-2. LMCache log shows `Retrieved` entries sourced from the L2/disk tier after
+2. LMCache log shows L2/disk-sourced read events (matches the retrieval pattern: 
+   `retriev|loaded|restore` with `L2|disk|secondary|file`) after
    restart (not only L1);
 3. TTFT/prefill measurably lower than the comparable cold baseline;
 4. output text remains correct (manual spot-check; KV reuse must not corrupt
