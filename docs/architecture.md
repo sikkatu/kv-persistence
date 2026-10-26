@@ -1,3 +1,5 @@
+> 🌐 Языковые версии: **English** | [Русский](architecture.ru.md) | [中文](architecture.zh.md)
+
 > Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Architecture) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Architecture.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Architecture.zh)
 
 # Architecture

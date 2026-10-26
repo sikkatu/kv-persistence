@@ -9,7 +9,9 @@
 #
 # Run on the host that serves the model:
 #   bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"
-# Env overrides: MODEL_ID, HF_MODEL_ID (for the revision lookup), CONFIG_FILE.
+# Env overrides: CONFIG_FILE (target config to write), KVP_MODEL_REVISION (to pin
+# the upstream commit SHA instead of a local file fingerprint),
+# KVP_FINGERPRINT_MODE (content|fast).
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 MODEL_DIR="${1:?usage: setup-identity.sh <local model dir>}"
@@ -25,7 +27,6 @@ if [ ! -f "$CONFIG" ]; then
   cp "$ROOT/configs/mimo-v2.6-pro/identity.env" "$CONFIG" || die "cannot seed $CONFIG from identity.env"
   echo "seeded $CONFIG from the shipped identity.env template"
 fi
-MODEL_ID="${MODEL_ID:-XiaomiMiMo/MiMo-V2.6-Pro-MOPD}"
 [ -w "$CONFIG" ] || die "cannot write $CONFIG (fix permissions/ownership first)"
 command -v python3 >/dev/null || die "python3 is required"
 
@@ -44,24 +45,56 @@ echo "config    : $CONFIG"
 # The local fingerprint is deliberately labelled "local fingerprint", not a commit SHA.
 REV="${KVP_MODEL_REVISION:-}"
 if [ -z "$REV" ]; then
-  echo "-- resolving LOCAL CHECKPOINT FINGERPRINT (not a commit SHA) from files on disk"
-  REV="$(python3 - "$MODEL_DIR" <<'PY'
+  echo "-- resolving LOCAL CHECKPOINT FINGERPRINT (content-hashed) from files on disk"
+  # Modes (KVP_FINGERPRINT_MODE):
+  #   content (default) - SHA-256 of every shard's BYTES + config.json + indexes.
+  #     Catches any byte-level weight swap (name and size alone cannot).
+  #     Shard hashes are cached in <model_dir>/.kvpersist-shard-cache.json so a
+  #     rerun after the first is cheap; any changed mtime/size re-hashes.
+  #   fast - old behaviour: shard name + size only. NOT safe against a
+  #     content swap that preserves both; only for disposable experiments.
+  FPMODE="${KVP_FINGERPRINT_MODE:-content}"
+  case "$FPMODE" in
+    content|fast) ;;
+    *) die "KVP_FINGERPRINT_MODE must be 'content' or 'fast', got '$FPMODE'" ;;
+  esac
+  if [ "$FPMODE" = "fast" ]; then
+    echo "  WARNING: KVP_FINGERPRINT_MODE=fast does NOT hash shard CONTENT -- a changed"
+    echo "  shard with the same name and size is invisible to this fingerprint. This mode"
+    echo "  is only appropriate for throwaway experiments, never production."
+  fi
+  REV="$(python3 - "$MODEL_DIR" "$FPMODE" <<'PY'
 import glob, hashlib, json, os, sys
-d = sys.argv[1]
-h = hashlib.sha256()
+d, mode = sys.argv[1], sys.argv[2]
+cache_path = os.path.join(d, ".kvpersist-shard-cache.json")
+cache = {}
+if os.path.isfile(cache_path):
+    try:
+        cache = json.load(open(cache_path))
+    except Exception:
+        cache = {}
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 22), b""):
+            h.update(chunk)
+    return h.hexdigest()
+def feed_text(b: bytes):
+    h.update(b); h.update(b"\0")
 def feed(path, label):
     h.update(label.encode()); h.update(b"\0")
     if os.path.isfile(path):
         with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(1 << 20), b""):
+            for chunk in iter(lambda: fh.read(1 << 22), b""):
                 h.update(chunk)
     h.update(b"\0")
-# config.json defines architecture -> part of identity
+h = hashlib.sha256()
 feed(os.path.join(d, "config.json"), "config.json")
-# every weight index + every shard it declares (name + size, cheap but effective)
 indexes = sorted(glob.glob(os.path.join(d, "*.index.json")))
 if not indexes:
     sys.exit("no *.index.json in model dir: cannot derive local fingerprint")
+new_cache = {}
+shard_seen = 0
 for idx in indexes:
     feed(idx, os.path.basename(idx))
     try:
@@ -71,9 +104,31 @@ for idx in indexes:
         sys.exit(f"unreadable index {idx}: {exc}")
     for shard in sorted(set(wm.values())):
         sp = os.path.join(d, shard)
-        # shard name + exact size: a swapped or re-exported shard changes this
         size = os.path.getsize(sp) if os.path.isfile(sp) else -1
-        h.update(f"{shard}\0{size}\0".encode())
+        mtime = int(os.path.getmtime(sp)) if os.path.isfile(sp) else -1
+        if mode == "fast":
+            feed_text(f"{shard}\0{size}\0".encode())
+            continue
+        # content mode: hash shard bytes, cached by (size, mtime)
+        key = f"{shard}:{size}:{mtime}"
+        cached = cache.get(key)
+        if cached:
+            shard_hash = cached
+        else:
+            if size < 0:
+                sys.exit(f"shard declared in index but missing on disk: {shard}")
+            shard_hash = sha256_file(sp)
+            new_cache[key] = shard_hash
+        feed_text(f"{shard}\0{shard_hash}\0".encode())
+        shard_seen += 1
+# persist cache entries (merge both caches, tolerate unlistable dirs)
+merged = dict(cache)
+merged.update(new_cache)
+try:
+    with open(cache_path, "w") as fh:
+        json.dump(merged, fh)
+except Exception:
+    pass
 print(h.hexdigest()[:40])
 PY
 )" || die "cannot derive local checkpoint fingerprint from $MODEL_DIR"

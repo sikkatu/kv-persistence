@@ -1,4 +1,4 @@
-> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Security) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Security.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Security.zh)
+> 🌐 Единые языковые версии: **English** | [Русский](security.ru.md) | [中文](security.zh.md)
 
 # Security and data handling
 

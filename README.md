@@ -21,8 +21,6 @@ completes (see [Status](#status)).
 [Troubleshooting](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ)
 
-Russian readers: [README.ru.md](README.ru.md) · 中文读者: [README.zh.md](README.zh.md)
-
 Primary target: MiMo-V2.6-Pro on 4 × NVIDIA RTX PRO 6000 (the
 `sikkatu/recipes` `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit` recipe). The cache
 layer is model-agnostic; model-specific settings live under `configs/<model>/` only.

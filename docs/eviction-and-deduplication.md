@@ -1,4 +1,4 @@
-> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Storage-and-Eviction) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Storage-and-Eviction.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Storage-and-Eviction.zh)
+> 🌐 Единые языковые версии: **English** | [Русский](eviction-and-deduplication.ru.md) | [中文](eviction-and-deduplication.zh.md)
 
 # Eviction and deduplication
 

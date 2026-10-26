@@ -1,4 +1,4 @@
-> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.zh)
+> 🌐 Единые языковые версии: **English** | [Русский](compatibility.ru.md) | [中文](compatibility.zh.md)
 
 # Compatibility matrix
 

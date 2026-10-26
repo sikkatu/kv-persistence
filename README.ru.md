@@ -22,8 +22,6 @@ KV-блоки промптов восстанавливаются с NVMe, а н
 [Устранение неполадок](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.ru) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ.ru)
 
-English readers: [README.md](README.md) · 中文读者: [README.zh.md](README.zh.md)
-
 Основная цель: MiMo-V2.6-Pro на 4 × NVIDIA RTX PRO 6000 (рецепт
 `sikkatu/recipes` `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit`). Слой кэша
 модельно-агностичен; специфичные для модели настройки лежат только в

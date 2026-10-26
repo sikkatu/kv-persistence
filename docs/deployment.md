@@ -1,4 +1,4 @@
-> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.zh)
+> 🌐 Единые языковые версии: **English** | [Русский](deployment.ru.md) | [中文](deployment.zh.md)
 
 # Deployment
 
@@ -41,7 +41,8 @@ never the tracked `identity.env`):
 ```bash
 cp configs/generic/cache.env configs/generic/cache.env.local
 $EDITOR configs/generic/cache.env.local        # KVP_CACHE_ROOT must be on NVMe
-$EDITOR configs/mimo-v2.6-pro/identity.env     # only if you pin the HF SHA yourself
+# identity.env.local is created automatically by setup-identity.sh below;
+# edit identity.env ONLY for fields you deliberately pin yourself (e.g. HF SHA).
 ```
 
 **Identity values are filled and verified automatically** — do not assemble them

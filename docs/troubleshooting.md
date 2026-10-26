@@ -1,4 +1,4 @@
-> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.zh)
+> 🌐 Единые языковые версии: **English** | [Русский](troubleshooting.ru.md) | [中文](troubleshooting.zh.md)
 
 # Troubleshooting
 
@@ -13,13 +13,25 @@ docker logs --tail 100 mimo-pro-tp4-kvp            # engine
 
 ## Preflight fails: identity fields
 
-`[!!] KVP_MODEL_REVISION must be a full 40-hex SHA` — set the full commit SHA
-(not a branch name) in `configs/mimo-v2.6-pro/identity.env`. Get it:
+`[!!] KVP_MODEL_REVISION must be a full 40-hex SHA` — the accepted value is EITHER
+of two clearly distinct formats (choose one per deployment):
 
-```bash
-curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
-```
+1. **Local file fingerprint** (what `setup-identity.sh` writes by default): a
+   SHA-256 digest of config.json + *.index.json + every shard's CONTENT bytes.
+   NOT a commit SHA, but it identifies the files actually on disk byte-for-byte.
+   Regenerate it by rerunning `scripts/setup-identity.sh <model-dir>`.
+2. **Upstream HF commit SHA**, only if you deliberately track remote provenance:
+   ```bash
+   curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+   ```
+   Warning: this is the HEAD of the remote branch — NOT necessarily the revision
+   of your locally downloaded files (use it ONLY after verifying the local
+   download actually came from that commit).
+
+Both write into `configs/mimo-v2.6-pro/identity.env.local` (site override,
+gitignored); the tracked `identity.env` stays unmodified for a clean `git pull`.
+A branch name is never accepted (40-hex only).
 
 `[!!] KVP_CHAT_TEMPLATE_DIGEST must be 64 hex` — run preflight with
 `KVP_MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD bash scripts/preflight.sh`; it

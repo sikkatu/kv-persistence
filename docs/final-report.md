@@ -1,3 +1,5 @@
+> 🌐 Единые языковые версии: **English** | [Русский](final-report.ru.md) | [中文](final-report.zh.md)
+
 > This page is the in-repo technical record. Full docs in three languages: [wiki](https://github.com/sikkatu/kv-persistence/wiki) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Home.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Home.zh)
 
 # Final report — kv-persistence

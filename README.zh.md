@@ -20,8 +20,6 @@
 [故障排查](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.zh) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ.zh)
 
-English readers: [README.md](README.md) · Русский: [README.ru.md](README.ru.md)
-
 主要目标：4 × NVIDIA RTX PRO 6000 上的 MiMo-V2.6-Pro（配方
 `sikkatu/recipes` `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit`）。缓存层
 模型无关；模型专属配置仅位于 `configs/<model>/`。

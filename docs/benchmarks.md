@@ -1,4 +1,4 @@
-> Multilingual docs: [English](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery) | [Русский](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery.ru) | [中文](https://github.com/sikkatu/kv-persistence/wiki/Persistence-and-Recovery.zh)
+> 🌐 Единые языковые версии: **English** | [Русский](benchmarks.ru.md) | [中文](benchmarks.zh.md)
 
 # Benchmarks
 
