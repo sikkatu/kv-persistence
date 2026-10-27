@@ -47,6 +47,13 @@ touched.
 * Concurrency: admission is serialized inside the adapter and
   `BudgetLedger.admit()` refuses once the hard cap would be exceeded
   (`test_concurrent_admits_cannot_exceed_budget`).
+* **Restart accounting (NEEDS TESTING)**: after `lmcache server` restarts,
+  upstream docs describe an in-memory index lazily rebuilt from on-disk file
+  sizes as they are touched. Until the pinned LMCache build is confirmed to feed
+  those restored sizes into `get_usage()` (which drives `max_capacity_gb`
+  enforcement and LRU eviction), do NOT assume pre-restart files remain inside
+  the hard cap. Required hardware test: fill cache -> restart cache service ->
+  keep writing -> verify `used_bytes` keeps growing and stays bounded.
 
 ## Eviction
 
@@ -58,9 +65,11 @@ Automatic eviction is mandatory and always on:
   ordering when per-entry statistics are available (hits, last access, prefix
   length, bytes), `implementation/kvpersist/retention.py` ranks entries:
   stale/rarely-reused/huge-useless first, frequently reused long prefixes last.
-* Shared blocks: eviction deletes only the object key being evicted; identical
-  content stored once (dedup) is deleted only when no other key references the
-  same object (see docs/eviction-and-deduplication.md).
+* Shared blocks: LMCache stores each chunk as its own content-derived object;
+  different keys never alias to the same object file across accounts. There is
+  NO caller-side refcount -- concurrent readers that lose an LRU victim simply
+  miss and recompute (a liveness trade-off, never a silent wrong read). See
+  docs/eviction-and-deduplication.md and the known-limits in docs/final-report.md.
 
 ### Manual cleanup (explicit only)
 

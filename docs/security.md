@@ -13,7 +13,7 @@ treat the cache root as if it contained the conversation text itself).
 | Control | Implementation |
 |---|---|
 | Filesystem permissions | `KVP_CACHE_ROOT` created `chmod 700`; scripts never loosen it |
-| Management endpoint exposure | LMCache HTTP frontend (`--http-host`/port from config) bind **127.0.0.1** only; no proxying without auth (docs/troubleshooting.md if you must reach it remotely) |
+| Management endpoint exposure | LMCache HTTP frontend (port from config) binds **127.0.0.1** only; BUT loopback is not authentication -- any UID on the same host can reach these ports. Treat co-located local users as trusted admins. No proxying without auth (docs/troubleshooting.md). |
 | Cache request port | `127.0.0.1:5555` ZMQ, loopback only |
 | Credentials | never in repository or cache config; `live/api_key` (gitignored, chmod 600) holds the vLLM API key exactly like the production recipe does |
 | Diagnostics logging | scripts and admin CLI log keys, sizes and counts only — never prompt text, headers or tokens |
@@ -35,5 +35,7 @@ treat the cache root as if it contained the conversation text itself).
 
 ## Reporting security issues
 
-Use the private repository channel (sikkatu/kv-persistence issues), not public
-disclosure, until the report is triaged.
+Do NOT file public issues for security vulnerabilities. Enable and use GitHub's
+**private vulnerability reporting** for this repository (Security tab ->
+Private vulnerability reporting) or contact the maintainer privately before any
+disclosure.

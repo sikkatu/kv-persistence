@@ -1,17 +1,20 @@
 > **English** | [Русский](README.ru.md) | [中文](README.zh.md)
 
-# kv-persistence — Universal Persistent KV Cache for vLLM
+# kv-persistence — Persistent KV Cache for vLLM
 
 <p align="center">
   <img src="docs/assets/og-template.jpg" alt="kv-persistence — persistent KV cache for vLLM on NVMe" width="820">
 </p>
 
 Persistent, disk-backed KV-cache layer for vLLM: after a restart, reusable prompt KV
-blocks are recovered from NVMe instead of being recomputed. The design goal —
-long chat-app conversations (100k–1M tokens) reopening in seconds instead of tens of
-minutes — is measured on target hardware in `scripts/benchmark.sh`; results are
-published in [docs/benchmarks.md](docs/benchmarks.md) once the acceptance run
-completes (see [Status](#status)).
+blocks are recovered from NVMe instead of being recomputed. The design goal — long
+chat-app conversations (100k-1M tokens) reopening in seconds instead of tens of
+minutes — is a *target to be proven*; the benchmark suite
+(`scripts/benchmark.sh`) measures TTFT/prefill at 32K/128K/256K and against
+`max_model_len` acceptance criteria listed in [docs/benchmarks.md](docs/benchmarks.md)
+once the hardware run on the target 4-GPU host completes (see [Status](#status)).
+Until that run lands, claims of "seconds" are UNKNOWN — no numbers are published
+as verified yet.
 
 **📖 Documentation (EN / RU / ZH) lives in the Wiki:**
 [Home](https://github.com/sikkatu/kv-persistence/wiki) ·
@@ -99,7 +102,10 @@ the operator. Unverified features are labelled `NEEDS TESTING` / `BLOCKED` in
 ## Design rules
 
 * The production recipe (`sikkatu/recipes`) is **read-only** for this project.
-* No unauthenticated management endpoints; the cache root is `0700`.
+* Management endpoints (lmcache HTTP + ZMQ) are **loopback-only** and the cache
+  root is `0700`. Loopback-only is NOT authentication: any other UID on the same
+  host can reach loopback ports. Trust local users as trusted admins; see
+  docs/security.md.
 * No credentials, tokens, prompt text or cache data in the tree.
 * All documented commands work as-is once precondition variables (`IMAGE`,
   `MODEL_DIR`, `API_KEY`) are exported — the Quick Start sequences it linearly.

@@ -36,6 +36,11 @@ kv-persistence 的任何脚本都不会触碰它们。
 * 没有单独的磁盘索引 —— 确定性文件命名空间本身就是索引，启动时惰性重建。
   索引/元数据开销已计入 `used_bytes`。
 * 并发写入安全：即使并行请求，只要会超出硬上限，记账器就会拒绝写入。
+* **重启后核算（NEEDS TESTING）**：lmcache-server 重启后，上游描述内存索引按需
+  懒惰重建（只根据文件尺寸）。在确认锁定的 LMCache 构建会把恢复的文件大小
+  计入 get_usage()（从而参与 max_capacity_gb 与 LRU 的判定）之前，不要假设
+  重启前的文件仍计入硬上限。必需的硬件测试：填满缓存 → 重启 → 继续写 →
+  验证 used_bytes 在预算内持续增长。
 
 随时查看报告：`bash scripts/budget-report.sh status`
 

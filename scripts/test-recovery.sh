@@ -138,6 +138,11 @@ if [ "$A_CACHED" = "MISSING" ]; then
 elif [ "${A_CACHED:-0}" -eq 0 ]; then
   fail "A: cached_tokens==0 after restart (no reuse at all)"
 fi
+# Scenario A's re-question remains valid ONLY when hits can be tied to L2/disk
+# reads in the marked interval (not to surviving RAM/engine in-memory hits).
+if [ "${A_RETR:-0}" -eq 0 ] && [ "${A_CACHED:-0}" != "MISSING" ] && [ "${A_CACHED:-0}" -gt 0 ]; then
+  inconc "A: cached_tokens>0 but zero post-mark L2-read events -- reuse may be RAM-resident (L1/engine) and not disk-backed"
+fi
 A_DISK1=$(disk_read_bytes)
 if [ "$A_DISK0" = "-1" ] || [ "$A_DISK1" = "-1" ]; then
   inconc "A: KVP_CACHE_DEVICE unset/unreadable -- cannot independently prove NVMe-sourced reads (device counters unavailable)"

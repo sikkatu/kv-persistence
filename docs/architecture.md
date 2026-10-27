@@ -91,7 +91,7 @@ max model len, chat template digest (sha256 of the applied template).
 |---|---|
 | cache miss / partial hit | recompute only the missing prefix |
 | incompatible entry | unreachable by namespace; treated as miss |
-| corrupt/incomplete file | lookup falls through (miss) → recompute; no wrong output |
+| corrupt/incomplete file | lookup falls through (miss) → recompute; no wrong output -- BUT see integrity caveat below (`no directed checksum` per-object) |
 | interrupted write | temp-file + atomic rename ⇒ readers see old or new file only |
 | interrupted eviction | same atomicity; index/lazy lookup tolerates missing files |
 | disk full | adapter rejects stores above `max_capacity_gb`; serving continues without cache writes |
@@ -108,3 +108,17 @@ A cache failure must never corrupt model output: the worst case is recomputation
 * No credentials in the repo; no prompt text in logs or reports (keys and counts
   only). KV data itself is derived from prompts — treat the NVMe directory as
   sensitive (docs/security.md).
+
+## Integrity caveat ("no wrong output" holds via recompute fallback, not via corruption detection)
+
+The failure-model row "corrupt/incomplete file → lookup falls through → recompute"
+is optimistic on its own: LMCache has NO per-object checksum published in its L2
+adapter contract. The temp-file + atomic-rename write path guarantees *process-crash*
+consistency (a reader sees a fully renamed file or none at all), but no fsync of
+files/directories is guaranteed, so a sudden power loss can leave a truncated file
+that a later lookup may treat as present. Until LMCache publishes a checksum
+contract or one is layered under `nixl_store_dynamic` (out of scope for this
+project), the "no wrong output" guarantee rests on recompute-fallback, NOT on
+detecting corruption: partial/wrong-size data must never be used as a valid
+prefill prefix. See Storage & Eviction's restart-accounting note for the required
+hardware validation run.

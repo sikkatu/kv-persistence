@@ -128,15 +128,22 @@ before measuring).
    exact wheel must match the production image ABI. If it does not, `lmcache
    server` runs from the production image (documented fallback). This exact
    combination is NEEDS TESTING on host.
-4. Dedup is safe at chunk granularity (key equals object identity); there is no
-   caller-side refcount — the liveness trade-off is documented in
-   `docs/eviction-and-deduplication.md`.
+4. Dedup semantics: LMCache maps each chunk key 1:1 to a content-derived object
+   file; there is NO caller-side refcount and no cross-client key→object sharing
+   across namespaces. Eviction may drop a byte range that a live query would read
+   as a pure liveness trade-off (that query misses and recomputes), never as a
+   correctness issue. See docs/eviction-and-deduplication.md.
 5. 1M-token prompts: only run if the hardware window allows meaningful execution.
 6. `{KV_CACHE_DTYPE, KVP_KV_CACHE_DTYPE}` must switch to `fp16` if the brief's
    serving setting is to be the effective one; all numbers must then be
    re-measured. KV-geometry values (block size, heads, dim, TP, max-model-len)
    are now cross-checked against the RUNNING engine by
    `scripts/verify-engine-identity.sh` before any cached data is trusted.
+7. The wording of two external working documents ("the brief" of the original
+   internal project request and "the review's protocol" cited in the fix history)
+   refers to design decisions reachable only for the project author's process;
+   the generic operations described here are reproducible without them, but exact
+   pass criteria should be adapted before third-party site acceptance.
 
 ## Provenance
 

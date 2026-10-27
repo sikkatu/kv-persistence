@@ -41,4 +41,5 @@
 
 ## 报告安全问题
 
-通过仓库私有渠道（`sikkatu/kv-persistence` 的 issues）；公开披露需在分诊之后。
+请勿为安全漏洞开公开 issue。启用并使用本仓库的 GitHub **private vulnerability reporting**
+（Security -> Private vulnerability reporting），或事先私下联系维护者。

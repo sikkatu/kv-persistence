@@ -18,9 +18,19 @@ does NOT satisfy the primary milestone.
 
 Prompt scales: synthetic 32K / 128K / 256K tokens (`scripts/benchmark.sh
 <scenario> <tokens>`), plus real long chat-app histories when available
-(`implementation/prompt_probe.py` quantifies the stable prefix first — dynamic
+(`implementation/prompt_probe.py` quantifies the stable prefix first -- dynamic
 values like timestamps are NOT part of the reusable prefix). 1M prompts are run
 only if the hardware window allows meaningful execution.
+
+**Acceptance criteria for "100k-1M tokens in seconds"** (must ALL hold on hw):
+1. TTFT of a re-send after scenario B under `MAX_MODEL_LEN=1M` config is measured
+   (median of >=3 runs) and lower than the cold-cache baseline by a stated factor.
+2. `cached_tokens > 0` for post-restart reuse, L2/disk read events observed, and
+   physical NVMe byte-count increase during the send confirms bytes came back
+   from disk rather than from the engine's own RAM.
+3. L1 (`KVP_L1_SIZE_GB`) must exceed the largest single reuse prefix in bytes,
+   else correct recovery happens but TTFT improvement will plateau in the L1-queue
+   range only -- see docs/architecture.md.
 
 ## Metrics collected per run
 

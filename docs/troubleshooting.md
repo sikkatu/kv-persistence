@@ -58,8 +58,10 @@ Symptom: vLLM logs show connector errors / retries against port 5555.
 
 Verify in order:
 1. `cached_tokens` in the request response > 0 (the engine saw cache hits).
-2. `grep -c Retrieved "$KVP_CACHE_ROOT/lmcache-server.log"` increases during the
-   request; entries should mention L2/disk, not only L1.
+2. After the restart mark, the log must show L2/disk-sourced read events
+   (pattern in scripts/test-recovery.sh: `retriev|loaded|restore|prefetch|read`
+   with `L2|disk|secondary|file`). A plain "Retrieved" mentioning only L1/RAM is
+   NOT disk-proof; correlate with `KVP_CACHE_DEVICE` read-byte counters.
 3. Cache bytes on NVMe did not grow to rewrite the same data
    (`budget-report.sh status` before/after).
 4. Identity unchanged: run `scripts/preflight.sh` — a changed revision/dtype/
