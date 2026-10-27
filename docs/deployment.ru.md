@@ -11,7 +11,7 @@
 * Debian-хост с 4× RTX PRO 6000, Docker, `nvidia-smi`, закреплённый образ vLLM
   (`IMAGE` с `@sha256:` дайджестом) и каталог модели `MODEL_DIR`.
 * Локальный NVMe со свободным местом не меньше `KVP_CACHE_BUDGET_GB` (по умолчанию
-  1.5 ТБ) на закреплённом устройстве.
+  1.5 ТБ) на конечном диске общего хранилища ВМ.
 * Production-рецепт на диске; скрипты используют из него только `tp4.env.example`
   (дайджест `IMAGE`) и `patches/` + `MANIFEST.sha256` (монтируются только чтение).
 * Python 3.12 (для `kvpersist` админа + скриптов и CLI `lmcache`).
@@ -39,7 +39,7 @@ export REPO="$PWD"
 
 ```bash
 cp configs/generic/cache.env configs/generic/cache.env.local
-$EDITOR configs/generic/cache.env.local        # KVP_CACHE_ROOT должен быть на NVMe
+$EDITOR configs/generic/cache.env.local        # KVP_CACHE_ROOT должен быть на общем диске ВМ
 # identity.env.local создастся автоматически далее;
 # правьте identity.env только для полей, фиксируемых вручную (например HF SHA).
 ```
@@ -140,7 +140,7 @@ bash "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-
 ```
 
 Production-рецепт не изменён — его лаунчер работает в точности как раньше.
-Постоянные KV-данные на NVMe НЕ удаляются — они просто игнорируются, пока выключены.
+Постоянные KV-данные на общем диске ВМ НЕ удаляются — они просто игнорируются, пока выключены.
 Остановить сервис кэша (сохраняя данные): `bash scripts/stop-cache.sh`.
 Явно стереть данные кэша: `bash scripts/budget-report.sh purge --all --yes`
 (ручные, явные действия — никогда автоматически).

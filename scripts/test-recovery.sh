@@ -53,7 +53,7 @@ api_ready(){ for i in $(seq 1 180); do
 fail(){ echo "FAIL: $*"; V=$((V+1)); echo "$*" >> "$OUT/failures.txt"; }
 inconc(){ echo "INCONCLUSIVE: $*"; V=9; echo "INCONC: $*" >> "$OUT/failures.txt"; }
 
-disk_read_bytes(){ # physical bytes read from the pinned NVMe device -> independent
+disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume holds Docker, the model and the OS) device -> independent
   # proof of disk-sourced reads (not RAM). Requires KVP_CACHE_DEVICE.
   local dev="${KVP_CACHE_DEVICE:-}"; [ -n "$dev" ] || { echo -1; return; }
   dev="${dev#/dev/}"; dev="${dev%%[0-9]*p[0-9]*}"; dev="${dev%%p[0-9]*}"

@@ -104,6 +104,8 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 
 ## 许可证
 
-Apache-2.0 —— 见 [LICENSE](LICENSE)。任何使用本项目或发布衍生分支者必须
-保留 [NOTICE](NOTICE) 内容（作者: **sikkatu** / 项目: **kv-persistence** /
-https://github.com/sikkatu/kv-persistence），依 Apache-2.0 第 4(d) 条。
+Apache-2.0 —— 见 [LICENSE](LICENSE)。若您**分发**修改版、衍生分支、捆绑包或
+基于本代码的 SaaS，必须保留 [NOTICE](NOTICE) 内容（作者: **sikkatu** /
+项目: **kv-persistence** / https://github.com/sikkatu/kv-persistence），
+依 Apache-2.0 第 4(d) 条。在私有后端中未经修改运行不需要署名——§4(d)
+约束的是分发者，并非每个内部用户。

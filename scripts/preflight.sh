@@ -36,7 +36,7 @@ case "$ROOT_PATH" in
   *) warn "cache root $ROOT_PATH is unusual — confirm it is on local NVMe" ;;
 esac
 echo "-- storage location (device-level check) --"
-# The budget is 1.5 TB: the cache MUST sit on the intended NVMe, not merely on
+# The budget is 1.5 TB: the cache MUST sit on the intended cache disk on the shared VM volume, not merely on
 # a filesystem with enough free space. KVP_CACHE_DEVICE pins the expected
 # block device (e.g. /dev/nvme1n1 or its partition). findmnt resolves the mount
 # of KVP_CACHE_ROOT; lsblk maps it to the parent disk.
@@ -47,8 +47,12 @@ if command -v findmnt >/dev/null && command -v lsblk >/dev/null; then
   FS_TYPE="$(df -T "$ROOT_PATH" 2>/dev/null | awk 'NR==2{print $2}')"
   note "mount point of $ROOT_PATH: ${MOUNT_SRC:-unknown} (fs: ${FS_TYPE:-?}, disk: ${PARENT_DISK:-unknown})"
   case ",$FS_TYPE," in
-    *,nfs*,*|*,cifs,*|*,smb*,*|*,fuse.sshfs,*)
-      warn "$ROOT_PATH is on network storage ($FS_TYPE) -- atomic writes and persistence are NOT reliable there" ;;
+    *,nfs*,*|*,cifs,*|*,smb*,*|*,fuse*,*)
+      # Review 2C: NETWORK FS BREAKS atomic-rename semantics and small-file
+      # performance -- HARD STOP, not a warning.
+      die "NETWORK FS DETECTED: $ROOT_PATH is on $FS_TYPE. Atomic rename and
+persistence guarantees require a POSIX local filesystem (ext4/xfs/btrfs).
+Move KVP_CACHE_ROOT to local storage or recovery cannot be trusted." ;;
   esac
   if [ -n "$TARGET_DEV" ]; then
     case " $PARENT_DISK " in

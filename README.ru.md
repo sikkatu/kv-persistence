@@ -3,7 +3,7 @@
 # kv-persistence — универсальный постоянный KV-кэш для vLLM
 
 <p align="center">
-  <img src="docs/assets/og-template.jpg" alt="kv-persistence — постоянный KV-кэш для vLLM на NVMe" width="820">
+  <img src="docs/assets/og-template.jpg" alt="kv-persistence — постоянный KV-кэш для vLLM на общем диске ВМ" width="820">
 </p>
 
 Постоянный слой KV-кэша на диске для vLLM: после перезапуска переиспользуемые
@@ -92,7 +92,7 @@ bash scripts/test-recovery.sh           # приёмка: рестарт → д�
 | `configs/mimo-v2.6-pro/` | пины идентичности MiMo и шаблон L2-адаптера, EN/RU/ZH |
 | `scripts/` | preflight, старт/стоп кэша, лаунчер, тест восстановления, бенчмарк, админ-CLI |
 | `implementation/` | пакет `kvpersist`: идентичность, бюджеты, ранжирование, админ-CLI |
-| `tests/` | unit (49, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
+| `tests/` | unit (52, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
 
 ## Статус
 
@@ -113,7 +113,9 @@ bash scripts/test-recovery.sh           # приёмка: рестарт → д�
 
 ## Лицензия
 
-Apache-2.0 — см. [LICENSE](LICENSE). Каждый, кто использует этот проект или
-публикует форк, обязан нести содержимое [NOTICE](NOTICE) (автор: **sikkatu** /
-проект: **kv-persistence** / https://github.com/sikkatu/kv-persistence),
-согласно разделу 4(d) Apache-2.0.
+Apache-2.0 — см. [LICENSE](LICENSE). Если вы **распространяете** модифицированную
+версию, форк, бандл или SaaS на основе этого кода, вы обязаны нести содержимое
+[NOTICE](NOTICE) (автор: **sikkatu** / проект: **kv-persistence** /
+https://github.com/sikkatu/kv-persistence), согласно разделу 4(d) Apache-2.0.
+Запуск без модификаций во внутреннем бэкенде не требует атрибуции — §4(d)
+распространяется на дистрибьюторов, а не на каждого внутреннего пользователя.

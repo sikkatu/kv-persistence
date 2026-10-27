@@ -9,7 +9,20 @@ ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/env.sh"
 _kvp_load_env "$ROOT"
 
-command -v lmcache >/dev/null || die "lmcache CLI missing — see docs/deployment.md"
+# Launch mode (review 3A): host venv OR Docker sidecar in the same pinned image.
+# Docker mode ELIMINATES the Python-version / ABI mismatch problem entirely --
+# the lmcache server runs inside the same vLLM image (same Python, same PyTorch).
+KVP_LAUNCH_MODE="${KVP_LAUNCH_MODE:-host}"   # host | docker
+CONTAINER_NAME="${KVP_CACHE_CONTAINER:-lmcache-kvp-server}"   # docker-mode container name
+case "$KVP_LAUNCH_MODE" in
+  host)
+    command -v lmcache >/dev/null || die "lmcache CLI missing — see docs/deployment.md (or set KVP_LAUNCH_MODE=docker)" ;;
+  docker)
+    DOCKER_IMAGE="${IMAGE:-${DOCKER_IMAGE:-}}"
+    [ -n "$DOCKER_IMAGE" ] || die "KVP_LAUNCH_MODE=docker requires IMAGE (pinned vLLM digest) or DOCKER_IMAGE"
+    command -v docker >/dev/null || die "docker required for KVP_LAUNCH_MODE=docker" ;;
+  *) die "KVP_LAUNCH_MODE must be 'host' or 'docker', got '$KVP_LAUNCH_MODE'" ;;
+esac
 # Optional HTTP / serde flags: keep only those THIS build's --help understands,
 # so a build without them still starts rather than crash on an unknown flag.
 LMCACHE_HELP="$(lmcache server --help 2>&1 || true)"
@@ -51,7 +64,13 @@ PIDF="$ROOT_PATH/lmcache-server.pid"
 # session or dropping the connection will NOT kill the cache service. nohup
 # additionally shields it from HUP. Both matter because the service is meant
 # to outlive the operator's shell.
-setsid nohup lmcache server \
+if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  setsid nohup docker run --name "$CONTAINER_NAME" --rm \
+    --network host \
+    -v "$ROOT_PATH:$ROOT_PATH" \
+    "$DOCKER_IMAGE" lmcache server \
+    --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
   --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
   --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
   --eviction-policy "$LMCACHE_EVICTION_POLICY" \
@@ -63,6 +82,17 @@ setsid nohup lmcache server \
   ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
   ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
   >>"$LOG" 2>&1 &
+else
+  setsid nohup lmcache server \
+    --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
+    --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
+    --eviction-policy "$LMCACHE_EVICTION_POLICY" \
+    --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
+    --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
+    --chunk-size "$LMCACHE_CHUNK_SIZE" \
+    --l2-adapter "$ADAPTER_JSON" \
+    >>"$LOG" 2>&1 &
+fi
 echo $! > "$PIDF"
 SERVER_PID="$(cat "$PIDF")"
 echo "lmcache server started: pid $SERVER_PID, log $LOG"

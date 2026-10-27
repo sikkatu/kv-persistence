@@ -107,7 +107,7 @@ disk-backed recovery.
 Log parsing alone (words like `Retrieved`/`L2`) is inherently version-dependent
 and was flagged in review as a risk of false PASS. `test-recovery.sh` therefore
 CORROBORATES log evidence with an independent physical signal: the read-sector
-counter of the pinned NVMe device (`KVP_CACHE_DEVICE`, read from
+counter of the shared VM disk (same volume holds Docker, the model and the OS) device (`KVP_CACHE_DEVICE`, read from
 `/sys/block/<dev>/stat` field 3) measured across each scenario. A scenario that
 shows cache reuse with ZERO physical NVMe bytes read cannot credit L2 as the
 source.

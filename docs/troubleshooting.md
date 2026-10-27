@@ -71,7 +71,7 @@ Verify in order:
 ## Disk full / rejected stores
 
 `budget-report.sh status` shows `free_bytes: 0` or the adapter logs rejection at
-the hard cap — raise `KVP_CACHE_BUDGET_GB` (respect the pinned device's free space) or run
+the hard cap — raise `KVP_CACHE_BUDGET_GB` (respect the cache disk on the shared VM volume's free space) or run
 `budget-report.sh purge --namespace … --yes` on old namespaces. Never delete
 files manually inside the cache root while the service runs.
 

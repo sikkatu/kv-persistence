@@ -140,6 +140,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="kvp-admin", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="usage vs budget report")
+    sub.add_parser("free", help="physical free space on cache filesystem")
+    sub.add_parser("emergency-evict", help="forced LRU eviction when physical free space < 5 GB")
     p = sub.add_parser("purge", help="manual cleanup (explicit, never automatic)")
     p.add_argument("--namespace")
     p.add_argument("--all", action="store_true")
@@ -149,10 +151,83 @@ def main(argv=None) -> int:
     q.add_argument("--gb", type=float)
     args = ap.parse_args(argv)
     try:
-        return {"status": cmd_status, "purge": cmd_purge, "quota": cmd_quota}[args.cmd](args)
+        return {"status": cmd_status, "purge": cmd_purge, "quota": cmd_quota, "free": cmd_free, "emergency-evict": cmd_emergency_evict}[args.cmd](args)
     except BudgetError as exc:
         print(f"budget error: {exc}", file=sys.stderr)
         return 1
+
+
+def cmd_free(args):
+    """Report PHYSICAL free space on the cache filesystem (review 2B)."""
+    import shutil, os
+    root = os.environ.get("KVP_CACHE_ROOT", "")
+    if not root or not os.path.isdir(root):
+        print("KVP_CACHE_ROOT not set or missing", file=sys.stderr)
+        return 1
+    du = shutil.disk_usage(root)
+    free_gb = du.free / (1 << 30)
+    total_gb = du.total / (1 << 30)
+    budget_gb = float(os.environ.get("KVP_CACHE_BUDGET_GB", "0"))
+    print(json.dumps({
+        "cache_root": root,
+        "physical_free_gb": round(free_gb, 2),
+        "physical_total_gb": round(total_gb, 2),
+        "budget_gb": budget_gb,
+        "emergency_threshold_gb": 5.0,
+        "needs_emergency_eviction": free_gb < 5.0,
+    }, indent=2))
+    return 0
+
+
+def cmd_emergency_evict(args):
+    """Review 2B: forced LRU-ish eviction when PHYSICAL free space drops below
+    the emergency threshold, regardless of the logical budget. Deletes the
+    oldest namespace directories inside KVP_CACHE_ROOT until physical free
+    space recovers above the threshold (or nothing left to delete)."""
+    import shutil, os
+    root = os.environ.get("KVP_CACHE_ROOT", "")
+    if not root or not os.path.isdir(root):
+        print("KVP_CACHE_ROOT not set or missing", file=sys.stderr)
+        return 1
+    threshold_gb = 5.0
+    du = shutil.disk_usage(root)
+    free_gb = du.free / (1 << 30)
+    if free_gb >= threshold_gb:
+        print(json.dumps({"action": "none", "physical_free_gb": round(free_gb, 2),
+                          "threshold_gb": threshold_gb}))
+        return 0
+    # Sort namespace dirs by mtime: oldest first (closest to LRU semantics)
+    ns_dirs = sorted(
+        [os.path.join(root, n) for n in os.listdir(root)
+         if n.startswith("kvp-") and os.path.isdir(os.path.join(root, n))],
+        key=lambda p: os.path.getmtime(p),
+    )
+    freed = 0
+    deleted = []
+    for ns in ns_dirs:
+        du = shutil.disk_usage(root)
+        if du.free / (1 << 30) >= threshold_gb:
+            break
+        sz = sum(
+            os.path.getsize(os.path.join(dp, f))
+            for dp, _, fnames in os.walk(ns)
+            for f in fnames
+        )
+        try:
+            shutil.rmtree(ns)
+            freed += sz
+            deleted.append(os.path.basename(ns))
+        except OSError as exc:
+            print(f"warning: could not delete {ns}: {exc}", file=sys.stderr)
+    du2 = shutil.disk_usage(root)
+    print(json.dumps({
+        "action": "emergency_evict",
+        "deleted_namespaces": deleted,
+        "freed_bytes_estimated": freed,
+        "physical_free_gb_after": round(du2.free / (1 << 30), 2),
+        "threshold_gb": threshold_gb,
+    }, indent=2))
+    return 0 if du2.free / (1 << 30) >= threshold_gb else 1
 
 
 if __name__ == "__main__":

@@ -7,15 +7,18 @@
 | Guard | Value (default) | Enforced by |
 |---|---|---|
 | Hard cap | `KVP_CACHE_BUDGET_GB=1500` GB (1.5 TB) | `max_capacity_gb` in the L2 adapter: stores above limit are REJECTED |
-| Physical ceiling | whatever the pinned NVMe device holds (checked by preflight) | `KVP_CACHE_DEVICE` + free-space check |
+| Physical ceiling | free space on the SHARED VM disk (same volume carries Docker images, model weights, OS) | `KVP_CACHE_DEVICE` + free-space check |
 | Soft threshold | 0.9 of budget | `trigger_watermark` — eviction starts here |
 | Reclaim target | ~0.81 of budget after one cycle (0.9 trigger x 0.9 kept of used) | `eviction_ratio` 0.1 of used capacity per cycle |
 | Per-namespace quota | `quotas.json` in cache root (optional) | `kvp-admin quota` policy layer |
 
-The 1.5 TB default is deliberately generous: more prefill history stays on NVMe,
-so reopening a conversation saves recomputation time and energy on the first
-load. Raise it further only if the pinned device has the free space (preflight
-verifies this against `KVP_CACHE_DEVICE`).
+The 1.5 TB default is a deliberate fraction of the SHARED VM disk (the same
+volume carries Docker images, the model weights and the OS). More prefill
+history on disk means reopening a conversation saves recomputation time and
+energy on the first load — but leave headroom for non-cache writers. Do NOT
+size the budget as "whatever the disk has left": keep >=50 GB free for
+OS/Docker/model work, and watch `free_bytes` in `budget-report.sh status` as
+other writers (docker pull, logs) grow.
 
 ## How long can a conversation be?
 
@@ -86,6 +89,30 @@ inside `KVP_CACHE_ROOT` (path safety checks; refusal exit code 2 otherwise).
 `budget-report.sh status` reports `soft_pressure: true` when usage ≥ 90 % of
 budget. The launcher also warns at startup when free filesystem space is below
 the configured budget.
+
+### Physical free-space emergency eviction (review 2B)
+
+The logical budget (KVP_CACHE_BUDGET_GB) governs cache-side admission, but on a
+**shared VM disk** (see *Budget model* above) Docker images, model weights, OS
+logs and other tenants can consume the disk independently of the cache. When
+physical free space on `KVP_CACHE_ROOT` falls below 5 GB (emergency threshold),
+the logical budget alone will NOT trigger eviction — the cache would stop
+accepting new stores and TTFT would degrade silently.
+
+* `python3 -m kvpersist.cli free` — reports physical free space on the cache
+  filesystem (`physical_free_gb` and `needs_emergency_eviction`).
+* `python3 -m kvpersist.cli emergency-evict` — **forced** LRU-style eviction of
+  the oldest `kvp-*` namespaces until physical free space recovers above the
+  5 GB threshold (or nothing remains to delete). Run it from a systemd timer or
+  a cron job with access to `KVP_CACHE_ROOT`; it is a NO-OP when the threshold
+  is not breached.
+* `scripts/budget-report.sh` already prints `physical_free_gb` and a warning
+  line when the threshold is crossed, pointing to the command above.
+
+Required hardware test: on the target host with a deliberately small disk
+budget, fill the cache (and optionally a filler file in the same filesystem) to
+below 5 GB free, run `emergency-evict`, verify `physical_free_gb_after` >= 5 and
+that LRU-order (oldest mtime) namespaces were the ones removed.
 
 ## Namespaces and cleanup policy
 

@@ -27,7 +27,7 @@ total_s、缓存字节变化（budget-report.sh status）、LMCache 行数、VRA
 ## NVMe 读取的物理证据（不只是日志文本）
 
 日志解析（`Retrieved`/`L2` 等词）具有版本依赖性，审查指出这是误报风险。
-因此 `test-recovery.sh` 用独立物理信号佐证日志证据：固定 NVMe 设备
+因此 `test-recovery.sh` 用独立物理信号佐证日志证据：共享 VM 磁盘（同盘还有 Docker 与模型权重） 设备
 （`KVP_CACHE_DEVICE`，从 `/sys/block/<dev>/stat` 字段 3 读取）在每个场景期间
 的读扇区计数器。若场景显示有复用但物理 NVMe 读取为 0，则不能归功于 L2。
 

@@ -90,7 +90,7 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 | `configs/mimo-v2.6-pro/` | MiMo identity pins and L2 adapter template, EN/RU/ZH |
 | `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
 | `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
-| `tests/` | unit (49, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
+| `tests/` | unit (52, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
 
 ## Status
 
@@ -112,7 +112,9 @@ the operator. Unverified features are labelled `NEEDS TESTING` / `BLOCKED` in
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE). Anyone using this project or publishing
-a fork must carry the [NOTICE](NOTICE) content (author: **sikkatu** / project:
-**kv-persistence** / https://github.com/sikkatu/kv-persistence), per Apache-2.0
-Section 4(d).
+Apache-2.0 — see [LICENSE](LICENSE). If you **distribute** a modified version,
+fork, bundle, or SaaS built on this code, you must carry the [NOTICE](NOTICE)
+content (author: **sikkatu** / project: **kv-persistence** /
+https://github.com/sikkatu/kv-persistence), per Apache-2.0 Section 4(d).
+Running it unmodified in a private backend does not require credit — §4(d)
+binds distributors, not every internal user.

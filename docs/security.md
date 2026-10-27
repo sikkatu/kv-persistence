@@ -13,7 +13,7 @@ treat the cache root as if it contained the conversation text itself).
 | Control | Implementation |
 |---|---|
 | Filesystem permissions | `KVP_CACHE_ROOT` created `chmod 700`; scripts never loosen it |
-| Management endpoint exposure | LMCache HTTP frontend (port from config) binds **127.0.0.1** only; BUT loopback is not authentication -- any UID on the same host can reach these ports. Treat co-located local users as trusted admins. No proxying without auth (docs/troubleshooting.md). |
+| Management endpoint exposure | LMCache HTTP frontend (port from config) binds **127.0.0.1** only; BUT loopback is not authentication -- any UID on the same host can reach these ports. Treat co-located local users as trusted admins. No proxying without auth (docs/troubleshooting.md). **Hardening (review 2A)**: in multi-tenant / Kubernetes (shared pod netns) loopback is NOT sufficient -- run management endpoints on a Unix Domain Socket (0600) or require a local Bearer token; a loopback-only HTTP/ZMQ port can still be probed by any local UID. |
 | Cache request port | `127.0.0.1:5555` ZMQ, loopback only |
 | Credentials | never in repository or cache config; `live/api_key` (gitignored, chmod 600) holds the vLLM API key exactly like the production recipe does |
 | Diagnostics logging | scripts and admin CLI log keys, sizes and counts only — never prompt text, headers or tokens |

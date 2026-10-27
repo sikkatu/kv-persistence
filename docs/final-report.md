@@ -9,7 +9,7 @@ commit `847f3a7e21c9a39f0d2435c5a81a3148676a2261`, pushed and verified against t
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(29 unit tests), architecture proven against the pinned vLLM build's source
+(52 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on the 4× RTX PRO 6000
@@ -99,14 +99,14 @@ the hardware run, before any capacity promises are made.
 
 ## Cache budget and observed capacity
 
-Configured: 1500 GB default (hard), bound = free space on the pinned NVMe (preflight-verified). Observed usage:
+Configured: 1500 GB default (hard), bound = free space on the shared VM disk (same volume holds Docker, the model and the OS) (preflight-verified). Observed usage:
 pending hardware run. Bytes-per-token estimate will be filled from real
 measurements (per the brief: do not promise a fixed number of conversations
 before measuring).
 
 ## Eviction and deduplication test results
 
-* Eviction policy semantics: **VERIFIED offline** (29 unit tests, incl. stale
+* Eviction policy semantics: **VERIFIED offline** (52 unit tests, incl. stale
   before recent, rare before frequent, huge useless first, long reused prefix
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.
