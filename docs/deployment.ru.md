@@ -8,14 +8,14 @@
 
 ## 0. Предусловия (хост)
 
-* Debian-хост с 4× RTX PRO 6000, Docker, `nvidia-smi`, закреплённый образ vLLM
+* Linux-хост (любой дистрибутив) с NVIDIA GPU, Docker, `nvidia-smi`, закреплённый образ vLLM
   (`IMAGE` с `@sha256:` дайджестом) и каталог модели `MODEL_DIR`.
 * Локальный NVMe со свободным местом не меньше `KVP_CACHE_BUDGET_GB` (по умолчанию
   1.5 ТБ) на конечном диске общего хранилища ВМ.
 * Production-рецепт на диске; скрипты используют из него только `tp4.env.example`
   (дайджест `IMAGE`) и `patches/` + `MANIFEST.sha256` (монтируются только чтение).
 * Python 3.12 (для `kvpersist` админа + скриптов и CLI `lmcache`).
-  На Debian 12 системный Python — 3.11: установите интерпретатор 3.12 отдельно
+  На Debian/Ubuntu (tested on Debian 12) системный Python — 3.11: установите интерпретатор 3.12 отдельно
   (например из bookworm-backports или через pyenv), `python3-venv` ставится
   отдельно; используйте `python3.12 -m venv` на шаге 3.
 
@@ -48,7 +48,7 @@ $EDITOR configs/generic/cache.env.local        # KVP_CACHE_ROOT должен б�
 руками:
 
 ```bash
-bash "$REPO/scripts/setup-identity.sh" "$HOME/models/MiMo-V2.6-Pro-MOPD"
+bash "$REPO/scripts/setup-identity.sh" "$HOME/models/<your-model-dir>"
 ```
 
 Одна команда покрывает ВСЕ обязательные поля (`KVP_MODEL_REVISION`,
@@ -62,7 +62,7 @@ REV-идентичности (используйте РОВНО ОДИН в ка
    локально загруженными файлами.
 
 ```bash
-curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
+curl -fsSL https://huggingface.co/api/models/<your-org>/<your-model> \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
 ```
 
@@ -109,7 +109,7 @@ bash scripts/start-cache.sh
 
 ```bash
 export IMAGE='…@sha256:<digest>'
-export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
+export MODEL_DIR="$HOME/models/<your-model-dir>"
 bash scripts/run-vllm-with-persist.sh
 ```
 

@@ -23,7 +23,7 @@ docker logs --tail 100 mimo-pro-tp4-kvp     # движок (лаунчер kv-pe
    побайтовый. Пересоздайте запуском `scripts/setup-identity.sh <каталог модели>`.
 2. **SHA коммита HF** — только если вы осознанно отслеживаете происхождение:
    ```bash
-   curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
+   curl -fsSL https://huggingface.co/api/models/<your-org>/<your-model> \
      | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
    ```
    Внимание: это HEAD удалённой ветки — НЕ обязательно ревизия ваших локально

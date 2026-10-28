@@ -8,7 +8,7 @@
 聊天客户端（OpenAI 兼容，长消息历史）
    │  /v1/chat/completions
    ▼
-vLLM（TP4，MiMo-V2.6-Pro；生产配方不被修改）
+vLLM（TP4 或其他并行度，任意模型；生产配方不被修改）
    │  --kv-transfer-config：LMCacheMPConnector
    │  （kv_connector_module_path 固定使用 LMCache 提供的连接器）
    ▼

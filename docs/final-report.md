@@ -12,7 +12,7 @@ GitHub remote API).
 (52 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
-`scripts/benchmark.sh`) but **have not been executed on the 4× RTX PRO 6000
+`scripts/benchmark.sh`) but **have not been executed on a target GPU host
 host**, because network/SSH access to the target machine was
 not reachable during this work session. Nothing untested is claimed as working.
 
@@ -58,7 +58,7 @@ index rebuild on startup (documented upstream behavior of this adapter).
 bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"  # fills AND verifies identity
 bash scripts/preflight.sh
 bash scripts/start-cache.sh
-export IMAGE='…@sha256:<digest>'; export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
+export IMAGE='…@sha256:<digest>'; export MODEL_DIR="$HOME/models/<your-model-dir>"
 bash scripts/run-vllm-with-persist.sh
 bash scripts/verify-engine-identity.sh          # gate: engine geometry == identity pins
 

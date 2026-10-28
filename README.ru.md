@@ -26,10 +26,10 @@ KV-блоки промптов восстанавливаются с NVMe, а н
 [Устранение неполадок](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.ru) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ.ru)
 
-Основная цель: MiMo-V2.6-Pro на 4 × NVIDIA RTX PRO 6000 (рецепт
-`sikkatu/recipes` `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit`). Слой кэша
-модельно-агностичен; специфичные для модели настройки лежат только в
-`configs/<model>/`.
+Работает с **любой моделью на vLLM на любом GPU-хосте** (тестовый референс:
+MiMo-V2.6-Pro на 4× NVIDIA RTX PRO 6000 через рецепт `sikkatu/recipes`).
+Слой кэша модельно-агностичен; специфичные для модели настройки лежат
+в `configs/<model>/` — скопируйте эту папку для новой модели и заполните пины.
 
 ## Что делает
 
@@ -68,7 +68,7 @@ KV-блоки промптов восстанавливаются с NVMe, а н
 ```bash
 git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
-bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"   # заполнение И проверка пинов идентичности
+bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # заполнение И проверка пинов идентичности
 bash scripts/preflight.sh               # проверка хоста, хранилища и идентичности
 bash scripts/start-cache.sh             # сервис постоянного кэша (NVMe)
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (нужны IMAGE, MODEL_DIR)
@@ -110,6 +110,36 @@ bash scripts/test-recovery.sh           # приёмка: рестарт → д�
 * Все задокументированные команды работают как есть после экспорта
   переменных-предусловий (`IMAGE`, `MODEL_DIR`, `API_KEY`) — «Быстрый старт»
   даёт линейный порядок.
+
+## Как подключить свою модель
+
+Слой кэша модельно-агностичен — добавление модели НЕ требует правок кода:
+
+1. Скопируйте референсный пример и переименуйте в id вашей модели:
+   ```bash
+   cp -r "$REPO/configs/mimo-v2.6-pro" "$REPO/configs/<ваша-модель>"
+   ```
+2. Отредактируйте `configs/<ваша-модель>/identity.env`:
+   * `KVP_MODEL_ID` = HF-id вашей модели (или любое уникальное имя).
+   * `KVP_TP_SIZE`, `KVP_BLOCK_SIZE`, `KVP_NUM_KV_HEADS`, `KVP_HEAD_DIM`,
+     `KVP_MAX_MODEL_LEN`, `KVP_KV_CACHE_DTYPE` = KV-геометрия, которую
+     vLLM отчитывает для ВАШЕЙ модели (см. `docs/architecture.md`,
+     «identity fields»).
+   * `KVP_CONNECTOR_VERSION` = дескриптивный тег вашей связки vLLM+LMCache.
+3. Запустите `bash scripts/setup-identity.sh "$HOME/models/<ваша-модель>"` —
+   ревизии/digest заполнятся автоматически.
+4. Направьте `scripts/preflight.sh`, `start-cache.sh` и vLLM-лаунчер на
+   `configs/<ваша-модель>/` (скрипты читают путь из `CONFIG_FILE`/env; см.
+   `docs/deployment.md`).
+
+Каждая модель получает собственное пространство имён кэша — KV-данные разных
+моделей никогда не смешиваются, а изменение любого поля идентичности безопасно
+переводит в промах кэша.
+
+**Примечание:** поддержка моделей кроме MiMo не тестировалась до прогона на
+железе; рассматривайте `configs/mimo-v2.6-pro/` как единственный проверенный
+референс и ожидайте адаптации лаунчера (патчи/загрузчик модели) для
+архитектурно отличающихся моделей.
 
 ## Лицензия
 

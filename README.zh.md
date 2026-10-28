@@ -24,9 +24,10 @@
 [故障排查](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.zh) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ.zh)
 
-主要目标：4 × NVIDIA RTX PRO 6000 上的 MiMo-V2.6-Pro（配方
-`sikkatu/recipes` `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit`）。缓存层
-模型无关；模型专属配置仅位于 `configs/<model>/`。
+适用于 **任何 vLLM 服务模型与任何 NVIDIA GPU 主机**（测试参考配置：
+4× NVIDIA RTX PRO 6000 上的 MiMo-V2.6-Pro，经由 `sikkatu/recipes` 配方）。
+缓存层模型无关；模型专属配置位于 `configs/<model>/` —— 新模型请复制该
+目录并填写对应身份固定值。
 
 ## 作用
 
@@ -62,7 +63,7 @@
 ```bash
 git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
-bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"   # 填写并核验身份固定项
+bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # 填写并核验身份固定项
 bash scripts/preflight.sh               # 校验主机、存储与身份
 bash scripts/start-cache.sh             # 持久缓存服务（NVMe）
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV 连接器（需 IMAGE、MODEL_DIR）
@@ -101,6 +102,32 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 * 树中不含凭证、令牌、提示词文本或缓存数据。
 * 导出前置变量（`IMAGE`、`MODEL_DIR`、`API_KEY`）后，文档中所有命令均可直接
   执行 —— 「快速开始」给出线性流程。
+
+## 接入自定义模型
+
+缓存层模型无关 —— 添加模型**不需要**改代码：
+
+1. 复制参考示例并重命名为你的模型 id：
+   ```bash
+   cp -r "$REPO/configs/mimo-v2.6-pro" "$REPO/configs/<你的模型>"
+   ```
+2. 编辑 `configs/<你的模型>/identity.env`：
+   * `KVP_MODEL_ID` = 你的模型的 HF id（或任意唯一标签）。
+   * `KVP_TP_SIZE`、`KVP_BLOCK_SIZE`、`KVP_NUM_KV_HEADS`、`KVP_HEAD_DIM`、
+     `KVP_MAX_MODEL_LEN`、`KVP_KV_CACHE_DTYPE` = vLLM 对你的模型报出的 KV 几何
+     （见 `docs/architecture.md`「identity fields」）。
+   * `KVP_CONNECTOR_VERSION` = 你的 vLLM+LMCache 组合的描述性标记。
+3. 运行 `bash scripts/setup-identity.sh "$HOME/models/<你的模型>"` 自动填写并
+   核验版本/摘要字段。
+4. 将 `scripts/preflight.sh`、`start-cache.sh` 和 vLLM 启动器指向
+   `configs/<你的模型>/`（脚本从 `CONFIG_FILE`/env 读取路径；见 `docs/deployment.md`）。
+
+每个模型拥有独立的缓存命名空间 —— 不同模型的 KV 数据绝不混用，任何身份字段
+的变更都会安全地退回缓存未命中。
+
+**注意：** 除 MiMo 外的模型支持尚未在硬件上验证；请把
+`configs/mimo-v2.6-pro/` 视为唯一已验证的参考配置，对架构差异较大的模型预期
+需要适配启动器（补丁/模型加载器）。
 
 ## 许可证
 

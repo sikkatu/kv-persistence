@@ -119,14 +119,14 @@ Run: bash scripts/setup-identity.sh \"$KVP_MODEL_DIR\"   (fills and verifies all
 fi
 
 echo "-- runtime prerequisites (review 4: before the cache can be trusted) --"
-# Python 3.12 is the documented interpreter (Debian 12 ships 3.11 -- see
+# Python 3.12 is the documented interpreter (Debian/Ubuntu (tested on Debian 12) ships 3.11 -- see
 # docs/deployment.md); require it by version, not just "python3 exists".
 if command -v python3.12 >/dev/null 2>&1; then
   note "python3.12 $(python3.12 --version 2>&1 | cut -d' ' -f2)"
 elif command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3,12) else 1)'; then
   note "python3 $(python3 --version 2>&1 | cut -d' ' -f2) (>= 3.12)"
 else
-  warn "Python 3.12 not found -- Debian 12 system python3 is 3.11; install 3.12 first (docs/deployment.md step 0)"
+  warn "Python 3.12 not found -- Debian/Ubuntu (tested on Debian 12) system python3 is 3.11; install 3.12 first (docs/deployment.md step 0)"
 fi
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import venv' 2>/dev/null; then
   note "python3 venv module available"

@@ -21,7 +21,7 @@ docker logs --tail 100 mimo-pro-tp4-kvp     # 引擎（kv-persistence 启动器�
 追踪的 `identity.env` 不变。分支名永远不接受。
 
 `[!!] KVP_CHAT_TEMPLATE_DIGEST must be 64 hex` —— 带
-`KVP_MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"` 运行预检；摘要按
+`KVP_MODEL_DIR="$HOME/models/<your-model-dir>"` 运行预检；摘要按
 统计算法计算并与配置对照（无需手动复制）。
 
 ## lmcache CLI 缺失或 ABI 不兼容

@@ -28,9 +28,10 @@ as verified yet.
 [Troubleshooting](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ)
 
-Primary target: MiMo-V2.6-Pro on 4 × NVIDIA RTX PRO 6000 (the
-`sikkatu/recipes` `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit` recipe). The cache
-layer is model-agnostic; model-specific settings live under `configs/<model>/` only.
+Works with **any vLLM-served model on any NVIDIA GPU host** (tested reference:
+MiMo-V2.6-Pro on 4× NVIDIA RTX PRO 6000 via the `sikkatu/recipes` recipe).
+The cache layer is model-agnostic; model-specific settings live under
+`configs/<model>/` — copy that directory for a new model and fill in its pins.
 
 ## What it does
 
@@ -67,7 +68,7 @@ Chat client → vLLM (TP4) → KV connector (LMCacheMPConnector)
 ```bash
 git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
-bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"   # fill AND verify identity pins
+bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
 bash scripts/start-cache.sh             # persistent cache service (NVMe)
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (needs IMAGE, MODEL_DIR)
@@ -87,7 +88,7 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 |---|---|
 | `docs/` | English technical documentation (wiki: all three languages) |
 | `configs/generic/` | cache + lmcache-server settings, EN/RU/ZH comment translations |
-| `configs/mimo-v2.6-pro/` | MiMo identity pins and L2 adapter template, EN/RU/ZH |
+| `configs/<model>/` | per-model identity pins and L2 adapter template (example: `mimo-v2.6-pro`), EN/RU/ZH |
 | `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
 | `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
 | `tests/` | unit (52, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
@@ -109,6 +110,34 @@ the operator. Unverified features are labelled `NEEDS TESTING` / `BLOCKED` in
 * No credentials, tokens, prompt text or cache data in the tree.
 * All documented commands work as-is once precondition variables (`IMAGE`,
   `MODEL_DIR`, `API_KEY`) are exported — the Quick Start sequences it linearly.
+
+## Add your own model
+
+The cache layer is model-agnostic — adding a model does NOT require code changes:
+
+1. Copy the reference example and rename it to your model id:
+   ```bash
+   cp -r "$REPO/configs/mimo-v2.6-pro" "$REPO/configs/<your-model>"
+   ```
+2. Edit `configs/<your-model>/identity.env`:
+   * `KVP_MODEL_ID` = your model's HF id (or any unique label).
+   * `KVP_TP_SIZE`, `KVP_BLOCK_SIZE`, `KVP_NUM_KV_HEADS`, `KVP_HEAD_DIM`,
+     `KVP_MAX_MODEL_LEN`, `KVP_KV_CACHE_DTYPE` = the KV geometry vLLM reports
+     for YOUR model (see `docs/architecture.md`, "identity fields").
+   * `KVP_CONNECTOR_VERSION` = a descriptive tag for your vLLM+LMCache combo.
+3. Run `bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"` to fill
+   and verify the revision/digest fields automatically.
+4. Point `scripts/preflight.sh`, `start-cache.sh` and the vLLM launcher at
+   `configs/<your-model>/` (the scripts read the path from `CONFIG_FILE`/env;
+   see `docs/deployment.md`).
+
+Each model gets its own cache namespace — KV data of different models is never
+mixed, and a change to any identity field safely falls back to a cache miss.
+
+**Note:** support for non-MiMo models is untested until exercised on hardware;
+treat the `configs/mimo-v2.6-pro/` directory as the single VERIFIED reference
+configuration and expect to adapt the launcher (patches / model loader) for
+architecturally different models.
 
 ## License
 

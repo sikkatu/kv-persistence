@@ -8,7 +8,7 @@
 Чат-клиент (OpenAI-совместимый, длинная история сообщений)
    │  /v1/chat/completions
    ▼
-vLLM  (TP4, MiMo-V2.6-Pro; production-рецепт не изменяется)
+vLLM  (TP4 или другая параллельность, любая модель; production-рецепт не изменяется)
    │  --kv-transfer-config: LMCacheMPConnector
    │  (kv_connector_module_path фиксирует коннектор из LMCache)
    ▼

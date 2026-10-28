@@ -17,7 +17,7 @@ most valuable prefixes.
 a chat app (OpenAI-compatible client)
    │  OpenAI-compatible /v1/chat/completions (long message history)
    ▼
-vLLM  (TP4, MiMo-V2.6-Pro, production recipe unchanged)
+vLLM  (TP4 or any parallelism, any served model; production recipe unchanged)
    │  KV connector: LMCacheMPConnector  (--kv-transfer-config)
    ▼
 LMCache server  (standalone process, MP mode; ZMQ request port 5555)

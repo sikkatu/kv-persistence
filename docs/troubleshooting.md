@@ -22,7 +22,7 @@ of two clearly distinct formats (choose one per deployment):
    Regenerate it by rerunning `scripts/setup-identity.sh <model-dir>`.
 2. **Upstream HF commit SHA**, only if you deliberately track remote provenance:
    ```bash
-   curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
+   curl -fsSL https://huggingface.co/api/models/<your-org>/<your-model> \
      | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
    ```
    Warning: this is the HEAD of the remote branch — NOT necessarily the revision
@@ -34,7 +34,7 @@ gitignored); the tracked `identity.env` stays unmodified for a clean `git pull`.
 A branch name is never accepted (40-hex only).
 
 `[!!] KVP_CHAT_TEMPLATE_DIGEST must be 64 hex` — run preflight with
-`KVP_MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD bash scripts/preflight.sh`; it
+`KVP_MODEL_DIR="$HOME/models/<your-model-dir>" bash scripts/preflight.sh`; it
 prints the digest to copy into `identity.env`.
 
 ## lmcache CLI missing / ABI mismatch

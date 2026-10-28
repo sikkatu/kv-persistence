@@ -3,18 +3,18 @@
 # Deployment
 
 Linear path — no steps to add by hand. Commands are meant to be copied verbatim
-onto the 4-GPU host (Debian). The host runs the production recipe from
+onto a GPU host. The host runs the production recipe from
 `sikkatu/recipes`; this project does not modify it.
 
 ## 0. Preconditions (host)
 
-* Debian host with 4× RTX PRO 6000, Docker, `nvidia-smi`, the pinned vLLM image
+* Linux host (any distribution) with NVIDIA GPUs, Docker, `nvidia-smi`, the pinned vLLM image
   (`IMAGE` with `@sha256:` digest) and the model directory `MODEL_DIR`.
 * Local NVMe with at least `KVP_CACHE_BUDGET_GB` (default 1.5 TB) free on the
   pinned device — preflight checks this against `KVP_CACHE_DEVICE`.
 * Production recipe cloned read-only (e.g. `~/recipes`).
 * Python 3.12 on the host (for `kvpersist` admin + scripts and the `lmcache`
-  CLI). On Debian 12 the system Python is 3.11: install a 3.12 interpreter and
+  CLI). On Debian/Ubuntu (tested on Debian 12) the system Python is 3.11: install a 3.12 interpreter and
   `python3-venv` separately (e.g. from bookworm-backports or pyenv) and use
   `python3.12 -m venv` in step 3. The venv must be created by the SAME 3.12
   interpreter that will run `lmcache`.
@@ -49,7 +49,7 @@ $EDITOR configs/generic/cache.env.local        # KVP_CACHE_ROOT must be on NVMe
 by hand:
 
 ```bash
-bash "$REPO/scripts/setup-identity.sh" "$HOME/models/MiMo-V2.6-Pro-MOPD"
+bash "$REPO/scripts/setup-identity.sh" "$HOME/models/<your-model-dir>"
 ```
 
 One command covers ALL mandatory fields (`KVP_MODEL_REVISION`,
@@ -65,7 +65,7 @@ To obtain the HF commit SHA for `KVP_MODEL_REVISION` override (downloads
 NOTHING):
 
 ```bash
-curl -fsSL https://huggingface.co/api/models/XiaomiMiMo/MiMo-V2.6-Pro-MOPD \
+curl -fsSL https://huggingface.co/api/models/<your-org>/<your-model> \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
 ```
 
@@ -114,7 +114,7 @@ is no automatic wipe on start.
 
 ```bash
 export IMAGE='…@sha256:<64-hex-digest>'   # same digest as production
-export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
+export MODEL_DIR="$HOME/models/<your-model-dir>"
 bash scripts/run-vllm-with-persist.sh
 ```
 

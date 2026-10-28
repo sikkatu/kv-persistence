@@ -49,7 +49,7 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 | P1 | 本地指纹 vs HF SHA 未区分 | troubleshooting/deployment 明确两种格式与适用场景 |
 | Quick-Start 步骤 | 缺 API_KEY/recipe/MODEL_DIR 前置条件 | 步骤 7 列明三项必需前置 |
 | Quick-Start 步骤 | 手动复制 digest 要求 | 已移除；setup-identity 自动写入 |
-| Quick-Start 步骤 | Python 3.12/venv 在 Debian 12 | 明确安装命令与 `python3.12 -m venv` |
+| Quick-Start 步骤 | Python 3.12/venv 在 Debian/Ubuntu (tested on Debian 12) | 明确安装命令与 `python3.12 -m venv` |
 | README | 测试数 29→49、"not code"、"as-is" | 已更正 |
 
 ## 已知限制（同前）
