@@ -92,12 +92,12 @@ bash scripts/test-recovery.sh           # приёмка: рестарт → д�
 | `configs/mimo-v2.6-pro/` | пины идентичности MiMo и шаблон L2-адаптера, EN/RU/ZH |
 | `scripts/` | preflight, старт/стоп кэша, лаунчер, тест восстановления, бенчмарк, админ-CLI |
 | `implementation/` | пакет `kvpersist`: идентичность, бюджеты, ранжирование, админ-CLI |
-| `tests/` | unit (52, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
+| `tests/` | unit (59, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
 
 ## Статус
 
 Реализация завершена; офлайн-тесты зелёные. Приёмочные hardware-прогоны на хосте с
-4 GPU заскриптованы (`scripts/test-recovery.sh`, `scripts/benchmark.sh`) и выполняются
+GPU-хосте заскриптованы (`scripts/test-recovery.sh`, `scripts/benchmark.sh`) и выполняются
 эксплуатирующей стороной. Непроверенные возможности помечены `NEEDS TESTING` /
 `BLOCKED` в [docs/final-report.md](docs/final-report.md) — непроверенное не
 выдаётся за работающее.

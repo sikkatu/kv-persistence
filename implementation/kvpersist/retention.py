@@ -18,6 +18,14 @@ divided by storage cost. Entries with identical policy inputs keep a stable
 This module never deletes files itself: it only produces an ordered eviction
 plan. Applying the plan is the job of the admin CLI / L2 adapter delete calls,
 which keep shared blocks referenced by other entries intact.
+
+LIMITATION (review): `shared_refs` is a logical hint, NOT a verified
+cross-namespace physical-object refcount. When an entry has shared_refs > 1,
+`effective_freed_bytes` conservatively reports 0 bytes freed (the object may
+still be referenced by other keys we cannot see). Until LMCache exposes a
+reliable key->object refcount aligned with its storage engine, the planner's
+"freed" numbers are best-effort LOWER BOUNDS, not guarantees. Do not size
+operations assuming a specific reclaim amount from shared entries.
 """
 
 from __future__ import annotations
@@ -96,7 +104,12 @@ def select_victims(
         if freed >= bytes_to_free:
             break
         victims.append(e)
-        freed += e.bytes_on_disk
+        # Count EFFECTIVE bytes freed: a shared object (shared_refs > 1) only
+        # frees its bytes when the LAST reference goes away. Until a reliable
+        # cross-namespace refcount aligned with LMCache's actual key->object
+        # mapping exists, effective_freed_bytes assumes the worst case for
+        # shared entries (0 bytes freed) -- never overpromise reclaimed space.
+        freed += e.bytes_on_disk if e.shared_refs <= 1 else 0
     return victims
 
 
@@ -112,7 +125,13 @@ def eviction_report(
     return {
         "entries_before": len(before),
         "evicted_entries": len(victims),
-        "evicted_bytes": sum(v.bytes_on_disk for v in victims),
+        # Effective freed bytes (0 for shared entries) -- see module LIMITATION
+        # note on refcount limits. Nominal sum kept for transparency.
+        "evicted_bytes": sum(v.bytes_on_disk if v.shared_refs <= 1 else 0 for v in victims),
+        "evicted_bytes_nominal": sum(v.bytes_on_disk for v in victims),
+        "shared_victims_bytes_not_reclaimed": sum(
+            v.bytes_on_disk for v in victims if v.shared_refs > 1
+        ),
         "evicted_keys": [v.key for v in victims],   # keys only, no prompt text
         "kept_valuable_prefixes": kept_kept_long,
     }

@@ -2,7 +2,7 @@
 
 # 最终报告 — kv-persistence
 
-仓库：github.com/sikkatu/kv-persistence（`main` 分支，提交 `6f16e91` —— 已通过 GitHub remote API 验证）。
+仓库：github.com/sikkatu/kv-persistence（`main` 分支，提交 `664b792` —— 已通过 GitHub remote API 验证）。
 
 ## 总状态：PARTIAL
 

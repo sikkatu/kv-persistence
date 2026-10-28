@@ -44,9 +44,9 @@ sed -e "s|__KVP_CACHE_ROOT__|$ROOT_PATH|" \
     -e "s|__KVP_CACHE_BUDGET_GB__|$BUDGET_GB|" \
     -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${KVP_EVICT_TRIGGER_WATERMARK:-0.9}|" \
     -e "s|__KVP_EVICT_RATIO__|${KVP_EVICT_RATIO:-0.1}|" \
-    "$ROOT/configs/mimo-v2.6-pro/l2-adapter.json.in" \
+    "$ROOT/configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in" \
   | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)' \
-  > "$ADAPTER_JSON" || die "L2 adapter JSON is invalid after render — check configs/mimo-v2.6-pro/l2-adapter.json.in"
+  > "$ADAPTER_JSON" || die "L2 adapter JSON is invalid after render — check configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in"
 echo "L2 adapter rendered: $ADAPTER_JSON"
 echo "  tier   : nixl_store_dynamic / POSIX  persist=${KVP_PERSIST_ENABLED:-true}"
 echo "  path   : $ROOT_PATH"

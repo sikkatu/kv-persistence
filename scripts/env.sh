@@ -69,6 +69,9 @@ _kvp_load_env(){ # _kvp_load_env <repo root>
       *) die "_kvp_load_env: multiple model config dirs found (${candidates[*]}) -- set KVP_MODEL_CONFIG explicitly" ;;
     esac
   fi
+  # Export for callers (start-cache.sh uses $KVP_MODEL_CONFIG to locate the
+  # L2 adapter template in configs/<model>/l2-adapter.json.in).
+  KVP_MODEL_CONFIG="$model_cfg"
   # names exported BEFORE loading wins over every file (precedence rule 1)
   local pre=$'\n'"$(compgen -e | sort)"$'\n'
   # base layers first, then .local layers on top -- .local overrides .base for

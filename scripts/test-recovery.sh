@@ -55,10 +55,25 @@ inconc(){ echo "INCONCLUSIVE: $*"; V=9; echo "INCONC: $*" >> "$OUT/failures.txt"
 
 disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume holds Docker, the model and the OS) device -> independent
   # proof of disk-sourced reads (not RAM). Requires KVP_CACHE_DEVICE.
+  # Review P2 fix: use lsblk PKNAME (robust for /dev/nvme0n1p1, /dev/sda1, /dev/vda1
+  # and VM-style vda/sda names) instead of the old regex split that broke on
+  # nvme partition names (e.g. /dev/nvme0n1p1 -> "nvme0n" which has no /sys/block
+  # directory). Falls back to findmnt SOURCE if lsblk is unavailable.
   local dev="${KVP_CACHE_DEVICE:-}"; [ -n "$dev" ] || { echo -1; return; }
-  dev="${dev#/dev/}"; dev="${dev%%[0-9]*p[0-9]*}"; dev="${dev%%p[0-9]*}"
-  [ -r "/sys/block/$dev/stat" ] || { echo -1; return; }
-  awk '{print $3*512}' "/sys/block/$dev/stat" 2>/dev/null || echo -1
+  # Resolve the parent block device (handles partitioned names).
+  local parent=""
+  if command -v lsblk >/dev/null 2>&1; then
+    parent="$(lsblk -no PKNAME "$dev" 2>/dev/null | head -1 | tr -d '[:space:]')"
+    [ -z "$parent" ] && parent="${dev#/dev/}"   # whole-disk name, no PKNAME
+    # strip partition suffix if lsblk returned a partition name without PKNAME
+    parent="${parent#/dev/}"
+    [ -r "/sys/block/$parent/stat" ] || parent="${parent%%[0-9]*}"; [ -r "/sys/block/$parent/stat" ] || parent="$dev"
+    parent="${parent#/dev/}"
+  else
+    parent="${dev#/dev/}"; parent="${parent%%[0-9]*p[0-9]*}"; parent="${parent%%p[0-9]*}"
+  fi
+  [ -r "/sys/block/$parent/stat" ] || { echo -1; return; }
+  awk '{print $3*512}' "/sys/block/$parent/stat" 2>/dev/null || echo -1
 }
 ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
   local label="$1" mark="$2" t0 t1
@@ -88,6 +103,19 @@ PYEOF
   t1=$(date +%s.%N)
   python3 -c "import json;d=json.load(open('$OUT/$label.json'));u=d['usage'];p=u.get('prompt_tokens_details',{});print(json.dumps({'label':'$label','ttft_s':round(max(0,(d['ttft_abs'] or 0)-$t0),2),'total_s':round($t1-$t0,2),'prompt_tokens':u.get('prompt_tokens',0),'cached_tokens':p.get('cached_tokens',0)}))" | tee "$OUT/$label.summary.json"
 }
+
+cached_of(){ # 0 = report says no reuse. MISSING = field absent/null: that is NOT
+             # proof of no reuse -- it means the metric itself is unavailable
+             # (vLLM build/flag dependent), so callers must not treat it as a fact.
+  python3 -c "
+import json,sys
+d=json.load(open('$1'))
+u=d.get('usage') or {}
+det=u.get('prompt_tokens_details')
+if det is None:
+    print('MISSING'); raise SystemExit
+print(det.get('cached_tokens', 0) if det.get('cached_tokens') is not None else 'MISSING')
+" 2>/dev/null || echo MISSING; }
 
 # ================= SCENARIOS ============================================
 echo "== build a long stable prefix (~3000 tokens) =="
@@ -184,18 +212,6 @@ else
 fi
 
 # ---- exclude alternative explanations ----------------------------------
-cached_of(){ # 0 = report says no reuse. MISSING = field absent/null: that is NOT
-             # proof of no reuse -- it means the metric itself is unavailable
-             # (vLLM build/flag dependent), so callers must not treat it as a fact.
-  python3 -c "
-import json,sys
-d=json.load(open('$1'))
-u=d.get('usage') or {}
-det=u.get('prompt_tokens_details')
-if det is None:
-    print('MISSING'); raise SystemExit
-print(det.get('cached_tokens', 0) if det.get('cached_tokens') is not None else 'MISSING')
-" 2>/dev/null || echo MISSING; }
 A2=$(cached_of "$OUT/afterA.json"); B2=$(cached_of "$OUT/afterB.json")
 if [ "${A2:-0}" -gt 0 ] && [ "${B2:-0}" -gt 0 ] && [ "${A_RETR:-0}" -eq 0 ] && [ "${B_RETR:-0}" -eq 0 ]; then
   fail "cached_tokens>0 but zero L2-read log events: reuse may come from RAM/prefix cache only -- NOT proof of NVMe recovery"

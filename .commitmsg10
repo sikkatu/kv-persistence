@@ -1,0 +1,39 @@
+fix: review round 10 -- declare-before-call bug, retention effective-freed accounting, launcher identity gate, lsblk PKNAME, cross-component config consistency
+
+Critical bug fixes (review round 10):
+1. test-recovery.sh: cached_of() was declared AFTER its first call (line 132 vs
+   187) -- under `set -e` this aborts with code 127 before any verdict. Moved
+   the definition above first use; added tests/test_script_order.py as a
+   static guard that catches declare-after-call patterns in every bash script
+   (verified the guard actually fires on a synthetic buggy script).
+2. retention.py: select_victims() and eviction_report() counted naive
+   bytes_on_disk as freed, contradicting effective_freed_bytes semantics
+   (shared entries free 0 bytes until their last reference goes). Now both use
+   effective freed bytes (0 for shared_refs > 1), with the nominal sum kept
+   separately in the report for transparency. Module docstring now states the
+   LIMITATION honestly: shared_refs is a logical hint, not a verified
+   cross-namespace physical-object refcount aligned with LMCache -- "freed"
+   numbers are lower bounds, not guarantees.
+3. run-vllm-with-persist.sh: verify-engine-identity.sh gate is now a
+   mandatory step BEFORE --kv-transfer-config is attached to vLLM (previously
+   only called in test-recovery.sh). MISMATCH (exit 4) or INCONCLUSIVE (exit 5)
+   refuse to launch with persistent cache; KVP_PERSIST_ENABLED=0 is the
+   documented bypass. This is the "mandatory barrier" the review asked for.
+4. test-recovery.sh disk_read_bytes(): replaced the regex-split device
+   normalization (broken on /dev/nvme0n1p1 -> "nvme0n") with lsblk PKNAME
+   resolution, falling back to findmnt -- robust for VM-style vda/sda names.
+5. start-cache.sh: L2 adapter template path now uses the exported
+   KVP_MODEL_CONFIG (was hardcoded to mimo-v2.6-pro), matching the universal
+   model-config selector added earlier.
+6. docs/final-report.md (and RU/ZH): stale commit hash replaced with a
+   `git rev-parse HEAD` self-reference (no more fixed-hash drift); test counts
+   synced to 59 (the real pytest-collected count).
+7. README (all locales): removed lingering "4-GPU host" phrasing -- now says
+   "a target GPU host" per the universal-configuration directive.
+
+New tests (all green, 59 collected):
+- tests/test_script_order.py: shell functions must be declared before use.
+- tests/test_config_consistency.py: scripts/env.sh (shell seeder),
+  implementation/kvpersist/config.py (Python loader) and the launcher/verify
+  path must agree on .local overlay, env-wins precedence and multi-model
+  ambiguity refusal -- drives all three on a synthetic layout.

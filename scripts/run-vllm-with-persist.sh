@@ -4,6 +4,11 @@
 # Recipe patch files are mounted READ-ONLY; all state lives under KVP_CACHE_ROOT.
 # docker args mirror run-tp4-uva.sh one-to-one + --kv-transfer-config to the
 # running lmcache server. ROLLBACK: run the recipe launcher; NVMe data is kept.
+#
+# MANDATORY identity gate (review): verify-engine-identity.sh must pass BEFORE
+# persistent cache is attached to vLLM. If it returns exit 4 (MISMATCH) or 5
+# (INCONCLUSIVE), cache reuse is refused -- this launcher stops instead of
+# silently starting with unverified identity.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +39,22 @@ HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"; SITE="${SITE:-}"
 PIDF="$KVP_CACHE_ROOT/lmcache-server.pid"
 [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null \
   || die "lmcache server not running -- start it first: bash scripts/start-cache.sh"
+# Identity gate: engine vs config must match before cache is trusted.
+echo "-- identity gate: verifying engine config matches identity pins --"
+rc=0
+bash "$HERE/verify-engine-identity.sh" "$CONTAINER" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -eq 5 ]; then
+    die "INCONCLUSIVE: engine identity could not be verified (see output above).
+Cache reuse is REFUSED by policy -- fix value sources and rerun, or set
+KVP_PERSIST_ENABLED=0 to launch without persistent cache."
+  fi
+  die "ENGINE IDENTITY MISMATCH (exit $rc): cache must NOT be reused. Fix
+configs/${KVP_MODEL_CONFIG}/identity.env(.local) and rerun, or launch without
+persistent cache (KVP_PERSIST_ENABLED=0)."
+fi
+echo "identity verified -- proceeding to attach persistent cache"
+
 KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$LMCACHE_HOST\",\"lmcache.mp.port\":\"$LMCACHE_PORT\"}}"
 MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface" -v "$MODEL_DIR:/model:ro")
 if [ -d "$RECIPE/patches" ]; then

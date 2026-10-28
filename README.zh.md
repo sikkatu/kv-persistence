@@ -90,7 +90,7 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 
 ## 状态
 
-实现已完成；离线测试全部通过。4 GPU 主机上的验收测试已封装为脚本
+实现已完成；离线测试全部通过。GPU 主机上的验收测试已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），由运维方执行。
 未验证功能在 [docs/final-report.md](docs/final-report.md) 中标记为
 `NEEDS TESTING` / `BLOCKED` —— 未测试者绝不说成可用。

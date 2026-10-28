@@ -12,7 +12,7 @@ chat-app conversations (100k-1M tokens) reopening in seconds instead of tens of
 minutes — is a *target to be proven*; the benchmark suite
 (`scripts/benchmark.sh`) measures TTFT/prefill at 32K/128K/256K and against
 `max_model_len` acceptance criteria listed in [docs/benchmarks.md](docs/benchmarks.md)
-once the hardware run on the target 4-GPU host completes (see [Status](#status)).
+once the hardware acceptance run completes on a target GPU host (see [Status](#status)).
 Until that run lands, claims of "seconds" are UNKNOWN — no numbers are published
 as verified yet.
 
@@ -91,11 +91,11 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 | `configs/<model>/` | per-model identity pins and L2 adapter template (example: `mimo-v2.6-pro`), EN/RU/ZH |
 | `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
 | `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
-| `tests/` | unit (52, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
+| `tests/` | unit (59, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
 
 ## Status
 
-Implementation complete; offline tests green. Hardware acceptance runs on the 4-GPU
+Implementation complete; offline tests green. Hardware acceptance runs on a GPU
 host are scripted (`scripts/test-recovery.sh`, `scripts/benchmark.sh`) and executed by
 the operator. Unverified features are labelled `NEEDS TESTING` / `BLOCKED` in
 [docs/final-report.md](docs/final-report.md) — nothing untested is claimed as working.
