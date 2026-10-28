@@ -54,8 +54,20 @@ configs/${KVP_MODEL_CONFIG}/identity.env(.local) and rerun, or launch without
 persistent cache (KVP_PERSIST_ENABLED=0)."
 fi
 echo "identity verified -- proceeding to attach persistent cache"
-
-KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$LMCACHE_HOST\",\"lmcache.mp.port\":\"$LMCACHE_PORT\"}}"
+# Review P1-1 fix: KVP_PERSIST_ENABLED=0 is a REAL bypass -- the connector flag
+# is genuinely omitted (not just documented as if it were). When disabled, the
+# identity gate above may still fail and stop the launcher: that is intended,
+# because even without the connector a mismatch means the pins are stale and
+# silently starting with wrong config is worse than a clear stop.
+KV_TRANSFER_CONFIG=""
+KV_TRANSFER_ARGS=()
+if [ "${KVP_PERSIST_ENABLED:-true}" = "true" ]; then
+  KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$LMCACHE_HOST\",\"lmcache.mp.port\":\"$LMCACHE_PORT\"}}"
+  KV_TRANSFER_ARGS=(--kv-transfer-config "$KV_TRANSFER_CONFIG")
+  echo "persistent cache: attached (KV_TRANSFER_CONFIG=$KV_TRANSFER_CONFIG)"
+else
+  echo "KVP_PERSIST_ENABLED=0 -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
+fi
 MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface" -v "$MODEL_DIR:/model:ro")
 if [ -d "$RECIPE/patches" ]; then
   ( cd "$RECIPE/patches" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1 ) \
@@ -98,7 +110,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --kv-cache-dtype "$KV_CACHE_DTYPE" \
   --enable-prefix-caching \
   --gpu-memory-utilization "$GPU_UTIL" \
-  --kv-transfer-config "$KV_TRANSFER_CONFIG" \
+  ${KV_TRANSFER_ARGS[@]+"${KV_TRANSFER_ARGS[@]}"} \
   --generation-config vllm \
   --reasoning-parser mimo \
   --tool-call-parser mimo \

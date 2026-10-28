@@ -7,6 +7,17 @@ yields a cache MISS (IdentityError -> caller falls back to recompute).
 
 The namespace is a SHA-256 over canonical JSON of the identity fields, so it is
 stable across restarts, hosts and Python versions.
+
+LIMITATION (review P1-3): this namespace is a LOCAL policy-layer concept --
+KV-persistence computes it from identity fields, but the actual L2 keys LMCache
+uses internally for store/retrieve are LMCache's own (derived from its
+connector's KV-chunk identity, NOT directly from this namespace). Until an
+end-to-end test drives real LMCache store/retrieve calls and proves that
+changing EACH identity field causes a cache MISS at the LMCache API level (not
+just at the namespace computation level), this namespace should be treated as
+a best-effort layer for local policy/labels, NOT as a proven guarantee of
+cross-config isolation at the LMCache storage-key level. See
+docs/final-report.md known-limitations for the required hardware test.
 """
 
 from __future__ import annotations

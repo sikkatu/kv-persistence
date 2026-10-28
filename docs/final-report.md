@@ -106,7 +106,7 @@ before measuring).
 
 ## Eviction and deduplication test results
 
-* Eviction policy semantics: **VERIFIED offline** (56 unit tests, incl. stale
+* Eviction policy semantics: **VERIFIED offline** (59 unit tests, incl. stale
   before recent, rare before frequent, huge useless first, long reused prefix
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.

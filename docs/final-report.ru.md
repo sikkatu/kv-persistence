@@ -3,7 +3,7 @@
 # Итоговый отчёт — kv-persistence
 
 Репозиторий: github.com/sikkatu/kv-persistence (ветка `main`,
-коммит `664b792` — верифицирован через GitHub remote API).
+коммит `HEAD` (см. `git rev-parse HEAD`) — верифицирован через GitHub remote API).
 
 ## Общий статус: PARTIAL
 

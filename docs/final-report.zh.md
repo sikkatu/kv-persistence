@@ -2,13 +2,13 @@
 
 # 最终报告 — kv-persistence
 
-仓库：github.com/sikkatu/kv-persistence（`main` 分支，提交 `664b792` —— 已通过 GitHub remote API 验证）。
+仓库：github.com/sikkatu/kv-persistence（`main` 分支，提交 `HEAD`（见 `git rev-parse HEAD`） —— 已通过 GitHub remote API 验证）。
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（52 个单元测试，含 3 个 P0 权重哈希回归、配置一致性、预算和保留策略）。
+实现已完成，离线测试全绿（59 个单元测试，含 3 个 P0 权重哈希回归、配置一致性、预算和保留策略）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
-（`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 4× RTX PRO 6000 目标主机
+（`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
 上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
 
 ## 架构与后端选择

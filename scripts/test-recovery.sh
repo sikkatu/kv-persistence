@@ -177,7 +177,15 @@ if [ "$A_DISK0" = "-1" ] || [ "$A_DISK1" = "-1" ]; then
 else
   A_DISK_DELTA=$((A_DISK1 - A_DISK0))
   echo "  physical NVMe bytes read during A: $A_DISK_DELTA"
-  [ "$A_DISK_DELTA" -gt 0 ] || fail "A: zero physical NVMe bytes read during scenario -- L2 cannot be credited as the source"
+  # Shared-VM-disk caveat (review P2-4): the block-device counter includes
+  # unrelated I/O (OS/Docker/model loads). A positive delta WITHOUT matching
+  # L2-read log events in the same window is NOT proof of cache reads -- that
+  # combination is INCONCLUSIVE, not PASS and not a hard FAIL.
+  if [ "$A_DISK_DELTA" -le 0 ]; then
+    fail "A: zero physical NVMe bytes read during scenario -- L2 cannot be credited as the source"
+  elif [ "${A_RETR:-0}" -eq 0 ]; then
+    inconc "A: physical bytes read from a SHARED disk without matching L2-read events -- cannot attribute these bytes to LMCache (unrelated I/O possible). Set an isolated test device or corroborate with per-process I/O to make this PASS."
+  fi
 fi
 
 echo "== SCENARIO B: restart BOTH services, NVMe kept =="
@@ -208,7 +216,14 @@ if [ "$B_DISK0" = "-1" ] || [ "$B_DISK1" = "-1" ]; then
 else
   B_DISK_DELTA=$((B_DISK1 - B_DISK0))
   echo "  physical NVMe bytes read during B: $B_DISK_DELTA"
-  [ "$B_DISK_DELTA" -gt 0 ] || fail "B: zero physical NVMe bytes read during scenario -- L2 cannot be credited as the source"
+  # Shared-VM-disk caveat (review P2-4), same as scenario A: positive delta
+  # alone is not proof on a shared disk -- require matching L2-read events in
+  # the same window, otherwise INCONCLUSIVE (unrelated I/O cannot be ruled out).
+  if [ "$B_DISK_DELTA" -le 0 ]; then
+    fail "B: zero physical NVMe bytes read during scenario -- L2 cannot be credited as the source"
+  elif [ "${B_RETR:-0}" -eq 0 ]; then
+    inconc "B: physical bytes read from a SHARED disk without matching L2-read events -- cannot attribute these bytes to LMCache (unrelated I/O possible). Set an isolated test device or corroborate with per-process I/O to make this PASS."
+  fi
 fi
 
 # ---- exclude alternative explanations ----------------------------------

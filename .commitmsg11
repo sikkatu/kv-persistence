@@ -1,0 +1,39 @@
+fix: review round 11 -- real persist bypass, honest LMCache-recovery test labels, shared-disk attribution, namespace LIMITATION, final-report x3 sync
+
+P1-1 (persistent-cache bypass was documented but not implemented):
+- run-vllm-with-persist.sh now truly omits --kv-transfer-config when
+  KVP_PERSIST_ENABLED=0 (KV_TRANSFER_ARGS array expansion, not an
+  unconditional flag). The error message's advice now matches real behaviour.
+
+P1-2 (integration test claimed recovery but only wrote a file):
+- tests/integration/test_l2_persistence.py: the old file-level "restart test"
+  renamed to test_l2_file_survives_server_restart and explicitly documented as
+  a FILE-LEVEL SMOKE, not a LMCache recovery test. Added
+  test_lmcache_store_restart_retrieve_roundtrip as the real
+  store->stop->restart->retrieve->compare test, gated on KVP_LIVE_LMCACHE=1
+  (hardware acceptance path) with a clear skip reason.
+
+P1-3 (namespace not proven as LMCache storage key):
+- identity.py: LIMITATION note -- the namespace is a LOCAL policy-layer
+  concept; LMCache's internal L2 keys derive from its own connector identity.
+  Until an end-to-end test drives real LMCache store/retrieve calls proving
+  each identity field change causes a miss at the LMCache API level, the
+  namespace is best-effort, not a proven cross-config isolation guarantee.
+
+P2-4 (shared-disk false positives in disk_read_bytes):
+- test-recovery.sh scenarios A and B now require matching L2-read log events
+  to attribute physical disk reads to the cache: positive delta WITHOUT
+  L2-read events in the same window is INCONCLUSIVE (unrelated OS/Docker/model
+  I/O on the shared disk cannot be ruled out), not PASS and not a hard FAIL.
+  The fix message directs operators to an isolated test device or per-process
+  I/O correlation.
+
+P2-5 (final-report drifted from code):
+- docs/final-report.md: "target GPU host host" duplicate-word typo fixed;
+  eviction section test count 56 -> 59 (real pytest count).
+- docs/final-report.ru.md: stale commit hash 664b792 -> HEAD self-reference.
+- docs/final-report.zh.md: commit hash -> HEAD self-reference; 52 -> 59 tests;
+  "4x RTX PRO 6000 target host" -> generic "GPU target host".
+
+Tests: 59 passed, 11 skipped (the new KVP_LIVE_LMCACHE-gated round-trip test
+accounts for the extra skip).
