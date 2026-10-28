@@ -13,6 +13,11 @@ _kvp_load_env "$ROOT"
 # Docker mode ELIMINATES the Python-version / ABI mismatch problem entirely --
 # the lmcache server runs inside the same vLLM image (same Python, same PyTorch).
 KVP_LAUNCH_MODE="${KVP_LAUNCH_MODE:-host}"   # host | docker
+# Loopback-binding is a SECURITY contract (review 2A): never allow 0.0.0.0 / :: here.
+case "$LMCACHE_HOST" in
+  127.0.0.1|localhost|::1) : ;;
+  *) die "LMCACHE_HOST must be loopback-only (127.0.0.1/localhost/::1), got '$LMCACHE_HOST'" ;;
+esac
 CONTAINER_NAME="${KVP_CACHE_CONTAINER:-lmcache-kvp-server}"   # docker-mode container name
 case "$KVP_LAUNCH_MODE" in
   host)
@@ -66,22 +71,24 @@ PIDF="$ROOT_PATH/lmcache-server.pid"
 # to outlive the operator's shell.
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  # Review 2C: explicit loopback-bound port mapping instead of --network host,
+  # so even if lmcache misbinds inside the container the host exposure stays local.
   setsid nohup docker run --name "$CONTAINER_NAME" --rm \
-    --network host \
+    -p "127.0.0.1:$LMCACHE_PORT:$LMCACHE_PORT" \
+    ${LMCACHE_HTTP_PORT:+-p "127.0.0.1:$LMCACHE_HTTP_PORT:$LMCACHE_HTTP_PORT"} \
     -v "$ROOT_PATH:$ROOT_PATH" \
     "$DOCKER_IMAGE" lmcache server \
     --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
-  --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
-  --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
-  --eviction-policy "$LMCACHE_EVICTION_POLICY" \
-  --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
-  --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
-  --chunk-size "$LMCACHE_CHUNK_SIZE" \
-  --l2-adapter "$ADAPTER_JSON" \
-  ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
-  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
-  ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
-  >>"$LOG" 2>&1 &
+    --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
+    --eviction-policy "$LMCACHE_EVICTION_POLICY" \
+    --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
+    --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
+    --chunk-size "$LMCACHE_CHUNK_SIZE" \
+    --l2-adapter "$ADAPTER_JSON" \
+    ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
+    ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
+    ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
+    >>"$LOG" 2>&1 &
 else
   setsid nohup lmcache server \
     --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \

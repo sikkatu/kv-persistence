@@ -39,6 +39,15 @@ only if the hardware window allows meaningful execution.
 LMCache log counts (`Stored`/`Retrieved` lines), VRAM/host RAM peaks
 (`nvidia-smi`, `/proc/meminfo` during run), errors/fallbacks.
 
+**TTFT precision caveat (review 3B):** `benchmark.sh`'s inline Python reads the
+SSE stream via `urllib.request`, which buffers at the TCP level — the first
+token may sit in the socket buffer until the next packet/flush arrives. Expect
+a systematic +0–500 ms bias vs a raw-socket measurement. If absolute TTFT
+accuracy matters (regression tracking across versions), re-measure with an
+unbuffered reader (`aiohttp` + no buffering, or `socket.recv(1)` byte loop).
+For cache-hit vs cache-miss comparisons the bias cancels out — relative
+TTFT differences remain valid.
+
 ## How to run
 
 ```bash

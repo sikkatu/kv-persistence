@@ -35,12 +35,12 @@ KVP_L1_SIZE_GB=64
 KVP_CHUNK_SIZE=256
 
 # ---- Расположение хранилища (проверка устройства) ------------------------
-# Закрепите физическое устройство KVP_CACHE_ROOT (например, /dev/nvme1n1);
+# Закрепите физическое устройство KVP_CACHE_ROOT (например, /dev/<blockdev>  (e.g. /dev/<blockdev>, /dev/sda, /dev/vda));
 # preflight сопоставляет путь кэша с блочным устройством через findmnt/lsblk и
 # ПАДАЕТ, если они не совпадают. Не задано = preflight не может доказать, что
 # кэш лежит на нужном NVMe — при бюджете 1.5 ТБ не тот диск молча съест системный.
 # Сначала посмотрите нужное устройство: lsblk
-# KVP_CACHE_DEVICE=/dev/nvme1n1
+# KVP_CACHE_DEVICE=/dev/<blockdev>  (e.g. /dev/<blockdev>, /dev/sda, /dev/vda)
 # Сохранять файлы данных при выключении (persist/recover между рестартами).
 KVP_PERSIST_ENABLED=true
 # Полностью обойти постоянный кэш (ничего не сохраняется; для A/B).

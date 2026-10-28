@@ -38,8 +38,8 @@ esac
 echo "-- storage location (device-level check) --"
 # The budget is 1.5 TB: the cache MUST sit on the intended cache disk on the shared VM volume, not merely on
 # a filesystem with enough free space. KVP_CACHE_DEVICE pins the expected
-# block device (e.g. /dev/nvme1n1 or its partition). findmnt resolves the mount
-# of KVP_CACHE_ROOT; lsblk maps it to the parent disk.
+# block device (e.g. /dev/nvme0n1, /dev/sda, /dev/vda, or a partition of one).
+# findmnt resolves the mount of KVP_CACHE_ROOT; lsblk maps it to the parent disk.
 TARGET_DEV="${KVP_CACHE_DEVICE:-}"
 if command -v findmnt >/dev/null && command -v lsblk >/dev/null; then
   MOUNT_SRC="$(findmnt -nro SOURCE --target "$ROOT_PATH" 2>/dev/null || true)"
@@ -47,6 +47,10 @@ if command -v findmnt >/dev/null && command -v lsblk >/dev/null; then
   FS_TYPE="$(df -T "$ROOT_PATH" 2>/dev/null | awk 'NR==2{print $2}')"
   note "mount point of $ROOT_PATH: ${MOUNT_SRC:-unknown} (fs: ${FS_TYPE:-?}, disk: ${PARENT_DISK:-unknown})"
   case ",$FS_TYPE," in
+    *,tmpfs,*|*,ramfs,*)
+      die "EPHEMERAL FS DETECTED: $ROOT_PATH is on $FS_TYPE. tmpfs/ramfs contents are
+LOST on reboot -- the cache must survive a reboot to satisfy the persistence
+requirement. Move KVP_CACHE_ROOT to a real disk-backed filesystem." ;;
     *,nfs*,*|*,cifs,*|*,smb*,*|*,fuse*,*)
       # Review 2C: NETWORK FS BREAKS atomic-rename semantics and small-file
       # performance -- HARD STOP, not a warning.
@@ -67,7 +71,7 @@ Move KVP_CACHE_ROOT to local storage or recovery cannot be trusted." ;;
     note "KVP_CACHE_DEVICE is unset: cache-device proof unavailable here."
     echo "      The cache may already sit on the right NVMe -- we just cannot prove it."
     echo "      To enable the full verification (and PASS in test-recovery.sh), set"
-    echo "      KVP_CACHE_DEVICE=/dev/nvmeXnX in cache.env.local after checking with lsblk."
+    echo "      KVP_CACHE_DEVICE=/dev/<blockdev>  (any block device: nvme/sd/vd) in cache.env.local after checking with lsblk."
     echo "      On a ${BUDGET_GB} GB budget an unnoticed wrong disk would silently consume"
     echo "      the system drive, so this is strongly recommended before production use."
   fi

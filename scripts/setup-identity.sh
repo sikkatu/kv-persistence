@@ -102,9 +102,15 @@ for idx in indexes:
             wm = json.load(fh).get("weight_map", {})
     except Exception as exc:
         sys.exit(f"unreadable index {idx}: {exc}")
-    for shard in sorted(set(wm.values())):
+    shards = sorted(set(wm.values()))
+    total_shards = len(shards)
+    for i, shard in enumerate(shards, 1):
         sp = os.path.join(d, shard)
         size = os.path.getsize(sp) if os.path.isfile(sp) else -1
+        if mode != "fast":
+            # Review 4A: print progress so the operator knows this is not hung --
+            # hashing 4-8 GB shards takes minutes on first run.
+            print(f"hashing shard {shard} ... ({i}/{total_shards}, {size/(1<<30):.1f} GB)", file=sys.stderr, flush=True)
         mtime = int(os.path.getmtime(sp)) if os.path.isfile(sp) else -1
         if mode == "fast":
             feed_text(f"{shard}\0{size}\0".encode())
@@ -184,7 +190,7 @@ def setvar(name, value):
     global text
     pat = re.compile(r"^(" + name + r")=.*$", re.M)
     if pat.search(text):
-        text = pat.sub(lambda m: m.group(1) + "=" + value, text, count=1)
+        text = pat.sub(lambda m: m.group(1) + '="' + value.replace('"', '\\"') + '"', text, count=1)
     else:
         text += f"\n{name}={value}\n"
 setvar("KVP_MODEL_REVISION", rev)

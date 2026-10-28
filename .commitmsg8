@@ -1,0 +1,24 @@
+fix: review round 8 -- VM block-dev naming, duplicate docker args, loopback guard, tmpfs/ramfs stop
+
+Operator correction: virtual machines do not expose /dev/nvme* names (vda/sda/etc).
+All device references now use the generic form "block device (e.g. /dev/nvme0n1,
+/dev/sda, /dev/vda)" in preflight.sh and cache.env EN/RU/ZH.
+
+Review fixes:
+1C. start-cache.sh docker mode: duplicate --host/--port arguments removed
+    (real copy-paste bug that could crash or warn on argument parsing).
+    1A regex already correct (r"^\s*//"); 1B disk_read_bytes() nvme partition
+    regex remains a known sharp edge (documented, NEEDS TESTING on hw).
+2A. start-cache.sh: LMCACHE_HOST is validated as loopback-only before launch
+    (die on anything else) -- prevents accidental 0.0.0.0 exposure.
+2B. preflight.sh: tmpfs/ramfs now HARD FAIL (cache must survive reboot to
+    satisfy the persistence requirement).
+2C. start-cache.sh: docker mode uses explicit loopback-bound port mapping
+    (-p 127.0.0.1:PORT:PORT) instead of --network host.
+3B. docs/benchmarks.md: documented urllib TCP-buffer TTFT bias (+-500ms
+    systematic) and recommended unbuffered readers (aiohttp/socket.recv(1))
+    for absolute-accuracy regression tracking; relative comparisons remain valid.
+4A. setup-identity.sh: progress output (stderr, flush=True) while hashing
+    large shard files so the operator knows the script is not hung.
+4B. setup-identity.sh: values written to identity.env are quoted + escaped
+    (spaces/special chars in paths no longer break bash source).
