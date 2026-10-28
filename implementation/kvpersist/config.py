@@ -57,7 +57,7 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
     return out
 
 
-def load_config(repo_root: str, *, env_wins: bool = True) -> Dict[str, str]:
+def load_config(repo_root: str, *, env_wins: bool = True, model_config: Optional[str] = None) -> Dict[str, str]:
     """Merge store env files in order. Precedence (env_wins=True):
     existing process env > cache.env.local > cache.env > lmcache-server.env.local >
     lmcache-server.env > identity.env. Returns the effective mapping.
@@ -69,8 +69,8 @@ def load_config(repo_root: str, *, env_wins: bool = True) -> Dict[str, str]:
         root / "configs/generic/cache.env.local",
         root / "configs/generic/lmcache-server.env",
         root / "configs/generic/lmcache-server.env.local",
-        root / "configs/mimo-v2.6-pro/identity.env",
-        root / "configs/mimo-v2.6-pro/identity.env.local",
+        root / f"configs/{model_config}/identity.env" if model_config else root / f"configs/{_resolve_model_config(root)}/identity.env",
+        root / f"configs/{model_config}/identity.env.local" if model_config else root / f"configs/{_resolve_model_config(root)}/identity.env.local",
     ]
     merged: Dict[str, str] = {}
     for p in order:
@@ -82,6 +82,38 @@ def load_config(repo_root: str, *, env_wins: bool = True) -> Dict[str, str]:
             if k in os.environ:
                 merged[k] = os.environ[k]
     return merged
+
+
+def _resolve_model_config(root: Path) -> str:
+    """Single source of truth for which model config directory to use.
+
+    Resolution order (first non-empty wins):
+      1. KVP_MODEL_CONFIG environment variable.
+      2. The single directory under configs/ that contains identity.env
+         (besides 'generic'). If MULTIPLE such directories exist, raise -- an
+         ambiguous layout must never silently pick one (review: no silent
+         fallback to mimo-v2.6-pro).
+    """
+    import os as _os
+    env = _os.environ.get("KVP_MODEL_CONFIG", "").strip()
+    if env:
+        return env
+    candidates = [
+        d.name for d in (root / "configs").iterdir()
+        if d.is_dir() and d.name != "generic"
+        and (d / "identity.env").is_file()
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        # No model-specific directory (e.g. a generic-only deployment). The
+        # loader tolerates missing files; this is NOT a silent fallback to a
+        # model -- it simply means "no model identity file exists here".
+        return "generic"
+    raise ConfigError(
+        f"multiple model config directories found: {sorted(candidates)}; "
+        "set KVP_MODEL_CONFIG explicitly to choose one (no silent default)"
+    )
 
 
 def verify(repo_root: str) -> List[str]:

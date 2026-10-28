@@ -18,13 +18,29 @@ MODEL_DIR="${1:?usage: setup-identity.sh <local model dir>}"
 [ -d "$MODEL_DIR" ] || die "model dir not found: $MODEL_DIR"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# Universal model-config selector (review: no hardcoded model dir).
+# Resolution: explicit CONFIG_FILE > KVP_MODEL_CONFIG env > sole candidate.
+_model_cfg="${KVP_MODEL_CONFIG:-}"
+if [ -z "$_model_cfg" ]; then
+  _candidates=()
+  for _d in "$ROOT"/configs/*/; do
+    [ -d "$_d" ] || continue
+    case "$(basename "$_d")" in generic) continue ;; esac
+    [ -f "$_d/identity.env" ] && _candidates+=("$(basename "$_d")")
+  done
+  case "${#_candidates[@]}" in
+    0) _model_cfg="generic" ;;
+    1) _model_cfg="${_candidates[0]}" ;;
+    *) die "multiple model config dirs found (${_candidates[*]}) -- set KVP_MODEL_CONFIG or CONFIG_FILE explicitly" ;;
+  esac
+fi
 # Site values go to identity.env.local (gitignored) so the tracked identity.env
 # is never modified -- keeping `git pull` conflict-free and the tree clean.
 # CONFIG_FILE still allows explicit targeting when a rebuild of the tracked
 # file is genuinely intended.
-CONFIG="${CONFIG_FILE:-$ROOT/configs/mimo-v2.6-pro/identity.env.local}"
+CONFIG="${CONFIG_FILE:-$ROOT/configs/$_model_cfg/identity.env.local}"
 if [ ! -f "$CONFIG" ]; then
-  cp "$ROOT/configs/mimo-v2.6-pro/identity.env" "$CONFIG" || die "cannot seed $CONFIG from identity.env"
+  cp "$ROOT/configs/$_model_cfg/identity.env" "$CONFIG" || die "cannot seed $CONFIG from identity.env"
   echo "seeded $CONFIG from the shipped identity.env template"
 fi
 [ -w "$CONFIG" ] || die "cannot write $CONFIG (fix permissions/ownership first)"

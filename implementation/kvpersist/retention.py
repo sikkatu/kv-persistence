@@ -38,15 +38,30 @@ class EntryStats:
     shared_refs: int = 1   # how many logical entries share the underlying blocks
 
     def value_score(self, now: Optional[float] = None, half_life_h: float = 24.0) -> float:
-        """Higher = more valuable to keep."""
+        """Higher = more valuable to keep.
+
+        Value score combines measured benefit (hits + prefix length) with
+        freshness decay and divides by *effective* storage cost. shared_refs
+        REVERSES the sharing penalty: a widely-shared entry is relatively
+        cheaper per live consumer and freeing it (via evicting one ref) does
+        not free the bytes for anyone else -- so shared entries score HIGHER,
+        reflecting that removing them removes an entry without reclaiming its
+        bytes. Actual bytes freed by evicting this entry =
+        bytes_on_disk if shared_refs == 1 else 0 (the object survives for
+        other sharers).
+        """
         now = now or time.time()
         age_h = max(0.0, (now - self.last_access_ts) / 3600.0)
         recency = math.exp(-age_h / half_life_h)          # 1.0 fresh -> 0 stale
         benefit = 3.0 * self.hits + 1.5 * math.log1p(self.tokens)
         cost = max(1, self.bytes_on_disk)
-        # shared blocks cost the cache something either way; keeping a widely
-        # shared entry is relatively cheaper than a private copy of the same size
-        sharing = 1.0 / max(1, self.shared_refs) ** 0.5
+        # A shared object survives eviction of one ref -- freeing little real
+        # space. Keep shared entries longer: multiply score by sqrt(shared_refs)
+        # (was 1/sqrt(shared_refs) -- a bug flagged in review: the old formula
+        # penalised shared entries while the comment claimed the opposite).
+        sharing = max(1, self.shared_refs) ** 0.5
+        # bytes actually reclaimed if this entry is evicted (last ref frees all)
+        self.effective_freed_bytes = self.bytes_on_disk if self.shared_refs <= 1 else 0
         return (benefit * (0.3 + 0.7 * recency)) / cost * sharing * 1e9
 
 

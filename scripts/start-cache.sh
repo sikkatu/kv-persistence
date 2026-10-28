@@ -53,8 +53,10 @@ echo "  path   : $ROOT_PATH"
 echo "  budget : ${BUDGET_GB} GB hard, soft-watermark ${KVP_EVICT_TRIGGER_WATERMARK:-0.9}"
 
 if [ "${KVP_PERSIST_ENABLED:-true}" != "true" ]; then
-  echo "WARNING: KVP_PERSIST_ENABLED=${KVP_PERSIST_ENABLED} — data files are DELETED on shutdown." >&2
-  echo "         This breaks the principal requirement (persistence across restarts)." >&2
+  die "KVP_PERSIST_ENABLED=false is not supported: it contradicts the persistence
+requirement (data would be deleted on shutdown) and the L2 template is
+persist_enabled=true. To discard cache data, purge explicitly:
+  bash scripts/budget-report.sh purge --all --yes"
 fi
 
 # Never wipe on startup: only report what is already there.
@@ -98,6 +100,9 @@ else
     --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
     --chunk-size "$LMCACHE_CHUNK_SIZE" \
     --l2-adapter "$ADAPTER_JSON" \
+    ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
+    ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
+    ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
     >>"$LOG" 2>&1 &
 fi
 echo $! > "$PIDF"

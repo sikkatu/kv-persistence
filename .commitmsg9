@@ -1,0 +1,29 @@
+fix: review round 9 -- universal KVP_MODEL_CONFIG, .local overlay in verify gate, retention bug, emergency-evict --yes guard, persist_enabled refusal, advanced identity fields
+
+Operator request + review:
+- Universal model-config selector (KVP_MODEL_CONFIG): config.py, env.sh,
+  setup-identity.sh and verify-engine-identity.sh no longer hardcode
+  mimo-v2.6-pro. Resolution: explicit KVP_MODEL_CONFIG env > sole non-generic
+  candidate with identity.env; ambiguous multi-model layouts now refuse
+  explicitly (no silent default).
+- Review P1 (verify-engine-identity reads wrong config): the gate now merges
+  identity.env + identity.env.local into a temp file (same overlay semantics
+  setup-identity.sh writes to), so it verifies the SAME effective values, not
+  the stale tracked file. Smoke-tested: .local value wins over base.
+- Review P2 (retention.py sharing formula bug): 1/sqrt(shared_refs) penalised
+  shared entries while the comment claimed the opposite; corrected to
+  sqrt(shared_refs) so shared entries score HIGHER (freeing one ref frees 0
+  real bytes), and value_score now records effective_freed_bytes (0 if shared).
+- Review P2 (emergency-evict deletes whole dirs without warning): now requires
+  --yes with an explicit destructive-action warning and points to targeted
+  purge instead; exit 2 when --yes is missing.
+- Review (start-cache KVP_PERSIST_ENABLED misleading half-state): false now
+  REFUSES startup (data-on-shutdown-deletion contradicts the persistence
+  requirement and the L2 template is persist_enabled=true) instead of
+  warn-then-ignore.
+- Review (start-cache host-mode ignored HTTP/serde flags): host branch now
+  passes --http-host/--http-port/--l2-serde exactly like the docker branch.
+- Review (identity incomplete): optional advanced identity fields added
+  (lora_adapters, multimodal_components, rope_config_digest, speculative_config)
+  -- empty == not applicable, not an error; rope_config_digest validated as
+  64-hex when set. All 55 tests green.

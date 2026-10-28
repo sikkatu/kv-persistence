@@ -47,6 +47,12 @@ class CacheIdentity:
     max_model_len: int
     chat_template_digest: str    # sha256 of the applied chat template, 64 hex
     namespace_hint: str = ""     # optional user label, does not affect identity
+    # Optional advanced-identity fields (review: cover every KV-affecting knob).
+    # Empty string == not applicable (treated as "none") -- NOT an error.
+    lora_adapters: str = ""      # comma-separated active LoRA adapter ids + revisions
+    multimodal_components: str = ""  # vision/audio encoder ids + revisions if served
+    rope_config_digest: str = "" # sha256 of RoPE scaling/theta/section config (64 hex)
+    speculative_config: str = "" # MTP / draft-model / speculative settings if active
 
     def validate(self) -> None:
         if not self.model_id:
@@ -71,6 +77,11 @@ class CacheIdentity:
             raise IdentityError("connector_version is empty")
         if not _SHA64.match(self.chat_template_digest or ""):
             raise IdentityError("chat_template_digest must be 64 hex chars (sha256)")
+        # Advanced fields: when non-empty, digest-like fields must be 64 hex.
+        for name in ("rope_config_digest",):
+            v = getattr(self, name)
+            if v and not _SHA64.match(v):
+                raise IdentityError(f"{name} must be 64 hex chars when set (sha256)")
 
     def canonical(self) -> Dict[str, Any]:
         self.validate()

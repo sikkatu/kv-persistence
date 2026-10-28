@@ -141,7 +141,8 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="usage vs budget report")
     sub.add_parser("free", help="physical free space on cache filesystem")
-    sub.add_parser("emergency-evict", help="forced LRU eviction when physical free space < 5 GB")
+    e = sub.add_parser("emergency-evict", help="forced LRU eviction when physical free space < 5 GB (DESTRUCTIVE, needs --yes)")
+    e.add_argument("--yes", action="store_true", help="required to actually delete")
     p = sub.add_parser("purge", help="manual cleanup (explicit, never automatic)")
     p.add_argument("--namespace")
     p.add_argument("--all", action="store_true")
@@ -183,8 +184,16 @@ def cmd_emergency_evict(args):
     """Review 2B: forced LRU-ish eviction when PHYSICAL free space drops below
     the emergency threshold, regardless of the logical budget. Deletes the
     oldest namespace directories inside KVP_CACHE_ROOT until physical free
-    space recovers above the threshold (or nothing left to delete)."""
+    space recovers above the threshold (or nothing left to delete).
+    Requires --yes: this is DESTRUCTIVE and wipes entire namespaces (coarser
+    than per-entry eviction)."""
     import shutil, os
+    if not args.yes:
+        print("REFUSED: emergency-evict deletes whole namespaces (destructive)."
+              "\nRe-run with --yes after confirming you want to drop the oldest cache"
+              "\nnamespaces, or use 'purge --namespace <ns> --yes' for targeted cleanup.",
+              file=sys.stderr)
+        return 2
     root = os.environ.get("KVP_CACHE_ROOT", "")
     if not root or not os.path.isdir(root):
         print("KVP_CACHE_ROOT not set or missing", file=sys.stderr)

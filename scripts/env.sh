@@ -35,6 +35,8 @@ _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
   return 0
 }
 
+die(){ echo "ERROR: $*" >&2; exit 1; }
+
 _kvp_seed(){ # _kvp_seed <file> <pre>: export assignments; skip names listed
              # in $pre (newline-delimited, from BEFORE loading began) and any
              # name already exported by a later-priority layer.
@@ -49,14 +51,32 @@ _kvp_seed(){ # _kvp_seed <file> <pre>: export assignments; skip names listed
 
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
+  # Universal model-config selector (review: no hardcoded model dir).
+  # KVP_MODEL_CONFIG=<dirname> picks configs/<dirname>/ identity files.
+  # If unset and exactly ONE non-generic config dir has identity.env, that one
+  # is used; ambiguous layouts must set KVP_MODEL_CONFIG explicitly.
+  local model_cfg="${KVP_MODEL_CONFIG:-}"
+  if [ -z "$model_cfg" ]; then
+    local candidates=()
+    for d in "$root"/configs/*/; do
+      [ -d "$d" ] || continue
+      case "$(basename "$d")" in generic) continue ;; esac
+      [ -f "$d/identity.env" ] && candidates+=("$(basename "$d")")
+    done
+    case "${#candidates[@]}" in
+      0) model_cfg="generic" ;;
+      1) model_cfg="${candidates[0]}" ;;
+      *) die "_kvp_load_env: multiple model config dirs found (${candidates[*]}) -- set KVP_MODEL_CONFIG explicitly" ;;
+    esac
+  fi
   # names exported BEFORE loading wins over every file (precedence rule 1)
   local pre=$'\n'"$(compgen -e | sort)"$'\n'
   # base layers first, then .local layers on top -- .local overrides .base for
   # names not pre-exported (precedence rule 2 > 3).
   _kvp_seed "$root/configs/generic/cache.env"                 "$pre"
   _kvp_seed "$root/configs/generic/lmcache-server.env"        "$pre"
-  _kvp_seed "$root/configs/mimo-v2.6-pro/identity.env"        "$pre"
+  _kvp_seed "$root/configs/$model_cfg/identity.env"           "$pre"
   _kvp_seed "$root/configs/generic/cache.env.local"           "$pre"
   _kvp_seed "$root/configs/generic/lmcache-server.env.local"  "$pre"
-  _kvp_seed "$root/configs/mimo-v2.6-pro/identity.env.local"  "$pre"
+  _kvp_seed "$root/configs/$model_cfg/identity.env.local"     "$pre"
 }

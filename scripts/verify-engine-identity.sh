@@ -6,6 +6,46 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 CONTAINER="${1:-mimo-pro-tp4-kvp}"
 CONFIG="$ROOT/configs/mimo-v2.6-pro/identity.env"
+# Universal model-config selector + .local overlay (review P1: setup writes to
+# identity.env.local; the gate MUST verify the same source, not the stale
+# tracked file).
+_model_cfg="${KVP_MODEL_CONFIG:-}"
+if [ -z "$_model_cfg" ]; then
+  _candidates=()
+  for _d in "$ROOT"/configs/*/; do
+    [ -d "$_d" ] || continue
+    case "$(basename "$_d")" in generic) continue ;; esac
+    [ -f "$_d/identity.env" ] && _candidates+=("$(basename "$_d")")
+  done
+  case "${#_candidates[@]}" in
+    0) _model_cfg="generic" ;;
+    1) _model_cfg="${_candidates[0]}" ;;
+    *) echo "ERROR: multiple model config dirs found (${_candidates[*]}) -- set KVP_MODEL_CONFIG" >&2; exit 5 ;;
+  esac
+fi
+# Overlay: .local values (what setup-identity.sh wrote) win over the tracked base.
+CONFIG_LIVE="$ROOT/configs/$_model_cfg/identity.env.local"
+CONFIG_BASE="$ROOT/configs/$_model_cfg/identity.env"
+# Merge base + .local into a temp .env file so downstream Python reads the
+# SAME effective values setup-identity.sh wrote (not the stale tracked file).
+CONFIG="$(mktemp /tmp/kvp-identity-XXXXXX.env)"
+trap 'rm -f "$CONFIG"' EXIT
+python3 - "$CONFIG_BASE" "$CONFIG_LIVE" "$CONFIG" <<'PY'
+import re, sys
+base_path, live_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+vals = {}
+for path in (base_path, live_path):
+    try:
+        for line in open(path):
+            m = re.match(r"^([A-Z][A-Z0-9_]*)=(.*)$", line.strip())
+            if m:
+                vals[m.group(1)] = m.group(2).strip().strip('"')
+    except FileNotFoundError:
+        pass
+with open(out_path, "w") as fh:
+    for k, v in vals.items():
+        fh.write(f"{k}={v}\n")
+PY
 MODEL_DIR="${MODEL_DIR:-${KVP_MODEL_DIR:-}}"
 python3 - "$ROOT" "$CONFIG" "$CONTAINER" "$MODEL_DIR" <<'PYEOF'
 import json, re, subprocess, sys
