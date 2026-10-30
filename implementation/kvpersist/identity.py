@@ -8,16 +8,33 @@ yields a cache MISS (IdentityError -> caller falls back to recompute).
 The namespace is a SHA-256 over canonical JSON of the identity fields, so it is
 stable across restarts, hosts and Python versions.
 
-LIMITATION (review P1-3): this namespace is a LOCAL policy-layer concept --
-KV-persistence computes it from identity fields, but the actual L2 keys LMCache
-uses internally for store/retrieve are LMCache's own (derived from its
-connector's KV-chunk identity, NOT directly from this namespace). Until an
-end-to-end test drives real LMCache store/retrieve calls and proves that
-changing EACH identity field causes a cache MISS at the LMCache API level (not
-just at the namespace computation level), this namespace should be treated as
-a best-effort layer for local policy/labels, NOT as a proven guarantee of
-cross-config isolation at the LMCache storage-key level. See
-docs/final-report.md known-limitations for the required hardware test.
+HOW THE NAMESPACE ISOLATES REAL LMCache STORAGE (verified against the pinned
+LMCache 0.5.3 source and a live store/lookup run -- see
+tests/integration/test_l2_persistence.py::test_identity_namespace_isolates_lmcache_storage):
+
+  * The LMCache MP cache key (IPCCacheServerKey -> ObjectKey) carries
+    ``model_name``; the L2 file name of the ``nixl_store_dynamic`` adapter is
+    derived from it: ``<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin``.
+  * Therefore a namespace is made effective for STORAGE -- not just for local
+    labels -- by embedding it into the ``model_name`` the engine/connector
+    registers with (``CacheIdentity.lmcache_model_name()``). Changing ANY
+    identity field changes the namespace, which changes ``model_name``, which
+    changes the ObjectKey and the L2 file name: a lookup under the new identity
+    cannot see the old objects (proven at the LMCache API level: LOOKUP returns
+    0/N chunks where the original identity returns N/N).
+
+REMAINING LIMITATION (review P1-3, now precisely characterized):
+``cache_salt`` (the per-user field of ObjectKey) is part of the key's
+equality/hash but is NOT part of the ``nixl_store_dynamic`` L2 file name (the
+fs/s3/bigtable adapters do include it). After a restart, a secondary (disk)
+lookup of the same tokens under a DIFFERENT salt can therefore find the file
+written under the original salt. Measured live: store under salt=tenantA,
+restart-free lookup under salt=tenantB -> 4/4 chunks returned from L2. Until
+upstream includes the salt in the file name, do NOT rely on cache_salt for
+isolation on the L2 tier: put any per-tenant discriminator into the
+``model_name`` itself (``lmcache_model_name(extra_discriminator=...)``) or use
+a separate L2 cache root per tenant. See docs/final-report.md
+known-limitations.
 """
 
 from __future__ import annotations
@@ -30,6 +47,9 @@ from typing import Any, Dict
 
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _SHA64 = re.compile(r"^[0-9a-f]{64}$")
+# ObjectKey.model_name must not contain '@' (LMCache uses it as a field
+# separator); '/' is allowed and is rendered as '--' in L2 file names.
+_LMC_MODEL_NAME_FORBIDDEN = "@"
 
 
 class IdentityError(Exception):
@@ -110,6 +130,38 @@ class CacheIdentity:
 
     def short_fingerprint(self) -> str:
         return self.namespace().replace("kvp-", "", 1)
+
+    def lmcache_model_name(self, base_model: str = "",
+                           extra_discriminator: str = "") -> str:
+        """The LMCache ``model_name`` that enforces this identity at STORAGE level.
+
+        LMCache derives both the ObjectKey and the L2 file name from
+        ``model_name`` (nixl_store_dynamic: ``<safe_model_name>_<kv_rank>_<group>
+        _<chunkhash>.bin``), so embedding the namespace here is what actually
+        separates incompatible configurations on disk and in the API -- unlike
+        ``cache_salt``, which is NOT part of that adapter's file name.
+
+        Args:
+            base_model: Human-readable model label (e.g. the served model name).
+                May be empty; the namespace alone is already unique.
+            extra_discriminator: Optional per-tenant/per-user label to embed.
+                Use THIS (or a separate L2 cache root) for isolation between
+                tenants -- do not rely on ``cache_salt`` on the L2 tier (see
+                module docstring: the nixl_store_dynamic file name ignores it).
+
+        Returns:
+            ``"<base>/<namespace>[/extra_discriminator]"`` with the namespace's
+            ``kvp-`` prefix stripped for brevity. The result is ``@``-free and
+            ``\\x00``-free to satisfy the ObjectKey invariants (LMCache uses
+            ``@`` as a field separator in serialized keys).
+        """
+        parts = [p for p in (base_model.strip("/"), self.short_fingerprint(),
+                             extra_discriminator.strip("/")) if p]
+        name = "/".join(parts)
+        if _LMC_MODEL_NAME_FORBIDDEN in name:
+            raise IdentityError(
+                f"lmcache model_name must not contain '@' (got {name!r})")
+        return name
 
 
 def namespace_from_config(cfg: Dict[str, Any]) -> str:

@@ -24,4 +24,9 @@ lmcache==0.5.3
 # runtime (lmcache/v1/distributed/l2_adapters/nixl_store_dynamic_l2_adapter.py),
 # but `lmcache` does not depend on it. Without it the server refuses to start
 # with `ModuleNotFoundError: No module named 'nixl'`, so it is pinned here too.
-nixl>=1.3.0
+# PINNED to the exact version the integration tests ran against (1.5.2) for a
+# reproducible deploy: `nixl` ships its own C/transport backends whose ABI has
+# changed between minors. Verified-compatible range observed so far: 1.3.x
+# (adapter's minimum) through 1.5.2 (tested). Do NOT widen without replaying
+# tests/integration/test_l2_persistence.py on the target host.
+nixl==1.5.2

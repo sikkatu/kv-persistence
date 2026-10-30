@@ -12,8 +12,8 @@ GitHub remote API).
 (59 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
-`scripts/benchmark.sh`) but **have not been executed on a target GPU host
-host**, because network/SSH access to the target machine was
+`scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
+because network/SSH access to the target machine was
 not reachable during this work session. Nothing untested is claimed as working.
 
 ## Architecture and selected backend
@@ -81,19 +81,45 @@ PASS verdict rule are in `docs/benchmarks.md`; the recorder writes
 `benchmarks/results/<UTC-ts>/bench.jsonl` automatically.
 
 ## Evidence of disk-backed recovery after restart
-
 Pending the hardware run (Definition-of-done items 1–7). The exact evidence
 that will be collected: LMCache `Retrieved …` log lines sourced from the L2 tier
 appearing *after* a vLLM restart, `usage.prompt_tokens_details.cached_tokens > 0`
 on the first post-restart request, TTFT drop vs cold baseline, and
 `budget-report.sh status` proving the bytes were read (not rewritten).
 
+## Per-identity isolation at the LMCache storage level (review P1-3)
+
+The identity namespace is now enforced at the REAL LMCache storage level, not
+just as a local label. Verified against the pinned LMCache 0.5.3 source and a
+live store/lookup run (integration test
+`test_identity_namespace_isolates_lmcache_storage`, see docs/benchmarks.md):
+
+* The LMCache cache key (`ObjectKey.model_name`) feeds both the key and the
+  `nixl_store_dynamic` L2 file name
+  (`<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`).
+* `CacheIdentity.lmcache_model_name()` embeds the namespace into that
+  `model_name`, so changing ANY identity field moves the data to a different
+  key AND a different file on disk. Proven per field: the changed identity's
+  lookup returns `0/N` chunks at the LMCache API where the original returns
+  `N/N`.
+* **Residual gap (measured, pinned by a test)**: `cache_salt` is part of the
+  key's equality but NOT part of the `nixl_store_dynamic` file name (the
+  fs/s3/bigtable adapters do include it). After a restart, a secondary (disk)
+  lookup of the same tokens under a DIFFERENT salt can return the original
+  salt's objects — measured live: `store salt=tenantA`, `lookup salt=tenantB`
+  -> `4/4` chunks. Until upstream includes the salt in the file name, do NOT
+  rely on `cache_salt` for isolation on the L2 tier: put the per-tenant
+  discriminator into `lmcache_model_name(extra_discriminator=...)` or use a
+  separate L2 cache root per tenant. The test
+  `test_cache_salt_isolation_gap_in_nixl_store_dynamic` fails loudly if
+  upstream ever fixes this.
+
 ## NVMe bytes per cached token
 
 Pending measurement on hardware (formula: `used_bytes ÷ persisted tokens`,
 reported by `benchmark.sh` + `budget-report.sh status` per run). Theoretical
 footprint for the current dtype (bf16) is
-`2 x num_kv_heads x head_dim x 2(K,V) x layers` bytes/token of TOTAL KV (per-token across all TP ranks; NVMe stores the whole tensor, NOT per-rankdivided). For hybrid-attention models per-group geometry differs —
+`2 x num_kv_heads x head_dim x 2(K,V) x layers` bytes/token of TOTAL KV (per-token across all TP ranks; NVMe stores the whole tensor, NOT per-rank divided). For hybrid-attention models per-group geometry differs —
 layer/head counts for MiMo-V2.6-Pro are recorded from the model config during
 the hardware run, before any capacity promises are made.
 

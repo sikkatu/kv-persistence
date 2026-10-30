@@ -6,7 +6,7 @@
 состояние процесса, состояние кэша). Ускорение БЕЗ доказательства дискового
 восстановления НЕ закрывает первичную веху.
 
-## Уровни доказательств тестов (что что доказывает)
+## Уровни доказательств тестов (что доказывает каждый уровень)
 
 Три уровня строго разделены — никогда не путать одно с другим (review P1-2):
 
@@ -34,12 +34,12 @@
   Внимание: `--l2-adapter` принимает спецификацию адаптера как JSON-**строку**,
   а не путь к файлу (0.5.3 `add_l2_adapters_args`).
 * **Зависимости**: Python 3.12, Linux с POSIX SHM (`/dev/shm`), закреплённый
-  `lmcache==0.5.3` плюс `nixl>=1.3.0` (L2-адаптер `nixl_store_dynamic` импортирует
+  `lmcache==0.5.3` плюс `nixl==1.5.2` (L2-адаптер `nixl_store_dynamic` импортирует
   `nixl`), torch (достаточно CPU-сборки), pytest. GPU, CUDA и vLLM НЕ нужны.
 * **Команда**:
   ```bash
   python3 -m venv ~/.venvs/lmcache
-  ~/.venvs/lmcache/bin/pip install -r requirements-lmcache.txt 'nixl>=1.3.0'
+  ~/.venvs/lmcache/bin/pip install -r requirements-lmcache.txt
   export PATH="$HOME/.venvs/lmcache/bin:$PATH"
   KVP_LIVE_LMCACHE=1 python3 -m pytest tests/integration/test_l2_persistence.py \
       -k roundtrip -v
@@ -66,6 +66,42 @@
 * **Ограничение области**: нагрузка — синтетические KV-тензоры. Тест доказывает
   только уровень 2; сценарий vLLM + MiMo-V2.6-Pro + `MAX_NUM_SEQS=2` для чата
   Operit доказывается отдельно через `scripts/test-recovery.sh` (уровень 3).
+
+### Уровень 2b: изоляция по идентичности на уровне API LMCache (без vLLM, без GPU)
+
+Доказывает, что namespace идентичности kv-persistence разделяет
+несовместимые конфигурации в РЕАЛЬНОМ хранилище LMCache — не только в локальных
+метках.
+
+* **Механизм (проверен по исходникам 0.5.3 и живым прогоном)**: ключ кэша LMCache
+  (`ObjectKey.model_name`) также входит в имя файла L2 адаптера
+  `nixl_store_dynamic` (`<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`).
+  Namespace встраивается в этот `model_name` через
+  `CacheIdentity.lmcache_model_name()`, поэтому любое изменение идентичности
+  переносит объекты на другой ключ И в другой файл на диске.
+* **Команда**:
+  ```bash
+  KVP_LIVE_LMCACHE=1 python3 -m pytest \
+      tests/integration/test_l2_persistence.py -k identity_namespace -v
+  ```
+* **Что доказывает**: одни и те же токены записаны под `model_name` идентичности A;
+  поиск под A находит N/N чанков; для КАЖДОГО отдельно изменённого поля
+  идентичности (model_id, model_revision, tokenizer_*, kv_cache_dtype,
+  block_size, num_kv_heads, head_dim, tp_size, connector_version,
+  max_model_len, chat_template_digest) изменённая идентичность получает `0/N`
+  чанков на уровне API LMCache. Для `namespace_hint` проверяется, что он НЕ
+  меняет ничего (это человеческая метка).
+* **Известный пробел (измерен, не скрыт)**: `cache_salt` входит в равенство
+  ключа, но НЕ входит в имя файла `nixl_store_dynamic` (адаптеры fs/s3/bigtable
+  его учитывают). Поэтому вторичный (дисковый) поиск тех же токенов под ДРУГИМ
+  соль-значением может после рестарта вернуть объекты исходной соли. Измерено
+  живым прогоном: `store salt=tenantA`, `lookup salt=tenantB` -> возвращено
+  `4/4` чанка. Тест `test_cache_salt_isolation_gap_in_nixl_store_dynamic`
+  фиксирует это поведение и громко падает, если upstream это когда-либо
+  исправит. **Не полагайтесь на `cache_salt` для изоляции на уровне L2**:
+  пер-тенантный дискриминатор встраивайте в
+  `lmcache_model_name(extra_discriminator=...)` или используйте отдельный
+  корень L2-кэша на тенанта.
 
 ## Матрица (5 конфигураций × 3 масштаба промпта)
 

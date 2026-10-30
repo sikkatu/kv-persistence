@@ -101,3 +101,55 @@ def test_incompatible_entries_rejected():
     assert make_identity(kv_cache_dtype="bf16").namespace() != base
     assert make_identity(tp_size=2).namespace() != base
     assert make_identity(chat_template_digest="d" * 64).namespace() != base
+
+
+# ---------------------------------------------------------------------------
+# lmcache_model_name(): the mechanism that makes the namespace effective at
+# the LMCache STORAGE level (ObjectKey.model_name -> L2 filename).
+# ---------------------------------------------------------------------------
+
+def test_lmcache_model_name_embeds_namespace():
+    ident = make_identity()
+    name = ident.lmcache_model_name("mimo-pro")
+    assert ident.short_fingerprint() in name, \
+        "the namespace fingerprint must be part of the LMCache model_name"
+    assert name.startswith("mimo-pro/"), "base model label must be the prefix"
+
+
+def test_lmcache_model_name_changes_with_identity():
+    """Changing ANY identity field must change the LMCache model_name."""
+    base = make_identity().lmcache_model_name("mimo-pro")
+    for over in ({"model_revision": "d" * 40}, {"kv_cache_dtype": "bf16"},
+                 {"tp_size": 2}, {"block_size": 32}, {"num_kv_heads": 16},
+                 {"head_dim": 64}, {"max_model_len": 65536},
+                 {"chat_template_digest": "f" * 64},
+                 {"connector_version": "0.6.0"},
+                 {"model_id": "Other"}, {"tokenizer_name": "oth"},
+                 {"tokenizer_revision": "e" * 40}):
+        name = make_identity(**over).lmcache_model_name("mimo-pro")
+        assert name != base, f"identity change {over} must change model_name"
+
+
+def test_lmcache_model_name_hint_does_not_change():
+    """namespace_hint is a human label: it must NOT affect the LMCache name."""
+    a = make_identity(namespace_hint="alpha").lmcache_model_name("mimo-pro")
+    b = make_identity(namespace_hint="beta").lmcache_model_name("mimo-pro")
+    assert a == b
+
+
+def test_lmcache_model_name_rejects_at_sign():
+    """ObjectKey.model_name must not contain '@' (LMCache field separator)."""
+    with pytest.raises(IdentityError):
+        make_identity().lmcache_model_name("bad@name")
+
+
+def test_lmcache_model_name_extra_discriminator():
+    """extra_discriminator allows per-tenant isolation inside model_name."""
+    ident = make_identity()
+    plain = ident.lmcache_model_name("mimo-pro")
+    tenant_a = ident.lmcache_model_name("mimo-pro", extra_discriminator="tenantA")
+    tenant_b = ident.lmcache_model_name("mimo-pro", extra_discriminator="tenantB")
+    assert plain != tenant_a
+    assert plain != tenant_b
+    assert tenant_a != tenant_b
+    assert "tenantA" in tenant_a and "tenantB" in tenant_b

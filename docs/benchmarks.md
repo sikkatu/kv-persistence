@@ -33,13 +33,13 @@ L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
   `CHECKSUM: <digest> (N chunks)`. Note: `--l2-adapter` takes the adapter spec
   as a JSON **string**, not a file path (0.5.3 `add_l2_adapters_args`).
 * **Dependencies**: Python 3.12, Linux with POSIX SHM (`/dev/shm`), the pinned
-  `lmcache==0.5.3` plus `nixl>=1.3.0` (the `nixl_store_dynamic` L2 adapter
+  `lmcache==0.5.3` plus `nixl==1.5.2` (the `nixl_store_dynamic` L2 adapter
   imports `nixl`), torch (CPU build is enough), pytest. GPU, CUDA and vLLM are
   NOT required.
 * **Command**:
   ```bash
   python3 -m venv ~/.venvs/lmcache
-  ~/.venvs/lmcache/bin/pip install -r requirements-lmcache.txt 'nixl>=1.3.0'
+  ~/.venvs/lmcache/bin/pip install -r requirements-lmcache.txt
   export PATH="$HOME/.venvs/lmcache/bin:$PATH"
   KVP_LIVE_LMCACHE=1 python3 -m pytest tests/integration/test_l2_persistence.py \
       -k roundtrip -v
@@ -66,6 +66,41 @@ L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
 * **Scope limitation**: the workload is synthetic KV tensors. This test proves
   level 2 only; the vLLM + MiMo-V2.6-Pro + `MAX_NUM_SEQS=2` Operit-chat scenario
   must be proven separately by `scripts/test-recovery.sh` (level 3).
+
+### Level 2b: per-identity isolation at the LMCache API (no vLLM, no GPU)
+
+Proves that the kv-persistence identity namespace separates incompatible
+configurations in REAL LMCache storage — not only in local labels.
+
+* **Mechanism (verified in the 0.5.3 source + live run)**: the LMCache cache
+  key (`ObjectKey.model_name`) also feeds the `nixl_store_dynamic` L2 file
+  name (`<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`). The namespace
+  is embedded into that `model_name` via `CacheIdentity.lmcache_model_name()`,
+  so any identity change moves the objects to a different key AND a different
+  file on disk.
+* **Command**:
+  ```bash
+  KVP_LIVE_LMCACHE=1 python3 -m pytest \
+      tests/integration/test_l2_persistence.py -k identity_namespace -v
+  ```
+* **What it proves**: the same tokens are stored under identity A's
+  `model_name`; a lookup under A finds N/N chunks; for EACH single identity
+  field changed (model_id, model_revision, tokenizer_*, kv_cache_dtype,
+  block_size, num_kv_heads, head_dim, tp_size, connector_version,
+  max_model_len, chat_template_digest) the changed identity gets `0/N`
+  chunks at the LMCache API. `namespace_hint` is asserted NOT to change
+  anything (it is a human label).
+* **Known gap (measured, not hidden)**: `cache_salt` is part of the key's
+  equality but NOT part of the `nixl_store_dynamic` file name (the fs/s3/
+  bigtable adapters do include it). A secondary (disk) lookup of the same
+  tokens under a DIFFERENT salt can therefore return the original salt's
+  objects after a restart. Measured live: `store salt=tenantA`,
+  `lookup salt=tenantB` -> `4/4` chunks returned. The test
+  `test_cache_salt_isolation_gap_in_nixl_store_dynamic` pins this behaviour
+  and fails loudly if upstream ever fixes it. **Do not rely on `cache_salt`
+  for isolation on the L2 tier**: put the per-tenant discriminator into
+  `lmcache_model_name(extra_discriminator=...)` or use a separate L2 cache
+  root per tenant.
 
 ## Matrix (5 configurations × 3 prompt scales)
 

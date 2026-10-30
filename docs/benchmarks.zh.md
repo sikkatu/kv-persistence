@@ -30,12 +30,12 @@
   以 `CHECKSUM: <digest> (N chunks)` 输出。注意：`--l2-adapter` 接收
   JSON **字符串**形式的适配器规格，而非文件路径（0.5.3 `add_l2_adapters_args`）。
 * **依赖**：Python 3.12、支持 POSIX SHM 的 Linux（`/dev/shm`）、固定的
-  `lmcache==0.5.3` 加 `nixl>=1.3.0`（`nixl_store_dynamic` L2 适配器导入
+  `lmcache==0.5.3` 加 `nixl==1.5.2`（`nixl_store_dynamic` L2 适配器导入
   `nixl`）、torch（CPU 构建即可）、pytest。**不需要** GPU、CUDA 和 vLLM。
 * **命令**：
   ```bash
   python3 -m venv ~/.venvs/lmcache
-  ~/.venvs/lmcache/bin/pip install -r requirements-lmcache.txt 'nixl>=1.3.0'
+  ~/.venvs/lmcache/bin/pip install -r requirements-lmcache.txt
   export PATH="$HOME/.venvs/lmcache/bin:$PATH"
   KVP_LIVE_LMCACHE=1 python3 -m pytest tests/integration/test_l2_persistence.py \
       -k roundtrip -v
@@ -57,6 +57,36 @@
 * **范围限制**：负载是合成 KV 张量。该测试仅证明级别 2；vLLM +
   MiMo-V2.6-Pro + `MAX_NUM_SEQS=2` 的 Operit 对话场景须由
   `scripts/test-recovery.sh`（级别 3）单独证明。
+
+### 级别 2b：LMCache API 级别的身份隔离（无 vLLM，无 GPU）
+
+证明 kv-persistence 身份命名空间在**真实** LMCache 存储中隔离不兼容的配置——
+不仅仅是在本地标签中。
+
+* **机制（经 0.5.3 源码与实际运行验证）**：LMCache 缓存键
+  （`ObjectKey.model_name`）同时构成 `nixl_store_dynamic` L2 文件名
+  （`<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`）。命名空间通过
+  `CacheIdentity.lmcache_model_name()` 嵌入该 `model_name`，因此任何身份变化都会
+  把对象移到不同的键**和**磁盘上不同的文件。
+* **命令**：
+  ```bash
+  KVP_LIVE_LMCACHE=1 python3 -m pytest \
+      tests/integration/test_l2_persistence.py -k identity_namespace -v
+  ```
+* **证明内容**：相同的 token 存储在身份 A 的 `model_name` 下；在 A 下查找得到
+  N/N 分块；对**每一个**单独更改的身份字段（model_id、model_revision、
+  tokenizer_*、kv_cache_dtype、block_size、num_kv_heads、head_dim、tp_size、
+  connector_version、max_model_len、chat_template_digest），更改后的身份在
+  LMCache API 得到 `0/N` 分块。`namespace_hint` 被断言为不影响任何内容（它是
+  人类可读标签）。
+* **已知缺口（实测，未隐藏）**：`cache_salt` 参与键的相等性，但**不**参与
+  `nixl_store_dynamic` 文件名（fs/s3/bigtable 适配器会包含它）。因此在重启后
+  以**不同** salt 对相同 token 做二级（磁盘）查找，可能返回原始 salt 的对象。
+  实测：`store salt=tenantA`、`lookup salt=tenantB` -> 返回 `4/4` 分块。
+  测试 `test_cache_salt_isolation_gap_in_nixl_store_dynamic` 固定该行为，
+  若上游修复则会明确失败。**不要依赖 `cache_salt` 做 L2 层隔离**：把
+  per-tenant 判别符放进 `lmcache_model_name(extra_discriminator=...)`，
+  或为每个租户使用独立的 L2 缓存根目录。
 
 ## 矩阵（5 种配置 × 3 种提示规模）
 

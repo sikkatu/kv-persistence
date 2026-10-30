@@ -42,7 +42,9 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "implementation"))
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parents[1] / "implementation"))
+sys.path.insert(0, str(_HERE))   # lmc_protocol_client.py lives next to this file
 
 LMBIN = shutil.which("lmcache")
 
@@ -411,23 +413,31 @@ def test_lmcache_store_restart_retrieve_roundtrip(tmp_path):
                 "the workload to disk" % l2)
 
         # ---------------- Phase D: stop the server completely ------------
+        pid1 = server1.pid
         _stop_server(server1, log, "phase-D/first-server")
         server1 = None
         # Prove nothing re-creates the payload between phases: no bench and no
         # server process is left running here (only this test process).
-
         # ---------------- Phase E: start a FRESH server process ----------
         l2_files_kept = _l2_data_files(l2)
         assert l2_files_kept == l2_files_before, \
             "L2 data files changed while no server was running " \
             "(%d before, %d now)" % (len(l2_files_before), len(l2_files_kept))
+        # The old process must actually be gone -- a lingering server would
+        # make the post-restart read meaningless. /proc absence is the real
+        # "process is dead" signal on Linux (poll() alone can race reaping).
+        assert not Path("/proc/%d" % pid1).exists(), \
+            "first server (pid %d) is still alive after _stop_server -- the " \
+            "post-restart retrieval would not prove recovery" % pid1
         server2 = _start_server(adapter, zmq2, http2, log, "phase-E/second")
         try:
             _wait_ready(server2, http2, log)
         except RuntimeError as e:
             pytest.fail("[5/8 new server startup] %s" % e)
-        assert server2.pid != (server1.pid if server1 else -1), \
-            "second server must be a NEW process"
+        assert server2.poll() is None, "second server died immediately"
+        assert server2.pid != pid1, \
+            "second server re-used pid %d -- OS pid reuse must not be " \
+            "mistaken for a fresh process; rerun the test" % pid1
 
         # ---------------- Phase F: retrieve the PRE-restart objects ------
         out_after = _run_bench(http2, zmq2, _ROUNDTRIP_START, log, "phase-F/retrieve")
@@ -479,8 +489,11 @@ def test_lmcache_store_restart_retrieve_roundtrip(tmp_path):
 
         # ---------------- Negative control: empty L2 dir -----------------
         # Same workload identity, but against a FRESH server whose L2 dir has
-        # never seen the data. The bench must report a MISS (0/N chunks),
-        # otherwise its "hit" signal cannot be trusted as recovery evidence.
+        # never seen the data. The bench must report an explicit MISS: the
+        # LOOKUP line MUST be present, the chunk total MUST match the main
+        # run's workload structure, and the hit count MUST be exactly 0/N.
+        # A missing LOOKUP line is a parse failure, NOT a pass -- otherwise
+        # the control could "succeed" without ever probing the cache.
         nc_root = tmp_path / "negative-control"
         nc_root.mkdir(parents=True, exist_ok=True)
         nc_l2 = nc_root / "l2"
@@ -493,12 +506,30 @@ def test_lmcache_store_restart_retrieve_roundtrip(tmp_path):
             out_nc = _run_bench(nc_http, nc_zmq, _ROUNDTRIP_START,
                                log, "phase-G/negative-control")
             nc = _parse_bench(out_nc)
-            if nc["hits"] and nc["hits"][0][0] != 0:
+            if not nc["hits"]:
+                pytest.fail(
+                    "[negative control] bench printed NO LOOKUP result on the "
+                    "empty-L2 server -- the control did not actually probe the "
+                    "cache, so it proves nothing about false hits\n%s"
+                    % out_nc[-3000:])
+            nc_hit, nc_total = nc["hits"][0]
+            if nc_total <= 0:
+                pytest.fail(
+                    "[negative control] LOOKUP reported an empty workload "
+                    "(0/%d chunks) -- expected %d chunks like the main run\n%s"
+                    % (nc_total, total_c, out_nc[-3000:]))
+            if nc_total != total_a:
+                pytest.fail(
+                    "[negative control] workload structure mismatch: LOOKUP "
+                    "reported %d chunks, main run used %d -- the control did "
+                    "not exercise the same workload\n%s"
+                    % (nc_total, total_a, out_nc[-3000:]))
+            if nc_hit != 0:
                 pytest.fail(
                     "[negative control] bench reported %d/%d chunks hit on an "
                     "EMPTY L2 directory -- its hit signal is not trustworthy "
                     "as recovery evidence\n%s"
-                    % (nc["hits"][0][0], nc["hits"][0][1], out_nc[-3000:]))
+                    % (nc_hit, nc_total, out_nc[-3000:]))
         finally:
             _stop_server(nc_server, log, "phase-G/negative-control")
 
@@ -522,3 +553,229 @@ def test_lmcache_store_restart_retrieve_roundtrip(tmp_path):
             _stop_server(server1, log, "cleanup/server1")
         if server2 is not None:
             _stop_server(server2, log, "cleanup/server2")
+
+
+# ---------------------------------------------------------------------------
+# Level 2b: per-identity isolation at the LMCache API level (review P1-3)
+# ---------------------------------------------------------------------------
+# Proves that the kv-persistence identity namespace separates incompatible
+# configurations in REAL LMCache storage -- not just in local labels:
+#  * the same tokens are stored under identity A's lmcache_model_name();
+#  * a lookup under identity A finds N/N chunks;
+#  * for EACH single identity field changed (model_revision, kv_cache_dtype,
+#    block_size, tp_size, ...), the changed identity's model_name yields
+#    0/N chunks at the LMCache API -- i.e. the incompatible KV is invisible.
+#
+# Mechanism (verified in LMCache 0.5.3 source + live run):
+#   ObjectKey.model_name feeds both the cache key and the nixl_store_dynamic
+#   L2 file name, so embedding the namespace there is what isolates storage.
+#   The identity helper `CacheIdentity.lmcache_model_name()` produces that
+#   name; this test drives it through the real MP protocol (see
+#   lmc_protocol_client.py) and checks LOOKUP results per changed field.
+#
+# The test also documents a REAL residual gap with a negative assertion:
+# `cache_salt` is NOT part of the nixl_store_dynamic file name, so two
+# different salts CAN see each other's data after a restart. This is asserted
+# as a known upstream limitation (not silently passed) via
+# `test_cache_salt_isolation_gap_in_nixl_store_dynamic`.
+
+_ISO_NUM_TOKENS = 63      # + 1 leading id = 64 tokens = 4 chunks of 16
+
+
+def _identity_base() -> dict:
+    """A complete valid identity fixture (all fields known)."""
+    return dict(
+        model_id="MiMo-V2.6-Pro", model_revision="a" * 40,
+        tokenizer_name="mimo-pro-tok", tokenizer_revision="b" * 40,
+        kv_cache_dtype="auto", block_size=16, num_kv_heads=8, head_dim=128,
+        tp_size=4, connector="LMCacheMPConnector", connector_version="0.5.3",
+        max_model_len=131072, chat_template_digest="c" * 64,
+    )
+
+
+def _identity_variants():
+    """Yield (field_name, mutated_config, expected_isolated)."""
+    base = _identity_base()
+    changes = {
+        "model_id": dict(model_id="Other-Model"),
+        "model_revision": dict(model_revision="d" * 40),
+        "tokenizer_name": dict(tokenizer_name="other-tok"),
+        "tokenizer_revision": dict(tokenizer_revision="e" * 40),
+        "kv_cache_dtype": dict(kv_cache_dtype="fp8"),
+        "block_size": dict(block_size=32),
+        "num_kv_heads": dict(num_kv_heads=16),
+        "head_dim": dict(head_dim=64),
+        "tp_size": dict(tp_size=2),
+        "connector_version": dict(connector_version="0.6.0"),
+        "max_model_len": dict(max_model_len=65536),
+        "chat_template_digest": dict(chat_template_digest="f" * 64),
+    }
+    for name, delta in changes.items():
+        yield name, dict(base, **delta), True
+    # namespace_hint is documented as NOT affecting identity -- assert that too.
+    yield "namespace_hint", dict(base, namespace_hint="totally-different"), False
+
+
+@pytest.mark.skipif(
+    os.environ.get("KVP_LIVE_LMCACHE") != "1",
+    reason="identity isolation integration test needs the pinned lmcache "
+           "package (0.5.3): set KVP_LIVE_LMCACHE=1 to run it",
+)
+def test_identity_namespace_isolates_lmcache_storage(tmp_path):
+    """Level 2b: changing EACH identity field must cause an LMCache cache MISS.
+
+    The kv-persistence namespace is embedded in the LMCache ``model_name``
+    (CacheIdentity.lmcache_model_name()); this test proves at the real MP
+    protocol level that the resulting keys never see each other's KV objects.
+    """
+    from lmc_protocol_client import (  # noqa: import inside test
+        LmcClient, LMC_IMPORT_ERROR, build_token_ids)
+    from kvpersist.identity import CacheIdentity, IdentityError
+
+    if LMC_IMPORT_ERROR is not None:
+        pytest.skip("lmcache runtime not importable: %s" % LMC_IMPORT_ERROR)
+
+    l2 = tmp_path / "l2"
+    adapter = _render_adapter(tmp_path, budget_gb="1")
+    log = tmp_path / "isolation.log"
+    zmq_port, http_port = _free_port(), _free_port()
+
+    base_cfg = _identity_base()
+    ident_a = CacheIdentity(**base_cfg)
+    tokens = build_token_ids(seq_no=11, num_tokens=_ISO_NUM_TOKENS)
+    total_chunks = (len(tokens) // 16) * 16 // 16   # 64/16 = 4
+
+    server = _start_server(adapter, zmq_port, http_port, log, "isolation")
+    cli_a = None
+    clients = []
+    try:
+        _wait_ready(server, http_port, log)
+        rpc_url = "tcp://127.0.0.1:%d" % zmq_port
+
+        # ---- Phase 1: store under identity A's model_name ----
+        cli_a = LmcClient(rpc_url, ident_a.lmcache_model_name("mimo-pro"),
+                          instance_id=4100)
+        clients.append(cli_a)
+        assert cli_a.registered, "failed to register identity A context"
+        status = cli_a.store(tokens, "iso-store-A")
+        assert status == "stored", "store under identity A failed: %s" % status
+        # Let the async store reach L2 (adapter writes *.bin files).
+        for _ in range(60):
+            if list(l2.glob("*.bin")):
+                break
+            time.sleep(1)
+        else:
+            pytest.fail("no L2 data files appeared after store under identity A")
+        hits_a = cli_a.lookup_hits(tokens, "iso-lookup-A")
+        assert hits_a == total_chunks, \
+            "identity A must see its own data (%d/%d), got %s" \
+            % (total_chunks, total_chunks, hits_a)
+
+        # ---- Phase 2: one field at a time -> identity B must MISS ----
+        for field_name, mutated, must_be_isolated in _identity_variants():
+            ident_b = CacheIdentity(**mutated)
+            if not must_be_isolated:
+                # namespace_hint: documented NOT to affect identity.
+                assert ident_b.lmcache_model_name("mimo-pro") == \
+                    ident_a.lmcache_model_name("mimo-pro"), \
+                    "namespace_hint must NOT change the LMCache model_name"
+                continue
+            assert ident_b.namespace() != ident_a.namespace(), \
+                "changing %s must change the namespace" % field_name
+            name_b = ident_b.lmcache_model_name("mimo-pro")
+            assert name_b != ident_a.lmcache_model_name("mimo-pro"), \
+                "changing %s must change the LMCache model_name" % field_name
+
+            cli_b = LmcClient(rpc_url, name_b, instance_id=4200)
+            clients.append(cli_b)
+            assert cli_b.registered, \
+                "failed to register context for variant %s" % field_name
+            hits_b = cli_b.lookup_hits(tokens, "iso-lookup-B-%s" % field_name)
+            if hits_b is None:
+                pytest.fail(
+                    "[%s] LOOKUP not accepted for variant identity" % field_name)
+            if hits_b != 0:
+                pytest.fail(
+                    "[%s] ISOLATION BROKEN: identity variant saw %d/%d chunks "
+                    "of another configuration's KV (lmcache model_name %r vs %r)"
+                    % (field_name, hits_b, total_chunks,
+                       name_b, ident_a.lmcache_model_name("mimo-pro")))
+            cli_b.close()
+            clients.remove(cli_b)
+
+        print("\n[level 2b PASS] identity isolation proven at the LMCache API:")
+        print("  stored under: %s" % ident_a.lmcache_model_name("mimo-pro"))
+        print("  %d identity fields each -> 0/%d chunks (miss)"
+              % (len(list(_identity_variants())) - 1, total_chunks))
+    finally:
+        for cli in clients:
+            try:
+                cli.close()
+            except Exception:
+                pass
+        _stop_server(server, log, "isolation")
+
+
+@pytest.mark.skipif(
+    os.environ.get("KVP_LIVE_LMCACHE") != "1",
+    reason="known-limitation probe needs the pinned lmcache package (0.5.3)",
+)
+def test_cache_salt_isolation_gap_in_nixl_store_dynamic(tmp_path):
+    """Documents a REAL residual gap: `cache_salt` does NOT isolate L2 in 0.5.3.
+
+    ObjectKey includes cache_salt in equality/hash, but the nixl_store_dynamic
+    L2 file name is ``<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`` --
+    no salt. A secondary (disk) lookup after a restart therefore returns the
+    same object for ANY salt. This test proves the gap exists (and fails loudly
+    if upstream ever fixes it), so nobody mistakes cache_salt for an isolation
+    guarantee on this adapter. Use CacheIdentity.lmcache_model_name() or a
+    separate L2 root per tenant instead (see identity.py docstring).
+    """
+    from lmc_protocol_client import LmcClient, LMC_IMPORT_ERROR, build_token_ids
+
+    if LMC_IMPORT_ERROR is not None:
+        pytest.skip("lmcache runtime not importable: %s" % LMC_IMPORT_ERROR)
+
+    l2 = tmp_path / "l2"
+    adapter = _render_adapter(tmp_path, budget_gb="1")
+    log = tmp_path / "salt-gap.log"
+    zmq_port, http_port = _free_port(), _free_port()
+    tokens = build_token_ids(seq_no=13, num_tokens=_ISO_NUM_TOKENS)
+    total_chunks = 4
+
+    server = _start_server(adapter, zmq_port, http_port, log, "salt-gap")
+    cli = None
+    try:
+        _wait_ready(server, http_port, log)
+        cli = LmcClient("tcp://127.0.0.1:%d" % zmq_port, "mimo-pro/salt-probe",
+                        instance_id=4300)
+        assert cli.registered, "failed to register salt-probe context"
+        status = cli.store(tokens, "salt-store-A", cache_salt="tenantA")
+        assert status == "stored", "store under salt=tenantA failed: %s" % status
+        for _ in range(60):
+            if list(l2.glob("*.bin")):
+                break
+            time.sleep(1)
+
+        hits_same = cli.lookup_hits(tokens, "salt-lookup-A", cache_salt="tenantA")
+        hits_other = cli.lookup_hits(tokens, "salt-lookup-B", cache_salt="tenantB")
+        assert hits_same == total_chunks, \
+            "salt=tenantA must see its own data, got %s" % hits_same
+
+        if hits_other == 0:
+            pytest.fail(
+                "cache_salt isolation now WORKS in nixl_store_dynamic -- "
+                "update identity.py docstring, docs and this test: the "
+                "documented gap (salt not in L2 filename) appears FIXED upstream")
+        # Gap still present: document it, do not claim isolation.
+        print("\n[known limitation CONFIRMED] cache_salt does NOT isolate L2 "
+              "in the pinned nixl_store_dynamic adapter:\n"
+              "  store salt=tenantA, lookup salt=tenantB -> %d/%d chunks "
+              "returned (data leak across salts)" % (hits_other, total_chunks))
+        assert hits_other == total_chunks, \
+            "expected the documented full leak (%d/%d), got %d" \
+            % (total_chunks, total_chunks, hits_other)
+    finally:
+        if cli is not None:
+            cli.close()
+        _stop_server(server, log, "salt-gap")

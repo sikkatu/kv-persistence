@@ -29,6 +29,26 @@
 `docker inspect` 的实际引擎参数和 `config.json` 的模型几何核对 identity.env 的固定值。
 三种结果：VERIFIED(0) / MISMATCH(4) / **INCONCLUSIVE(5)**。
 INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
+## LMCache 存储级别的身份隔离（review P1-3）
+
+身份命名空间现在在**真实** LMCache 存储中强制隔离数据，而不仅是本地标签。
+已通过固定版 LMCache 0.5.3 源码和实际写入/查找运行验证（集成测试
+`test_identity_namespace_isolates_lmcache_storage`，见 docs/benchmarks.zh.md）：
+
+* LMCache 缓存键（`ObjectKey.model_name`）同时构成键和 `nixl_store_dynamic`
+  L2 文件名（`<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`）。
+* `CacheIdentity.lmcache_model_name()` 将命名空间嵌入该 `model_name`，
+  因此更改**任何**身份字段都会把数据移到不同的键和磁盘上不同的文件。
+  按字段证明：更改后的身份查找在 LMCache API 返回 `0/N` 分块，而原始身份
+  返回 `N/N`。
+* **残余缺口（已实测、被测试固定）**：`cache_salt` 参与键相等性，但**不**
+  参与 `nixl_store_dynamic` 文件名（fs/s3/bigtable 适配器会包含它）。
+  重启后，以**不同** salt 对相同 token 做二级（磁盘）查找可能返回原始 salt
+  的对象——实测：`store salt=tenantA`、`lookup salt=tenantB` -> `4/4` 分块。
+  在上游把 salt 加入文件名之前，**不要**依赖 `cache_salt` 做 L2 隔离：
+  把 per-tenant 判别符放进 `lmcache_model_name(extra_discriminator=...)`，
+  或为每个租户使用独立的 L2 缓存根目录。测试
+  `test_cache_salt_isolation_gap_in_nixl_store_dynamic` 会在上游修复时明确失败。
 
 ## 恢复测试 — v2 协议（根据审阅意见）
 
