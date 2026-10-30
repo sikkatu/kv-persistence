@@ -6,6 +6,67 @@ Measurement rules: every number must state request conditions (cold/warm,
 process state, cache state). A speedup WITHOUT proof of persistent disk recovery
 does NOT satisfy the primary milestone.
 
+## Test evidence levels (what each test proves)
+
+Three levels are kept strictly separate — never read one as another (review P1-2):
+
+| Level | Test / script | Proves | Does NOT prove |
+|---|---|---|---|
+| 1. File-level smoke | `tests/integration/test_l2_persistence.py::test_l2_file_survives_server_restart` | manually written files survive process termination | that LMCache can re-read its own objects |
+| 2. LMCache persistence round-trip | `tests/integration/test_l2_persistence.py::test_lmcache_store_restart_retrieve_roundtrip` | LMCache stores through its real MP protocol, the first server process is fully stopped, a **new** process on the same L2 directory retrieves the pre-restart objects and the chunk checksums match | that vLLM + MiMo-V2.6-Pro reuses the cache for a live chat |
+| 3. Full vLLM acceptance | `scripts/test-recovery.sh`, `tests/recovery/` | a real vLLM workload reuses persisted KV after the intended restarts (the project acceptance criterion) | — |
+
+### Level 2: LMCache persistence round-trip (synthetic KV, no vLLM, no GPU)
+
+This is the test that proves that **LMCache itself** can recover data from the
+L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
+
+* **Pinned version / API**: LMCache **0.5.3** (pin in `requirements-lmcache.txt`).
+  The test drives the real MP server protocol through the pinned CLI
+  `lmcache bench server` (`--mode cpu --transfer-mode engine_driven`):
+  `REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT`, `LOOKUP`,
+  `QUERY_PREFETCH_STATUS`, `PREPARE_STORE`/`COMMIT_STORE`,
+  `PREPARE_RETRIEVE`/`COMMIT_RETRIEVE` over ZMQ. Cache identity is token-hash
+  based and deterministic across invocations (`IPCCacheServerKey.request_id`
+  is excluded from key equality), so the same workload ids address the same
+  objects in a later run. Per-chunk MD5 of the KV bytes is reported as
+  `CHECKSUM: <digest> (N chunks)`. Note: `--l2-adapter` takes the adapter spec
+  as a JSON **string**, not a file path (0.5.3 `add_l2_adapters_args`).
+* **Dependencies**: Python 3.12, Linux with POSIX SHM (`/dev/shm`), the pinned
+  `lmcache==0.5.3` plus `nixl>=1.3.0` (the `nixl_store_dynamic` L2 adapter
+  imports `nixl`), torch (CPU build is enough), pytest. GPU, CUDA and vLLM are
+  NOT required.
+* **Command**:
+  ```bash
+  python3 -m venv ~/.venvs/lmcache
+  ~/.venvs/lmcache/bin/pip install -r requirements-lmcache.txt 'nixl>=1.3.0'
+  export PATH="$HOME/.venvs/lmcache/bin:$PATH"
+  KVP_LIVE_LMCACHE=1 python3 -m pytest tests/integration/test_l2_persistence.py \
+      -k roundtrip -v
+  ```
+* **What the test does**: renders the repository's L2 adapter template into an
+  isolated `tmp_path` cache root (production settings preserved: POSIX backend,
+  `persist_enabled=true`), starts a real `lmcache server` on dynamically
+  allocated ports, stores a deterministic multi-chunk synthetic KV workload
+  through the real protocol, waits for the adapter's own `*.bin` data files to
+  appear, terminates the server process completely, starts a **fresh** process
+  on the same L2 directory and retrieves the pre-restart objects — with ZERO
+  new stores after the restart. The warm-pass chunk checksum (computed after
+  the client zero-filled its buffers and RETRIEVE wrote the data back) must
+  equal the pre-restart ground-truth checksum.
+* **PASS evidence**: `LOOKUP: N/N chunks hit` on the fresh server,
+  `RETRIEVE: retrieved`, no `STORE: stored` line after the restart, matching
+  `CHECKSUM` digests, and a negative control (same workload, empty L2
+  directory) reporting `0/N` chunks — so a full hit cannot be a false positive.
+* **Failure inspection**: every server's stdout/stderr and every bench output
+  is appended to `<tmp_path>/roundtrip.log`; failure messages name the failed
+  step (startup / store / stop / new startup / cache miss / retrieve / checksum
+  mismatch) and end with the log tail. Rerun with `-s` to see the PASS summary,
+  or use `pytest --basetmp=/some/dir` to keep the temporary directory.
+* **Scope limitation**: the workload is synthetic KV tensors. This test proves
+  level 2 only; the vLLM + MiMo-V2.6-Pro + `MAX_NUM_SEQS=2` Operit-chat scenario
+  must be proven separately by `scripts/test-recovery.sh` (level 3).
+
 ## Matrix (5 configurations × 3 prompt scales)
 
 | # | Configuration | What it isolates |

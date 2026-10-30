@@ -71,6 +71,12 @@ PIDF="$ROOT_PATH/lmcache-server.pid"
 # session or dropping the connection will NOT kill the cache service. nohup
 # additionally shields it from HUP. Both matter because the service is meant
 # to outlive the operator's shell.
+# --l2-adapter takes the adapter spec as a JSON STRING (lmcache 0.5.3:
+# lmcache/v1/distributed/l2_adapters/config.py add_l2_adapters_args does
+# json.loads(raw) on the value). Passing the file PATH fails with
+# "Invalid JSON for --l2-adapter #1", so the rendered file is passed inline;
+# the file itself is still written for inspection and for the tests.
+ADAPTER_JSON_ARGS="$(cat "$ADAPTER_JSON")"
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   # Review 2C: explicit loopback-bound port mapping instead of --network host,
@@ -86,7 +92,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
     --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
     --chunk-size "$LMCACHE_CHUNK_SIZE" \
-    --l2-adapter "$ADAPTER_JSON" \
+    --l2-adapter "$ADAPTER_JSON_ARGS" \
     ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
     ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
     ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
@@ -99,7 +105,7 @@ else
     --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
     --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
     --chunk-size "$LMCACHE_CHUNK_SIZE" \
-    --l2-adapter "$ADAPTER_JSON" \
+    --l2-adapter "$ADAPTER_JSON_ARGS" \
     ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
     ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
     ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \

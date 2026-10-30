@@ -59,6 +59,12 @@ export PATH="$HOME/.venvs/lmcache/bin:$PATH"
 版本已固定（lmcache==X.Y.Z）并与 vLLM 镜像组合记录。安装成功 ≠ ABI 兼容已证明：
 最终验收需要 lmcache server --help、包导入检查和目标硬件上的完整恢复场景。
 
+**关于固定 CLI 0.5.3 的说明**：`lmcache server --l2-adapter` 接收 JSON
+**字符串**形式的适配器规格，而不是 JSON 文件路径。`start-cache.sh` 会自动
+处理（内联传入渲染后的规格），但手动启动服务器时请传
+`--l2-adapter "$(cat l2-adapter.rendered.json)"`，而不是
+`--l2-adapter l2-adapter.rendered.json`。
+
 ## 4. 预检
 
 ```bash

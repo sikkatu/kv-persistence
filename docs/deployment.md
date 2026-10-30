@@ -82,12 +82,17 @@ The LMCache version is **pinned** in `requirements-lmcache.txt` (`lmcache==X.Y.Z
 together with the documented vLLM image combination — an unpinned install can
 resolve to a release that changed the MP-connector protocol or the L2 adapter
 behaviour. Do not upgrade lmcache without replaying `scripts/test-recovery.sh`.
-
 > LMCache must be the release channel matched to the pinned vLLM/PyTorch
 > runtime of the production image — see docs/compatibility.md. If plain pip
 > wheels mismatch the image ABI, run the `lmcache server` from the same image
 > (`docker run --rm --entrypoint lmcache "$IMAGE" server …`) and adapt
 > `scripts/start-cache.sh`; the arguments stay identical.
+
+**Note for the pinned 0.5.3 CLI**: `lmcache server --l2-adapter` takes the
+adapter spec as a JSON **string**, not a path to a JSON file. `start-cache.sh`
+handles this automatically (it inlines the rendered spec), but if you start the
+server by hand, pass `--l2-adapter "$(cat l2-adapter.rendered.json)"` rather
+than `--l2-adapter l2-adapter.rendered.json`.
 
 ## 4. Preflight
 
