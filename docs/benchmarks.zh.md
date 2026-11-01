@@ -79,14 +79,16 @@
   connector_version、max_model_len、chat_template_digest），更改后的身份在
   LMCache API 得到 `0/N` 分块。`namespace_hint` 被断言为不影响任何内容（它是
   人类可读标签）。
-* **已知缺口（实测，未隐藏）**：`cache_salt` 参与键的相等性，但**不**参与
-  `nixl_store_dynamic` 文件名（fs/s3/bigtable 适配器会包含它）。因此在重启后
-  以**不同** salt 对相同 token 做二级（磁盘）查找，可能返回原始 salt 的对象。
-  实测：`store salt=tenantA`、`lookup salt=tenantB` -> 返回 `4/4` 分块。
-  测试 `test_cache_salt_isolation_gap_in_nixl_store_dynamic` 固定该行为，
-  若上游修复则会明确失败。**不要依赖 `cache_salt` 做 L2 层隔离**：把
-  per-tenant 判别符放进 `lmcache_model_name(extra_discriminator=...)`，
-  或为每个租户使用独立的 L2 缓存根目录。
+* **cache_salt 缺口已在磁盘键层面修复（第 15 轮）**：上游 0.5.3 不把 salt 写入
+  `nixl_store_dynamic` 文件名——实测跨租户泄漏（salt=tenantA 写入 →
+  salt=tenantB 查找返回 4/4 分块，重启后）。本仓库的
+  `kvpersist/salt_filename_patch.py` 把 salt 追加到 L2 文件名；所有启动器
+  都通过它启动服务器。实测：`store salt=tenantA`、`lookup salt=tenantB`
+  = `0/4`（`test_cache_salt_isolates_l2_storage` 现在**要求**隔离成立，
+  泄漏复现即明确失败）。不带补丁运行裸 `lmcache server` 保持上游行为：
+  此时**不要**依赖 `cache_salt`——用
+  `lmcache_model_name(extra_discriminator=...)` 或为每个租户使用独立的
+  L2 缓存根目录。
 
 ## 矩阵（5 种配置 × 3 种提示规模）
 

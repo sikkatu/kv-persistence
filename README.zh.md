@@ -43,7 +43,11 @@
   自动 LRU 淘汰；缓存绝不在启动时自行清空。
 * **兼容性命名空间** —— 模型版本、分词器、KV 类型、块布局与聊天模板都是
   缓存键的一部分：不兼容的部署绝不互读 KV 数据；任何不确定性都导致未命中，
-  而非错误命中。
+  而非错误命中。命名空间通过 `lmcache_model_name()`（嵌入构成 ObjectKey 与
+  L2 文件名的 `model_name`）在 LMCache 存储层强制生效。按用户/租户隔离请用
+  `cache_salt`（第 15 轮已由 `kvpersist/salt_filename_patch.py` 在磁盘键层面
+  修复，所有启动器均使用）或 `lmcache_model_name(extra_discriminator=...)` /
+  独立缓存根目录。
 * **模型无关内核** —— 缓存策略与模型集成分离；新增模型只需加配置，不改代码。
   不同模型的 KV 数据绝不共享。
 

@@ -90,17 +90,17 @@ configurations in REAL LMCache storage — not only in local labels.
   max_model_len, chat_template_digest) the changed identity gets `0/N`
   chunks at the LMCache API. `namespace_hint` is asserted NOT to change
   anything (it is a human label).
-* **Known gap (measured, not hidden)**: `cache_salt` is part of the key's
-  equality but NOT part of the `nixl_store_dynamic` file name (the fs/s3/
-  bigtable adapters do include it). A secondary (disk) lookup of the same
-  tokens under a DIFFERENT salt can therefore return the original salt's
-  objects after a restart. Measured live: `store salt=tenantA`,
-  `lookup salt=tenantB` -> `4/4` chunks returned. The test
-  `test_cache_salt_isolation_gap_in_nixl_store_dynamic` pins this behaviour
-  and fails loudly if upstream ever fixes it. **Do not rely on `cache_salt`
-  for isolation on the L2 tier**: put the per-tenant discriminator into
-  `lmcache_model_name(extra_discriminator=...)` or use a separate L2 cache
-  root per tenant.
+* **cache_salt gap RESOLVED at the disk-key level (round 15)**: upstream
+  0.5.3 omits the salt from the `nixl_store_dynamic` file name -- a measured
+  cross-tenant leak (store salt=tenantA -> lookup salt=tenantB = 4/4 chunks
+  after restart). This repo's `kvpersist/salt_filename_patch.py` appends the
+  salt to the L2 file name; ALL launchers start the server through it.
+  Verified live: store salt=tenantA -> lookup salt=tenantB = 0/4
+  (`test_cache_salt_isolates_l2_storage`, which now REQUIRES isolation and
+  fails loudly if the leak reappears). Running a bare `lmcache server`
+  WITHOUT the patch keeps the upstream behaviour: do NOT rely on `cache_salt`
+  for isolation then -- use `lmcache_model_name(extra_discriminator=...)`
+  or a separate cache root per tenant.
 
 ## Matrix (5 configurations × 3 prompt scales)
 

@@ -102,17 +102,17 @@ live store/lookup run (integration test
   key AND a different file on disk. Proven per field: the changed identity's
   lookup returns `0/N` chunks at the LMCache API where the original returns
   `N/N`.
-* **Residual gap (measured, pinned by a test)**: `cache_salt` is part of the
-  key's equality but NOT part of the `nixl_store_dynamic` file name (the
-  fs/s3/bigtable adapters do include it). After a restart, a secondary (disk)
-  lookup of the same tokens under a DIFFERENT salt can return the original
-  salt's objects — measured live: `store salt=tenantA`, `lookup salt=tenantB`
-  -> `4/4` chunks. Until upstream includes the salt in the file name, do NOT
-  rely on `cache_salt` for isolation on the L2 tier: put the per-tenant
-  discriminator into `lmcache_model_name(extra_discriminator=...)` or use a
-  separate L2 cache root per tenant. The test
-  `test_cache_salt_isolation_gap_in_nixl_store_dynamic` fails loudly if
-  upstream ever fixes this.
+* **Residual gap — RESOLVED at the disk-key level (round 15)**: `cache_salt` is
+  part of the key's equality but upstream `nixl_store_dynamic` does NOT put it
+  into the file name (the fs/s3/bigtable adapters do include it). The measured
+  leak (`store salt=tenantA`, `lookup salt=tenantB` -> `4/4` chunks after a
+  restart) is closed by `kvpersist/salt_filename_patch.py`, which appends the
+  salt to the L2 file name and is used by ALL launchers. Verified live:
+  `store salt=tenantA`, `lookup salt=tenantB` -> `0/4` chunks
+  (`test_cache_salt_isolates_l2_storage` fails loudly if the leak returns).
+  Running a bare `lmcache server` WITHOUT the patch keeps the upstream
+  behaviour: use `lmcache_model_name(extra_discriminator=...)` or a separate
+  cache root per tenant then.
 
 ## NVMe bytes per cached token
 

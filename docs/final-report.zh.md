@@ -41,14 +41,15 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
   因此更改**任何**身份字段都会把数据移到不同的键和磁盘上不同的文件。
   按字段证明：更改后的身份查找在 LMCache API 返回 `0/N` 分块，而原始身份
   返回 `N/N`。
-* **残余缺口（已实测、被测试固定）**：`cache_salt` 参与键相等性，但**不**
-  参与 `nixl_store_dynamic` 文件名（fs/s3/bigtable 适配器会包含它）。
-  重启后，以**不同** salt 对相同 token 做二级（磁盘）查找可能返回原始 salt
-  的对象——实测：`store salt=tenantA`、`lookup salt=tenantB` -> `4/4` 分块。
-  在上游把 salt 加入文件名之前，**不要**依赖 `cache_salt` 做 L2 隔离：
-  把 per-tenant 判别符放进 `lmcache_model_name(extra_discriminator=...)`，
-  或为每个租户使用独立的 L2 缓存根目录。测试
-  `test_cache_salt_isolation_gap_in_nixl_store_dynamic` 会在上游修复时明确失败。
+* **残余缺口——已在磁盘键层面修复（第 15 轮）**：`cache_salt` 参与键相等性，
+  但上游 `nixl_store_dynamic` **不**把它写入文件名（fs/s3/bigtable 适配器会
+  包含）。实测泄漏（`store salt=tenantA`、`lookup salt=tenantB` -> 重启后
+  `4/4` 分块）已由 `kvpersist/salt_filename_patch.py` 关闭——该补丁把 salt
+  追加到 L2 文件名，所有启动器均使用。实测验证：
+  `store salt=tenantA`、`lookup salt=tenantB` -> `0/4` 分块
+  （`test_cache_salt_isolates_l2_storage` 在泄漏复现时明确失败）。不带补丁
+  运行裸 `lmcache server` 保持上游行为：此时请用
+  `lmcache_model_name(extra_discriminator=...)` 或独立缓存根目录。
 
 ## 恢复测试 — v2 协议（根据审阅意见）
 

@@ -583,11 +583,13 @@ def test_lmcache_store_restart_retrieve_roundtrip(tmp_path):
 #   name; this test drives it through the real MP protocol (see
 #   lmc_protocol_client.py) and checks LOOKUP results per changed field.
 #
-# The test also documents a REAL residual gap with a negative assertion:
-# `cache_salt` is NOT part of the nixl_store_dynamic file name, so two
-# different salts CAN see each other's data after a restart. This is asserted
-# as a known upstream limitation (not silently passed) via
-# `test_cache_salt_isolation_gap_in_nixl_store_dynamic`.
+# The test also proves per-user isolation through `cache_salt`: the
+# kv-persistence filename patch (kvpersist.salt_filename_patch, which the
+# launcher used here installs) appends the salt to the nixl_store_dynamic
+# file name, so two different salts map to DIFFERENT files. Upstream 0.5.3
+# omits the salt from the file name (measured leak after restart); the patch
+# closes it at the disk-key level. Asserted by
+# `test_cache_salt_isolates_l2_storage` (leak == hard failure).
 
 _ISO_NUM_TOKENS = 63      # + 1 leading id = 64 tokens = 4 chunks of 16
 
