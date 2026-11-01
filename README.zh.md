@@ -81,17 +81,93 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 
 生产配方中的常驻开关是 `tp4.env` 里的 `KV_PERSIST=1`
 （见 wiki「配方集成」）；回滚只需删除这一行。
+## 无损持久化
+L2 层**只支持无损**。NVMe 上的 KV 块始终被解码为引擎产生的原始字节：项目中
+不存在 fp8 / turboquant / lbq 量化，任何此类编解码在启动时都会被明确拒绝。
+提供两种存储模式：
+* **逐字节精确的原始模式（默认）** —— `LMCACHE_L2_SERDE=none`。块按原样存储，
+  与未压缩的 upstream 路径完全一致。不做任何变换；缓存命中返回引擎的
+  原始 KV 字节。
+* **无损压缩（可选）** —— `LMCACHE_L2_SERDE=zstd` 或 `lz4`
+  （或 `USE_LOSSLESS_SERDE` 开关，见下）。块由 `implementation/kvpersist/
+  compress_serde.py` 注册的无损 `kvp-zstd` / `kvp-lz4` serde 压缩。
+  未能压缩变小的块按原样存储，因此块永不膨胀。预期缩减幅度温和 ——
+  真实 KV 负载约 **1.1–1.4x**（zstd 压缩率更高，lz4 速度更快）。
+为单次运行启用无损压缩：
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
+USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
+```
+或在 `configs/generic/lmcache-server.env(.local)` 中永久设置：
+```bash
+LMCACHE_L2_SERDE=zstd
+```
+编解码属于缓存身份命名空间的一部分：在 `none`、`zstd` 与 `lz4` 之间切换会让
+已存储的块变成安全的缓存 **miss**（绝不会错误命中），并且每个启动器
+（`start-cache.sh`、`run-vllm-with-persist.sh`、`verify-engine-identity.sh`）
+都会把开关解析为同一个生效值。
+## 监控（Prometheus + Grafana）
+`observability/` 目录内置了官方 LMCache 示例的完整可观测性栈
+（OTel Collector + Tempo + Prometheus + Grafana），并**已预置官方 LMCache
+仪表盘**。一条命令即可启动全部：
+```bash
+bash scripts/start-observability.sh
+# 或等价地：
+cd observability && docker compose up -d
+```
+* **Grafana** → <http://localhost:3000>（匿名 Admin，无需登录）。
+  *LMCache* 与 *LMCache Coordinator* 仪表盘会自动导入。
+* **Prometheus** → <http://localhost:9091>
+* **Tempo** → <http://localhost:3200>（跟踪）
+* **OTLP gRPC** → `localhost:4320` —— 缓存服务向此推送指标。
+把缓存服务指向收集器并启用遥测（默认关闭，缓存不依赖它也能完整工作）：
+```bash
+USE_OBSERVABILITY=1 bash scripts/start-cache.sh
+# 或显式指定：
+KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+```
+LMCache 仪表盘上值得关注的面板：
+| 面板 | 含义 |
+|---|---|
+| cache hit rate | 每个请求的命中/未命中比 —— 首要健康指标 |
+| L1 / L2 usage | 各层占用与容量（L1 = 主机内存，L2 = NVMe） |
+| store / retrieve throughput | 写入/读取 NVMe 的每秒字节数 |
+| evictions | 各层 LRU 淘汰 —— 速率上升意味着预算过小 |
+| restore (prefetch) time | 重启后的服务多快从 NVMe 回填 L1 |
+用 `bash scripts/start-observability.sh --down` 停止该栈（数据卷保留）。
+## 面向约 200 GB KV 的容量建议
+KV 最多约 200 GB 的会话需要空间容纳这些数据并留有增长余量：
+| 参数 | 建议 |
+|---|---|
+| `KVP_L1_SIZE_GB`（主机内存缓冲） | 30–40 GB |
+| `KVP_CACHE_BUDGET_GB`（L2 硬上限） | 在**专用本地 NVMe** 上 ≥ 250–300 GB |
+| `KVP_CACHE_ROOT` | 该 NVMe 上的路径，绝不用网络共享 |
+| `KVP_CACHE_DEVICE` | 固定块设备，以便 `preflight.sh` 证明缓存位于正确磁盘 |
+随附默认预算为 1500 GB，因为参考主机上 OS、模型与缓存共用一个卷；
+在专用 NVMe 上请将其降至 300 GB。`KVP_CACHE_BUDGET_GB`、
+`KVP_CACHE_ROOT` 与 `KVP_CACHE_DEVICE` 均位于
+`configs/generic/cache.env(.local)`。
+## 快速开始：无损 + Grafana
+```bash
+# 1. 监控（可选但推荐）
+bash scripts/start-observability.sh
 
+# 2. 无损模式下的 LMCache + vLLM
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+`USE_LOSSLESS_SERDE` 在两条命令中必须一致 —— 它属于缓存身份命名空间。
+不设置该变量即保持逐字节精确的原始模式。
 ## 仓库结构
-
 | 路径 | 内容 |
 |---|---|
 | `docs/` | 英文技术文档（各语言版本在 wiki） |
 | `configs/generic/` | 缓存 + lmcache 服务配置，EN/RU/ZH 注释译文 |
 | `configs/mimo-v2.6-pro/` | MiMo 身份固定与 L2 适配器模板，EN/RU/ZH |
-| `scripts/` | 预检、缓存启停、启动器、恢复测试、基准、管理 CLI |
-| `implementation/` | `kvpersist` 包：身份、预算、保留排序、管理 CLI |
-| `tests/` | 单元（74 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
+| `scripts/` | 预检、缓存启停、启动器、恢复测试、基准、管理 CLI、可观测性 |
+| `observability/` | Prometheus + Grafana + Tempo + OTel Collector 栈，含官方 LMCache 仪表盘 |
+| `implementation/` | `kvpersist` 包：身份、预算、保留排序、管理 CLI、运行时补丁 |
+| `tests/` | 单元（随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
 
 ## 状态
 

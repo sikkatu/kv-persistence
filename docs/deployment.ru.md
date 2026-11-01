@@ -112,6 +112,32 @@ bash scripts/start-cache.sh
 `lmcache server` отвязанно (`setsid nohup`; pid-файл и лог — под `KVP_CACHE_ROOT`).
 Ранее закэшированные данные сохраняются — автоматической очистки при старте нет.
 
+### Lossless-кодек L2 (опционально)
+
+По умолчанию уровень L2 хранит **байт-точные сырые** чанки
+(`LMCACHE_L2_SERDE=none`) — идентично несжатому upstream-пути, вообще без
+преобразования. Чтобы хранить их со lossless-сжатием (скромное, примерно
+1.1–1.4x на реальных KV-данных), выберите кодек:
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
+USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
+```
+
+или постоянно в `configs/generic/lmcache-server.env(.local)`:
+
+```bash
+LMCACHE_L2_SERDE=zstd     # или lz4, или none
+```
+
+В проекте **нет lossy-квантизации** (fp8 / turboquant / lbq громко отвергаются
+при старте). Кодек входит в namespace идентичности кэша: смена кодека превращает
+ранее сохранённые чанки в безопасный cache miss (никогда не в неверное чтение),
+поэтому используйте одно и то же значение во всех лаунчерах.
+
+`KVP_L2_COMPRESS_LEVEL` (только zstd, дефолт 3, диапазон 1–19) меняет баланс
+между коэффициентом сжатия и скоростью записи.
+
 ## 6. Запуск vLLM с постоянным KV-коннектором
 
 ```bash
@@ -139,6 +165,23 @@ bash scripts/budget-report.sh status      # занято, пространств
 bash scripts/budget-report.sh quota       # квоты по пространствам
 bash scripts/budget-report.sh purge --help
 ```
+
+### Prometheus + Grafana (опционально)
+
+Полный стек наблюдаемости (OTel Collector + Tempo + Prometheus + Grafana)
+лежит в `observability/` с уже предустановленными официальными дашбордами
+LMCache:
+
+```bash
+bash scripts/start-observability.sh
+# Grafana -> http://localhost:3000 (анонимный Admin, без входа)
+```
+
+Затем направьте сервис кэша на коллектор, чтобы пошли метрики
+(`KVP_OTLP_ENDPOINT=http://localhost:4320` или короткая запись
+`USE_OBSERVABILITY=1`). Телеметрия по умолчанию выключена: кэш полноценно
+работает и без стека. Подробности и список панелей — в
+`observability/README.ru.md`.
 ## Запуск сервиса кэша под systemd (опционально)
 
 Вместо `scripts/start-cache.sh` (`setsid nohup`) сервис может работать как

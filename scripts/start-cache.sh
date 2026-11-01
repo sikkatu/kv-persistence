@@ -35,22 +35,40 @@ esac
 # so probing on the host silently unsets all optional flags AND made the later
 # `${LMCACHE_HTTP_PORT}` expansion fail with "unbound variable" (set -u). Probe
 # inside the container in docker mode; on the host only in host mode.
-# Review round 15: the server is started through the kv-persistence filename
-# patch (kvpersist.salt_filename_patch) so that cache_salt is embedded in the
-# L2 file names -- the only disk-level fix for the measured cross-salt leak.
-# The probe must run through the same launcher to match the actual server.
+# Review round 15: the server is started through the kv-persistence launcher
+# (kvpersist.launch) which applies BOTH runtime patches: the cache_salt
+# filename fix AND the lossless compression serde registration. The probe must
+# run through the same launcher to match the actual server.
 export PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}"
-LAUNCH=(python3 -m kvpersist.salt_filename_patch)
+LAUNCH=(python3 -m kvpersist.launch)
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   LMCACHE_HELP="$(docker run --rm -v "$ROOT/implementation:/kvp-impl:ro" \
     -e PYTHONPATH=/kvp-impl --entrypoint python3 "$DOCKER_IMAGE" \
-    -m kvpersist.salt_filename_patch server --help 2>&1 || true)"
+    -m kvpersist.launch server --help 2>&1 || true)"
 else
   LMCACHE_HELP="$("${LAUNCH[@]}" server --help 2>&1 || true)"
 fi
 case "$LMCACHE_HELP" in *--http-host*) : ;; *) unset LMCACHE_HTTP_HOST ;; esac
 case "$LMCACHE_HELP" in *--http-port*) : ;; *) unset LMCACHE_HTTP_PORT ;; esac
-case "$LMCACHE_HELP" in *--l2-serde*|*--serde*) : ;; *) unset LMCACHE_L2_SERDE ;; esac
+# OTLP push for the observability stack (scripts/start-observability.sh).
+# Off by default: the cache must start and work WITHOUT the monitoring stack.
+# Enabled by KVP_OTLP_ENDPOINT (e.g. http://localhost:4320) or
+# USE_OBSERVABILITY=1 which assumes the collector on its default port.
+case "${USE_OBSERVABILITY:-}" in
+  1|yes|true) LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-http://localhost:4320}" ;;
+esac
+LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-${KVP_OTLP_ENDPOINT:-}}"
+if [ -n "$LMCACHE_OTLP_ENDPOINT" ]; then
+  case "$LMCACHE_HELP" in
+    *--otlp-endpoint*) : ;;
+    *) echo "WARNING: this lmcache build has no --otlp-endpoint flag -- metrics will NOT reach the collector" >&2
+       LMCACHE_OTLP_ENDPOINT="" ;;
+  esac
+fi
+# NOTE: there is NO --l2-serde CLI flag in LMCache 0.5.3 -- serde is part of the
+# --l2-adapter JSON ("serde" sub-dict), rendered below from __KVP_L2_SERDE_JSON__.
+# The codec is therefore never dropped here; it is validated when the JSON is
+# built and the server refuses to start if the requested codec is unavailable.
 # The optional-flag expansions below use ${VAR:+...}, which is safe under
 # `set -u` even when the variable is unset -- but the *log line* at the end
 # referenced ${LMCACHE_HTTP_PORT} unconditionally. Use a safe fallback there.
@@ -58,12 +76,33 @@ BUDGET_GB="${KVP_CACHE_BUDGET_GB:?}"
 ROOT_PATH="${KVP_CACHE_ROOT:?}"
 mkdir -p "$ROOT_PATH"; chmod 700 "$ROOT_PATH"
 
+# ---- Lossless L2 codec (task: lossless ONLY, never lossy) -----------------
+# USE_LOSSLESS_SERDE is folded into the exported LMCACHE_L2_SERDE by
+# scripts/env.sh (_kvp_resolve_l2_serde), so start-cache.sh, the identity gate
+# and the Python loader all agree on one value. Accepted values:
+#   none|raw = byte-exact raw chunks (no "serde" key in the adapter JSON).
+#   zstd|lz4 = lossless compression (the kvp-zstd / kvp-lz4 serde types
+#              registered by kvpersist.compress_serde).
+# Anything lossy (fp8, turboquant, lbq, cachegen, kivi) is REFUSED loudly:
+# this project is lossless by contract and the decoded KV must be bit-exact.
+LMCACHE_L2_SERDE="$(printf '%s' "${LMCACHE_L2_SERDE:-none}" | tr '[:upper:]' '[:lower:]')"
+case "$LMCACHE_L2_SERDE" in
+  none|raw) SERDE_JSON="" ;;
+  zstd|lz4) SERDE_JSON="\"serde\": {\"type\": \"kvp-$LMCACHE_L2_SERDE\", \"level\": \"${KVP_L2_COMPRESS_LEVEL:-3}\", \"align_bytes\": \"4096\"}," ;;
+  fp8|turboquant|lbq|cachegen|kivi|asym*)
+    die "LMCACHE_L2_SERDE=$LMCACHE_L2_SERDE is LOSSY and is not supported by kv-persistence.
+The L2 tier is lossless-only: decoded KV must be bit-identical to the engine
+cache. Use none (byte-exact raw), zstd or lz4." ;;
+  *) die "LMCACHE_L2_SERDE=$LMCACHE_L2_SERDE not understood (use none / zstd / lz4)" ;;
+esac
+
 # Render the L2 adapter spec from the single source of truth.
 ADAPTER_JSON="$ROOT_PATH/l2-adapter.rendered.json"
 sed -e "s|__KVP_CACHE_ROOT__|$ROOT_PATH|" \
     -e "s|__KVP_CACHE_BUDGET_GB__|$BUDGET_GB|" \
     -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${KVP_EVICT_TRIGGER_WATERMARK:-0.9}|" \
     -e "s|__KVP_EVICT_RATIO__|${KVP_EVICT_RATIO:-0.1}|" \
+    -e "s|__KVP_L2_SERDE_JSON__|$SERDE_JSON|" \
     "$ROOT/configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in" \
   | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)' \
   > "$ADAPTER_JSON" || die "L2 adapter JSON is invalid after render — check configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in"
@@ -71,6 +110,8 @@ echo "L2 adapter rendered: $ADAPTER_JSON"
 echo "  tier   : nixl_store_dynamic / POSIX  persist=${KVP_PERSIST_ENABLED:-true}"
 echo "  path   : $ROOT_PATH"
 echo "  budget : ${BUDGET_GB} GB hard, soft-watermark ${KVP_EVICT_TRIGGER_WATERMARK:-0.9}"
+echo "  codec  : ${LMCACHE_L2_SERDE} $([ -n "$SERDE_JSON" ] && echo '(lossless serde active)' || echo '(lossless raw, byte-exact)')"
+echo "  otlp   : ${LMCACHE_OTLP_ENDPOINT:-<disabled>} (metrics/traces push)"
 
 if [ "${KVP_PERSIST_ENABLED:-true}" != "true" ]; then
   die "KVP_PERSIST_ENABLED=${KVP_PERSIST_ENABLED:-} is not supported: it contradicts the persistence
@@ -116,7 +157,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     -v "$ROOT_PATH:$ROOT_PATH" \
     -v "$ROOT/implementation:/kvp-impl:ro" \
     -e PYTHONPATH=/kvp-impl \
-    "$DOCKER_IMAGE" python3 -m kvpersist.salt_filename_patch server \
+    "$DOCKER_IMAGE" python3 -m kvpersist.launch server \
     --host 0.0.0.0 --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
     --eviction-policy "$LMCACHE_EVICTION_POLICY" \
@@ -126,7 +167,8 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     --l2-adapter "$ADAPTER_JSON_ARGS" \
     ${LMCACHE_HTTP_HOST:+--http-host 0.0.0.0} \
     ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
-    ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
+    ${LMCACHE_OTLP_ENDPOINT:+--otlp-endpoint "$LMCACHE_OTLP_ENDPOINT"} \
+    ${LMCACHE_OTLP_ENDPOINT:+--enable-tracing} \
     >>"$LOG" 2>&1 &
 else
   setsid nohup "${LAUNCH[@]}" server \
@@ -139,7 +181,8 @@ else
     --l2-adapter "$ADAPTER_JSON_ARGS" \
     ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
     ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
-    ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
+    ${LMCACHE_OTLP_ENDPOINT:+--otlp-endpoint "$LMCACHE_OTLP_ENDPOINT"} \
+    ${LMCACHE_OTLP_ENDPOINT:+--enable-tracing} \
     >>"$LOG" 2>&1 &
 fi
 echo $! > "$PIDF"

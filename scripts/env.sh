@@ -49,6 +49,32 @@ _kvp_seed(){ # _kvp_seed <file> <pre>: export assignments; skip names listed
   done < "$1"
 }
 
+_kvp_resolve_l2_serde(){
+  # Fold the operator switch USE_LOSSLESS_SERDE into the effective
+  # LMCACHE_L2_SERDE and EXPORT the result, so EVERY consumer (start-cache.sh,
+  # run-vllm-with-persist.sh, verify-engine-identity.sh and the Python identity
+  # loader) computes the SAME cache-identity namespace. Without this a
+  # `USE_LOSSLESS_SERDE=1` launch would store zstd chunks while the identity
+  # gate still hashed the namespace as "none" -- two deployments sharing a
+  # cache root would then silently cross-read each other's data.
+  #
+  # Accepted USE_LOSSLESS_SERDE values:
+  #   1 / yes / true / zstd -> zstd
+  #   lz4                   -> lz4
+  #   0 / no / false / none / "" -> keep the configured LMCACHE_L2_SERDE
+  case "${USE_LOSSLESS_SERDE:-}" in
+    1|yes|true|zstd) LMCACHE_L2_SERDE=zstd ;;
+    lz4)             LMCACHE_L2_SERDE=lz4 ;;
+    0|no|false|none|"") : ;;
+    *)
+      echo "ERROR: USE_LOSSLESS_SERDE=${USE_LOSSLESS_SERDE} not understood (use 1 / zstd / lz4 / 0)" >&2
+      return 1 ;;
+  esac
+  LMCACHE_L2_SERDE="$(printf '%s' "${LMCACHE_L2_SERDE:-none}" | tr '[:upper:]' '[:lower:]')"
+  export LMCACHE_L2_SERDE
+  return 0
+}
+
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
   # Universal model-config selector (review: no hardcoded model dir).
@@ -82,4 +108,9 @@ _kvp_load_env(){ # _kvp_load_env <repo root>
   _kvp_seed "$root/configs/generic/cache.env.local"           "$pre"
   _kvp_seed "$root/configs/generic/lmcache-server.env.local"  "$pre"
   _kvp_seed "$root/configs/$model_cfg/identity.env.local"     "$pre"
+  # Fold USE_LOSSLESS_SERDE into the exported LMCACHE_L2_SERDE so the
+  # cache-identity namespace (kvpersist.identity) matches what the server
+  # actually stores. Failure is fatal: a mismatched namespace would let one
+  # codec's chunks be read back under another.
+  _kvp_resolve_l2_serde || return 1
 }

@@ -103,7 +103,27 @@ differ); adjust serialization or accept the limitation — do not force caching
 by truncating history (forbidden by the project rules).
 
 ## Recovery of a corrupted cache file
-
 Corruption is tolerated (lookups fall through to recompute). To clean: stop the
 service and `purge --all --yes`, then start again — this is the documented
 explicit cleanup, never automatic.
+
+## Lossless codec problems
+* `CodecError: zstandard/lz4 python bindings not installed` — the selected
+  codec needs its Python package. Install it in the lmcache venv
+  (`pip install zstandard lz4`, see requirements-lmcache.txt) or fall back to
+  `LMCACHE_L2_SERDE=none` (byte-exact raw, no extra dependency).
+* `LMCACHE_L2_SERDE=... is LOSSY and is not supported` — expected: this project
+  is lossless-only. Use `none`, `zstd` or `lz4`.
+* Switched the codec and cache hits disappeared — expected and safe: the codec
+  is part of the cache-identity namespace, so old chunks become a cache miss.
+  Re-store them (or switch back) — never a wrong read.
+* Compressed chunks not smaller on disk — the codec only shrinks what actually
+  compresses; incompressible blocks are stored raw and padded to the 4 KiB page
+  size. On tiny chunks the per-chunk header (24 B) can dominate.
+
+## Grafana shows no data
+The stack is passive until the cache service pushes telemetry. Start the cache
+with `USE_OBSERVABILITY=1` (or `KVP_OTLP_ENDPOINT=http://localhost:4320`) and
+check `KVP_CACHE_ROOT/lmcache-server.log` for the `[kvp]` banner and an
+`--otlp-endpoint` line. Also confirm the collector is reachable on the host
+that runs the cache service (`curl -s localhost:4320` — the OTLP gRPC port).

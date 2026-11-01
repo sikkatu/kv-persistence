@@ -279,6 +279,59 @@ before measuring).
   KV dtype remains part of the cache identity -- a dtype change is a MISS,
   never a wrong-format read.
 
+## Lossless L2 codec and observability stack (task round)
+
+The brief asked for two additions, both implemented WITHOUT forking LMCache and
+without touching the production recipe:
+
+### 1. Lossless-only L2 storage
+
+Upstream LMCache 0.5.3 registers only lossy (fp8, turboquant) and encryption
+(aesgcm) serdes -- there is NO lossless compression serde upstream. This repo
+adds one via `implementation/kvpersist/compress_serde.py`, which registers the
+`kvp-zstd` / `kvp-lz4` / `kvp-raw` serde types in LMCache's own registry at
+runtime (same launcher pattern as the salt filename patch, now unified in
+`implementation/kvpersist/launch.py`).
+
+* Default `LMCACHE_L2_SERDE=none` -- byte-exact raw chunks, identical to the
+  uncompressed upstream path. Nothing is transformed.
+* `LMCACHE_L2_SERDE=zstd|lz4` (or the `USE_LOSSLESS_SERDE` operator switch) --
+  lossless compression. A block that does not shrink is stored raw, so a chunk
+  never grows. Expected reduction is modest, roughly 1.1-1.4x on real KV.
+* Lossy codecs (fp8 / turboquant / lbq / cachegen / kivi) are REFUSED loudly at
+  startup -- lossless is the contract, not a default that can drift.
+* The codec is folded into the cache-identity namespace (`l2_serde`) by BOTH
+  the shell loader (`scripts/env.sh _kvp_resolve_l2_serde`) and the Python
+  loader (`kvpersist.identity`), and unit tests assert the two agree
+  (`tests/unit/test_lossless_serde_switch.py`). Switching codecs is a safe
+  cache miss, never a wrong read.
+
+**Honest status:** the serde frame logic is unit-tested (round-trip, framing,
+malformed-frame rejection, incompressible-data passthrough) WITHOUT torch/lz4/
+zstandard installed. The end-to-end path through LMCache's `SerdeL2AdapterWrapper`
+and the `nixl_store_dynamic` DMA write is **NEEDS TESTING on the target GPU
+host** -- same status as the rest of the hardware acceptance suite. Two
+surgical runtime patches (`_install_size_patch`) make the on-disk file size
+follow the serialized frame rather than the full L1 allocation; these are
+covered by unit-level logic but not yet by a hardware run.
+
+### 2. Prometheus + Grafana monitoring
+
+`observability/` vendors the OFFICIAL LMCache example stack
+(`LMCache/LMCache` `examples/observability`, Apache-2.0): OTel Collector +
+Tempo + Prometheus + Grafana, with the official LMCache and Coordinator
+dashboards pre-provisioned (JSON copied verbatim).
+
+```bash
+bash scripts/start-observability.sh     # one command, Grafana on :3000
+```
+
+Telemetry is opt-in and off by default (`KVP_OTLP_ENDPOINT` /
+`USE_OBSERVABILITY=1`); the cache service works fully without the stack.
+**Status: the compose files and dashboards are verbatim official assets and the
+script is exercised for syntax; the live stack has NOT been brought up on the
+target host in this session** (no GPU host / Docker daemon reachable).
+
 ## Provenance
 
 * Commit hash of this report: run `git log -1 --format=%H` in the repository.

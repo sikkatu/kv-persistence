@@ -78,6 +78,12 @@ if [ "$PERSIST" = "true" ]; then
   KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$LMCACHE_HOST\",\"lmcache.mp.port\":\"$LMCACHE_PORT\"}}"
   KV_TRANSFER_ARGS=(--kv-transfer-config "$KV_TRANSFER_CONFIG")
   echo "persistent cache: attached (KV_TRANSFER_CONFIG=$KV_TRANSFER_CONFIG)"
+  # Lossless L2 codec must match the RUNNING cache server: the codec is part
+  # of the cache-identity namespace (kvpersist.identity l2_serde), so a
+  # mismatch here means the engine and the server would disagree about which
+  # chunks are readable. Both read the same LMCACHE_L2_SERDE (folded from
+  # USE_LOSSLESS_SERDE by scripts/env.sh), so just report it.
+  echo "L2 codec: ${LMCACHE_L2_SERDE:-none} (lossless; expected in the cache server too)"
 else
   echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
 fi

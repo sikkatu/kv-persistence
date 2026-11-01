@@ -70,7 +70,8 @@ def _render_adapter(root: Path, budget_gb: str = "1") -> Path:
             .replace("__KVP_CACHE_ROOT__", str(root / "l2"))
             .replace("__KVP_CACHE_BUDGET_GB__", budget_gb)
             .replace("__KVP_EVICT_TRIGGER_WATERMARK__", "0.9")
-            .replace("__KVP_EVICT_RATIO__", "0.1"))
+            .replace("__KVP_EVICT_RATIO__", "0.1")
+            .replace("__KVP_L2_SERDE_JSON__", ""))
     json.loads(text)                      # must be valid JSON after render
     out.write_text(text)
     (root / "l2").mkdir(parents=True, exist_ok=True)

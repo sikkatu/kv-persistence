@@ -37,8 +37,13 @@ ADAPTER_FILE="${1:-}"
 # > the defaults below -- identical to scripts/env.sh.
 repo_cfg() { # repo_cfg <KEY> <default>
   local k="$1" def="$2" v=""
-  if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/configs/generic/cache.env" ]; then
-    v="$(sed -n "s/^${k}=//p" "$REPO_ROOT/configs/generic/cache.env" "$REPO_ROOT/configs/generic/cache.env.local" 2>/dev/null | tail -1 | tr -d '\"' | sed 's/ *#.*//')"
+  if [ -n "$REPO_ROOT" ]; then
+    v="$(sed -n "s/^${k}=//p" \
+        "$REPO_ROOT/configs/generic/cache.env" \
+        "$REPO_ROOT/configs/generic/cache.env.local" \
+        "$REPO_ROOT/configs/generic/lmcache-server.env" \
+        "$REPO_ROOT/configs/generic/lmcache-server.env.local" 2>/dev/null \
+        | tail -1 | tr -d '\"' | sed 's/ *#.*//')"
   fi
   echo "${!k:-${v:-$def}}"
 }
@@ -46,13 +51,25 @@ repo_cfg() { # repo_cfg <KEY> <default>
 render_adapter() {
   local tmpl="$REPO_ROOT/configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in"
   [ -f "$tmpl" ] || { echo "adapter template not found: $tmpl (set KVP_REPO_ROOT and KVP_MODEL_CONFIG)" >&2; exit 1; }
-  local root budget
+  local root budget serde_json codec
   root="$(repo_cfg KVP_CACHE_ROOT /var/lib/kv-persistence/l2)"
   budget="$(repo_cfg KVP_CACHE_BUDGET_GB 1500)"
+  # Lossless L2 codec (same rules as scripts/start-cache.sh): none|raw = no
+  # "serde" key (byte-exact), zstd|lz4 = the lossless kvp-* serde. Anything
+  # lossy is refused -- kv-persistence is lossless by contract.
+  codec="$(printf '%s' "${LMCACHE_L2_SERDE:-$(repo_cfg LMCACHE_L2_SERDE none)}" | tr '[:upper:]' '[:lower:]')"
+  case "$codec" in
+    none|raw) serde_json="" ;;
+    zstd|lz4) serde_json="\"serde\": {\"type\": \"kvp-$codec\", \"level\": \"${KVP_L2_COMPRESS_LEVEL:-3}\", \"align_bytes\": \"4096\"}," ;;
+    fp8|turboquant|lbq|cachegen|kivi|asym*)
+      echo "LMCACHE_L2_SERDE=$codec is LOSSY -- kv-persistence is lossless-only (none / zstd / lz4)" >&2; exit 1 ;;
+    *) echo "LMCACHE_L2_SERDE=$codec not understood (use none / zstd / lz4)" >&2; exit 1 ;;
+  esac
   sed -e "s|__KVP_CACHE_ROOT__|$root|" \
       -e "s|__KVP_CACHE_BUDGET_GB__|$budget|" \
       -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${KVP_EVICT_TRIGGER_WATERMARK:-0.9}|" \
       -e "s|__KVP_EVICT_RATIO__|${KVP_EVICT_RATIO:-0.1}|" \
+      -e "s|__KVP_L2_SERDE_JSON__|$serde_json|" \
       "$tmpl" \
     | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)'
 }
@@ -86,10 +103,10 @@ echo "$ADAPTER_JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev
   || { echo "adapter spec is not valid JSON" >&2; exit 1; }
 # Review round 14: the service user must be able to write the cache root.
 ensure_cache_root
-# Review round 15: launch through the kv-persistence filename patch so that
-# cache_salt is embedded in the L2 file names (the only disk-level fix for
-# the measured cross-salt leak; see kvpersist/salt_filename_patch.py).
-exec python3 -m kvpersist.salt_filename_patch server \
+# Review round 15+: launch through the kv-persistence launcher (kvpersist.launch)
+# which applies BOTH runtime patches: the cache_salt filename fix AND the
+# lossless compression serde registration (see kvpersist/launch.py).
+exec python3 -m kvpersist.launch server \
   --host "${LMCACHE_HOST:-127.0.0.1}" \
   --port "${LMCACHE_PORT:-5555}" \
   --l1-size-gb "${LMCACHE_L1_SIZE_GB:-64}" \
@@ -99,5 +116,4 @@ exec python3 -m kvpersist.salt_filename_patch server \
   --chunk-size "${LMCACHE_CHUNK_SIZE:-256}" \
   --l2-adapter "$ADAPTER_JSON" \
   ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
-  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
-  ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"}
+  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"}

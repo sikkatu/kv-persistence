@@ -84,6 +84,30 @@ bash scripts/start-cache.sh
 lmcache server（setsid nohup，日志和 pid 在 KVP_CACHE_ROOT 下）。
 已有缓存数据会被保留 —— 启动绝不自动清空缓存。
 
+### L2 无损编解码（可选）
+
+默认情况下 L2 层存储**逐字节精确的原始**块（`LMCACHE_L2_SERDE=none`）
+—— 与未压缩的 upstream 路径完全一致，不做任何变换。若要以无损压缩存储
+（幅度温和，真实 KV 负载约 1.1–1.4x），请选择编解码：
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
+USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
+```
+
+或在 `configs/generic/lmcache-server.env(.local)` 中永久设置：
+
+```bash
+LMCACHE_L2_SERDE=zstd     # 或 lz4，或 none
+```
+
+本项目**不存在有损量化**（fp8 / turboquant / lbq 在启动时被明确拒绝）。
+编解码属于缓存身份命名空间的一部分：切换编解码会让已存储的块变成安全的
+缓存 miss（绝不会错误命中），因此请在所有启动器中使用同一取值。
+
+`KVP_L2_COMPRESS_LEVEL`（仅 zstd，默认 3，范围 1–19）用于权衡压缩率与
+写入速度。
+
 ## 6. 启动带缓存的 vLLM
 
 ```bash
@@ -98,6 +122,26 @@ bash scripts/run-vllm-with-persist.sh
 bash scripts/verify-engine-identity.sh      # 强制门禁：引擎几何 == 身份固定
 bash scripts/test-recovery.sh               # 验收：见 docs/benchmarks.md
 ```
+## 监控
+```bash
+bash scripts/budget-report.sh status      # 占用、余量、磁盘
+bash scripts/budget-report.sh quota       # 各命名空间配额
+bash scripts/budget-report.sh purge --help
+```
+### Prometheus + Grafana（可选）
+
+完整可观测性栈（OTel Collector + Tempo + Prometheus + Grafana）位于
+`observability/`，已预置官方 LMCache 仪表盘：
+
+```bash
+bash scripts/start-observability.sh
+# Grafana -> http://localhost:3000（匿名 Admin，无需登录）
+```
+
+然后把缓存服务指向收集器以使指标流动
+（`KVP_OTLP_ENDPOINT=http://localhost:4320`，或简写 `USE_OBSERVABILITY=1`）。
+遥测默认关闭：没有该栈缓存也完整工作。详情与面板清单见
+`observability/README.zh.md`。
 ## 在 systemd 下运行缓存服务（可选）
 
 不用 `scripts/start-cache.sh`（`setsid nohup`）时，缓存服务可作为 systemd

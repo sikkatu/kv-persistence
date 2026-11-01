@@ -66,5 +66,23 @@ python3 "$REPO/implementation/prompt_probe.py" --tokenizer "$MODEL_DIR" \
 stable_prefix_tokens 少 = 动态值破坏前缀。为缓存截断历史被禁止。
 
 ## 损坏文件恢复
-
 损坏可容忍：未命中即重算。手动清理：停止服务 → purge --all --yes → 再启动。
+
+## 无损编解码问题
+* `CodecError: zstandard/lz4 python bindings not installed` —— 所选编解码需要
+  对应 Python 包。在 lmcache 的 venv 中安装（`pip install zstandard lz4`，
+  见 requirements-lmcache.txt），或回退到 `LMCACHE_L2_SERDE=none`
+  （逐字节精确的原始模式，无额外依赖）。
+* `LMCACHE_L2_SERDE=... is LOSSY and is not supported` —— 预期行为：本项目仅
+  支持无损。请使用 `none`、`zstd` 或 `lz4`。
+* 切换编解码后缓存命中消失 —— 预期且安全：编解码属于缓存身份命名空间的一部分，
+  旧块会变为缓存 miss。重新存储它们（或切回原编解码）—— 绝不会错误命中。
+* 压缩后磁盘占用未减小 —— 编解码只压缩真正可压缩的内容；不可压缩的块按原样
+  存储并填充到 4 KiB 页边界。在很小的块上，24 字节的头部可能占主导。
+
+## Grafana 无数据
+在缓存服务开始推送遥测之前，该栈是被动的。用 `USE_OBSERVABILITY=1`
+（或 `KVP_OTLP_ENDPOINT=http://localhost:4320`）启动缓存，并检查
+`KVP_CACHE_ROOT/lmcache-server.log` 中的 `[kvp]` 横幅和 `--otlp-endpoint`
+行。同时确认收集器可从运行缓存服务的主机访问（`curl -s localhost:4320`
+—— OTLP gRPC 端口）。

@@ -86,16 +86,125 @@ bash scripts/test-recovery.sh           # приёмка: рестарт → д�
 Постоянный переключатель в production-рецепте — `KV_PERSIST=1` в `tp4.env`
 (см. вики «Интеграция с рецептами»); откат — удаление этой одной строки.
 
-## Структура репозитория
+## Lossless-хранение
 
+Уровень L2 — **только lossless**. KV-блоки на NVMe всегда декодируются обратно
+в точные байты, которые произвёл движок: в проекте нет квантизации
+fp8 / turboquant / lbq, и любой такой кодек громко отвергается при старте.
+Доступны два режима хранения:
+
+* **Байт-точный сырой (дефолт)** — `LMCACHE_L2_SERDE=none`. Чанки хранятся
+  дословно, идентично несжатому upstream-пути. Ничего не трансформируется;
+  cache hit возвращает точные KV-байты движка.
+* **Lossless-сжатие (по желанию)** — `LMCACHE_L2_SERDE=zstd` или `lz4`
+  (или переключатель `USE_LOSSLESS_SERDE`, см. ниже). Чанки сжимаются
+  lossless-кодеками `kvp-zstd` / `kvp-lz4`, которые регистрирует
+  `implementation/kvpersist/compress_serde.py`. Блок, который не сжался,
+  хранится сырым, поэтому чанк никогда не растёт. Ожидаемое уменьшение
+  скромное — примерно **1.1–1.4x** на реальных KV-данных (zstd даёт лучший
+  коэффициент сжатия, lz4 работает быстрее).
+
+Включить lossless-сжатие на один запуск:
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
+USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
+```
+
+или постоянно в `configs/generic/lmcache-server.env(.local)`:
+
+```bash
+LMCACHE_L2_SERDE=zstd
+```
+
+Кодек входит в namespace идентичности кэша: переключение между `none`, `zstd`
+и `lz4` превращает ранее сохранённые чанки в безопасный cache **miss** (никогда
+не в неверное чтение), и каждый лаунчер (`start-cache.sh`,
+`run-vllm-with-persist.sh`, `verify-engine-identity.sh`) резолвит переключатель
+в одно и то же эффективное значение.
+
+## Мониторинг (Prometheus + Grafana)
+
+Полный стек наблюдаемости из официального примера LMCache лежит в
+`observability/` (OTel Collector + Tempo + Prometheus + Grafana) с
+**уже установленными официальными дашбордами LMCache**. Одна команда поднимает
+всё:
+
+```bash
+bash scripts/start-observability.sh
+# или, что эквивалентно:
+cd observability && docker compose up -d
+```
+
+* **Grafana** → <http://localhost:3000> (анонимный Admin-доступ, без входа).
+  Дашборды *LMCache* и *LMCache Coordinator* импортируются автоматически.
+* **Prometheus** → <http://localhost:9091>
+* **Tempo** → <http://localhost:3200> (трейсы)
+* **OTLP gRPC** → `localhost:4320` — сюда кэш-сервер отправляет метрики.
+
+Направить кэш-сервер на коллектор и включить телеметрию (по умолчанию
+выключена, кэш полноценно работает и без неё):
+
+```bash
+USE_OBSERVABILITY=1 bash scripts/start-cache.sh
+# или явно:
+KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+```
+
+Панели, за которыми стоит следить на дашборде LMCache:
+
+| Панель | Что показывает |
+|---|---|
+| cache hit rate | соотношение hit / miss на запрос — главный сигнал здоровья |
+| L1 / L2 usage | заполнение уровней относительно ёмкости (L1 = RAM хоста, L2 = NVMe) |
+| store / retrieve throughput | байты в секунду, записываемые на NVMe и читаемые с него |
+| evictions | LRU-эвикции по уровням — растущий темп означает слишком малый бюджет |
+| restore (prefetch) time | как быстро перезапущенный сервер наполняет L1 из NVMe |
+
+Остановить стек: `bash scripts/start-observability.sh --down` (тома данных
+сохраняются).
+
+## Расчёты под KV ~200 ГБ
+
+Разговору с KV до ~200 ГБ нужно место под них плюс запас на рост:
+
+| Параметр | Рекомендация |
+|---|---|
+| `KVP_L1_SIZE_GB` (буфер RAM хоста) | 30–40 ГБ |
+| `KVP_CACHE_BUDGET_GB` (жёсткий лимит L2) | ≥ 250–300 ГБ на **выделенном локальном NVMe** |
+| `KVP_CACHE_ROOT` | путь на этом NVMe, никогда не сетевой шар |
+| `KVP_CACHE_DEVICE` | закрепить блочное устройство, чтобы `preflight.sh` доказал: кэш на нужном диске |
+
+Поставляемый дефолтный бюджет — 1500 ГБ, потому что эталонный хост делит один
+том между ОС, моделью и кэшем; на выделенном NVMe снизьте его до 300 ГБ.
+`KVP_CACHE_BUDGET_GB`, `KVP_CACHE_ROOT` и `KVP_CACHE_DEVICE` живут в
+`configs/generic/cache.env(.local)`.
+
+## Быстрый старт: lossless + Grafana
+
+```bash
+# 1. Мониторинг (опционально, но рекомендуется)
+bash scripts/start-observability.sh
+
+# 2. LMCache + vLLM в lossless-режиме
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+`USE_LOSSLESS_SERDE` должен быть одинаков для обеих команд — он входит в
+namespace идентичности кэша. Не задавайте его нигде, чтобы остаться в
+байт-точном сыром режиме.
+
+## Структура репозитория
 | Путь | Содержимое |
 |---|---|
 | `docs/` | англоязычная техническая документация (все языки — в вики) |
 | `configs/generic/` | настройки кэша и lmcache-сервера, EN/RU/ZH-переводы комментариев |
 | `configs/mimo-v2.6-pro/` | пины идентичности MiMo и шаблон L2-адаптера, EN/RU/ZH |
-| `scripts/` | preflight, старт/стоп кэша, лаунчер, тест восстановления, бенчмарк, админ-CLI |
-| `implementation/` | пакет `kvpersist`: идентичность, бюджеты, ранжирование, админ-CLI |
-| `tests/` | unit (74, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
+| `scripts/` | preflight, старт/стоп кэша, лаунчер, тест восстановления, бенчмарк, админ-CLI, наблюдаемость |
+| `observability/` | стек Prometheus + Grafana + Tempo + OTel Collector с официальными дашбордами LMCache |
+| `implementation/` | пакет `kvpersist`: идентичность, бюджеты, ранжирование, админ-CLI, runtime-патчи |
+| `tests/` | unit (где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
 
 ## Статус
 

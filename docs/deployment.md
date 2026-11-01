@@ -105,15 +105,39 @@ going on. If `KVP_MODEL_DIR` is set, the script prints
 `KVP_CHAT_TEMPLATE_DIGEST=…` — copy that value into `identity.env`.
 
 ## 5. Start the persistent cache service
-
 ```bash
 bash scripts/start-cache.sh
 ```
-
 This creates `KVP_CACHE_ROOT` (chmod 700), renders the L2 adapter JSON, and
 starts `lmcache server` detached (`lmcache-server.pid`, log
 `KVP_CACHE_ROOT/lmcache-server.log`). Existing cache data is preserved — there
 is no automatic wipe on start.
+
+### Lossless L2 codec (optional)
+
+By default the L2 tier stores **byte-exact raw** chunks (`LMCACHE_L2_SERDE=none`)
+— identical to the uncompressed upstream path, no transform at all. To store
+them with lossless compression instead (modest, roughly 1.1–1.4x on real KV
+payloads), pick a codec:
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
+USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
+```
+
+or permanently in `configs/generic/lmcache-server.env(.local)`:
+
+```bash
+LMCACHE_L2_SERDE=zstd     # or lz4, or none
+```
+
+There is **no lossy quantization** in this project (fp8 / turboquant / lbq are
+refused loudly at startup). The codec is part of the cache-identity namespace:
+switching codecs turns previously stored chunks into a safe cache miss (never a
+wrong read), so use the same value for every launcher.
+
+`KVP_L2_COMPRESS_LEVEL` (zstd only, default 3, range 1–19) trades ratio for
+store speed.
 
 ## 6. Start vLLM with the persistent KV connector
 
@@ -145,6 +169,21 @@ bash scripts/budget-report.sh status      # usage vs budget, namespaces, disk fr
 bash scripts/budget-report.sh quota       # per-namespace quotas
 bash scripts/budget-report.sh purge --help
 ```
+
+### Prometheus + Grafana (optional)
+
+The full observability stack (OTel Collector + Tempo + Prometheus + Grafana)
+ships in `observability/` with the official LMCache dashboards pre-provisioned:
+
+```bash
+bash scripts/start-observability.sh
+# Grafana -> http://localhost:3000 (anonymous Admin, no login)
+```
+
+Then point the cache service at the collector so metrics flow
+(`KVP_OTLP_ENDPOINT=http://localhost:4320`, or the `USE_OBSERVABILITY=1`
+shorthand). Telemetry is off by default: the cache works fine without the
+stack. Details and the panel list are in `observability/README.md`.
 ## Running the cache service under systemd (optional)
 
 Instead of `scripts/start-cache.sh` (which detaches via `setsid nohup`), the

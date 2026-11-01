@@ -209,7 +209,59 @@ tests/unit/test_fingerprint_content.py` — 3 регрессионных зел�
   run-vllm-with-persist.sh; таблица compatibility.*). KV dtype остаётся в
   идентичности кэша — смена dtype даёт промах, никогда не чтение неверного
   формата.
+## Lossless-кодек L2 и стек наблюдаемости (задача)
 
+В текущем задании требовались два дополнения; оба реализованы БЕЗ форка LMCache
+и без изменений production-рецепта.
+
+### 1. Только lossless-хранение L2
+
+Upstream LMCache 0.5.3 регистрирует лишь lossy- (fp8, turboquant) и шифрующие
+(aesgcm) serde — lossless-сжатия upstream нет. Этот репозиторий добавляет его
+через `implementation/kvpersist/compress_serde.py`, который регистрирует
+типы serde `kvp-zstd` / `kvp-lz4` / `kvp-raw` в собственном реестре LMCache в
+runtime (тот же паттерн лаунчера, что и salt-filename патч; теперь они
+объединены в `implementation/kvpersist/launch.py`).
+
+* Дефолт `LMCACHE_L2_SERDE=none` — байт-точные сырые чанки, идентичные
+  несжатому upstream-пути. Ничего не трансформируется.
+* `LMCACHE_L2_SERDE=zstd|lz4` (или операторский переключатель
+  `USE_LOSSLESS_SERDE`) — lossless-сжатие. Несжимаемый блок хранится сырым,
+  поэтому чанк никогда не растёт. Ожидаемое уменьшение скромное — примерно
+  1.1–1.4x на реальных KV.
+* Lossy-кодеки (fp8 / turboquant / lbq / cachegen / kivi) громко ОТКАЗЫВАЮТСЯ
+  при старте — lossless это контракт, а не дефолт, который может измениться.
+* Кодек сворачивается в namespace идентичности кэша (`l2_serde`) и в shell
+  (`scripts/env.sh _kvp_resolve_l2_serde`), и в Python-загрузчике
+  (`kvpersist.identity`); unit-тесты утверждают, что оба согласованы
+  (`tests/unit/test_lossless_serde_switch.py`). Смена кодека — безопасный
+  cache miss, никогда не неверное чтение.
+
+**Честный статус:** логика фрейма serde покрыта unit-тестами (round-trip,
+фрейминг, отвержение повреждённых фреймов, passthrough несжимаемых данных)
+БЕЗ установленных torch/lz4/zstandard. Сквозной путь через
+`SerdeL2AdapterWrapper` LMCache и DMA-запись `nixl_store_dynamic` — **НУЖДАЕТСЯ
+В ТЕСТИРОВАНИИ на целевом GPU-хосте**, как и остальная аппаратная приёмка.
+Два точечных runtime-патча (`_install_size_patch`) заставляют размер файла на
+диске следовать за сериализованным фреймом, а не за полной L1-аллокацией; они
+покрыты логикой юнит-уровня, но ещё не проверены на железе.
+
+### 2. Мониторинг Prometheus + Grafana
+
+`observability/` вендорит ОФИЦИАЛЬНЫЙ стек из примера LMCache
+(`LMCache/LMCache` `examples/observability`, Apache-2.0): OTel Collector +
+Tempo + Prometheus + Grafana с предустановленными официальными дашбордами
+LMCache и Coordinator (JSON скопирован дословно).
+
+```bash
+bash scripts/start-observability.sh     # одна команда, Grafana на :3000
+```
+
+Телеметрия опциональна и по умолчанию выключена (`KVP_OTLP_ENDPOINT` /
+`USE_OBSERVABILITY=1`); сервис кэша полноценно работает и без стека.
+**Статус: compose-файлы и дашборды — дословные официальные ассеты, скрипт
+проверен на синтаксис; живой стек на целевом хосте в этой сессии НЕ
+поднимался** (GPU-хост/Docker-демон недоступны).
 ## Провенанс
 
 * `git log --oneline -1` в репозитории фиксирует точную ревизию этого файла.

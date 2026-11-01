@@ -90,6 +90,115 @@ physical NVMe device and `test-recovery.sh` ends with a machine verdict.
 Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 (see wiki *Recipes Integration*); rollback is removing that one line.
 
+## Lossless persistence
+
+The L2 tier is **lossless only**. KV blocks on NVMe are always decoded back to
+the exact bytes the engine produced — there is no fp8 / turboquant / lbq
+quantization anywhere in this project, and any such codec is refused loudly at
+startup. Two storage modes are available:
+
+* **Byte-exact raw (default)** — `LMCACHE_L2_SERDE=none`. Chunks are stored
+  verbatim, identical to the uncompressed upstream path. Nothing is
+  transformed; a cache hit returns the engine's exact KV bytes.
+* **Lossless compression (opt-in)** — `LMCACHE_L2_SERDE=zstd` or `lz4`
+  (or the `USE_LOSSLESS_SERDE` switch, see below). Chunks are compressed with
+  the lossless `kvp-zstd` / `kvp-lz4` serdes registered by
+  `implementation/kvpersist/compress_serde.py`. A block that does not shrink
+  is stored raw, so a chunk never grows. Expected size reduction is modest —
+  roughly **1.1–1.4x** on real KV payloads (zstd is the better ratio, lz4 the
+  faster codec).
+
+Enable lossless compression for one run:
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
+USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
+```
+
+or set it permanently in `configs/generic/lmcache-server.env(.local)`:
+
+```bash
+LMCACHE_L2_SERDE=zstd
+```
+
+The codec is part of the cache-identity namespace: switching between `none`,
+`zstd` and `lz4` makes the previously stored chunks a safe cache **miss**
+(never a wrong read), and every launcher (`start-cache.sh`,
+`run-vllm-with-persist.sh`, `verify-engine-identity.sh`) resolves the switch to
+the same effective value.
+
+## Monitoring (Prometheus + Grafana)
+
+The full observability stack from the official LMCache example ships in
+`observability/` (OTel Collector + Tempo + Prometheus + Grafana) with the
+**official LMCache dashboards already provisioned**. One command brings it up:
+
+```bash
+bash scripts/start-observability.sh
+# or, equivalently:
+cd observability && docker compose up -d
+```
+
+* **Grafana** → <http://localhost:3000> (anonymous Admin access, no login).
+  Dashboards → *LMCache* and *LMCache Coordinator* are imported automatically.
+* **Prometheus** → <http://localhost:9091>
+* **Tempo** → <http://localhost:3200> (traces)
+* **OTLP gRPC** → `localhost:4320` — where the cache server pushes metrics.
+
+Point the cache server at the collector and enable telemetry (off by default,
+the cache works fine without it):
+
+```bash
+USE_OBSERVABILITY=1 bash scripts/start-cache.sh
+# or explicitly:
+KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+```
+
+Panels worth watching on the LMCache dashboard:
+
+| Panel | What it tells you |
+|---|---|
+| cache hit rate | hit / miss ratio per request — the primary health signal |
+| L1 / L2 usage | tier occupancy vs capacity (L1 = host RAM, L2 = NVMe) |
+| store / retrieve throughput | bytes per second written to and read from NVMe |
+| evictions | LRU evictions per tier — a rising rate means the budget is too small |
+| restore (prefetch) time | how fast a restarted server refills L1 from NVMe |
+
+Stop the stack with `bash scripts/start-observability.sh --down` (data volumes
+are kept).
+
+## Sizing for a ~200 GB KV working set
+
+A conversation with up to ~200 GB of KV needs room for that plus growth
+headroom:
+
+| Knob | Recommendation |
+|---|---|
+| `KVP_L1_SIZE_GB` (host RAM buffer) | 30–40 GB |
+| `KVP_CACHE_BUDGET_GB` (L2 hard cap) | ≥ 250–300 GB on a **dedicated local NVMe** |
+| `KVP_CACHE_ROOT` | path on that NVMe, never a network share |
+| `KVP_CACHE_DEVICE` | pin the block device so `preflight.sh` can prove the cache sits on the right disk |
+
+The shipped default budget is 1500 GB because the reference host shares one
+volume between the OS, the model and the cache; on a dedicated NVMe lower it to
+300 GB. `KVP_CACHE_BUDGET_GB`, `KVP_CACHE_ROOT` and `KVP_CACHE_DEVICE` all live
+in `configs/generic/cache.env(.local)`.
+
+## Quick start: lossless + Grafana
+
+```bash
+# 1. Monitoring (optional but recommended)
+bash scripts/start-observability.sh
+
+# 2. LMCache + vLLM in lossless mode
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+`USE_LOSSLESS_SERDE` must be identical for both commands — it is part of the
+cache-identity namespace. Omit it everywhere to stay on the byte-exact raw
+mode.
+
 ## Repository layout
 
 | Path | Content |
@@ -97,9 +206,10 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 | `docs/` | English technical documentation (wiki: all three languages) |
 | `configs/generic/` | cache + lmcache-server settings, EN/RU/ZH comment translations |
 | `configs/<model>/` | per-model identity pins and L2 adapter template (example: `mimo-v2.6-pro`), EN/RU/ZH |
-| `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
-| `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
-| `tests/` | unit (74, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
+| `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI, observability |
+| `observability/` | Prometheus + Grafana + Tempo + OTel Collector stack with the official LMCache dashboards |
+| `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI, runtime patches |
+| `tests/` | unit (run anywhere), integration (needs `lmcache`), recovery (GPU host) |
 
 ## Status
 

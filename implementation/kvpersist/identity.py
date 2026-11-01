@@ -235,8 +235,33 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
     for k in list(vals):
         if k in _os.environ:
             vals[k] = _os.environ[k]
+    # Operator switches may live ONLY in the environment (they are commented
+    # out in the shipped configs). Without this a `USE_LOSSLESS_SERDE=1` or
+    # `KVP_L2_SERDE=zstd` export would be invisible to the namespace while
+    # being honoured by the launcher -- two deployments sharing a cache root
+    # would then cross-read each other's chunks.
+    for k in ("LMCACHE_L2_SERDE", "KVP_L2_SERDE", "USE_LOSSLESS_SERDE"):
+        if k in _os.environ:
+            vals[k] = _os.environ[k]
     def get(name: str, default: str = "") -> str:
         return vals.get(name, default)
+    # Fold the operator switch USE_LOSSLESS_SERDE into the effective
+    # LMCACHE_L2_SERDE, exactly like scripts/env.sh `_kvp_resolve_l2_serde`:
+    # the namespace must reflect the codec the server ACTUALLY stores, not
+    # just the config file. A `USE_LOSSLESS_SERDE=1` launch stores zstd
+    # chunks -- if the namespace were still hashed as "none" here, two
+    # deployments sharing a cache root would cross-read each other's data.
+    serde = (get("LMCACHE_L2_SERDE") or get("KVP_L2_SERDE") or "none").strip().lower()
+    use_lossless = get("USE_LOSSLESS_SERDE").strip().lower()
+    if use_lossless in ("1", "yes", "true", "zstd"):
+        serde = "zstd"
+    elif use_lossless == "lz4":
+        serde = "lz4"
+    elif use_lossless not in ("", "0", "no", "false", "none"):
+        raise IdentityError(
+            f"USE_LOSSLESS_SERDE={use_lossless!r} not understood "
+            "(use 1 / zstd / lz4 / 0)"
+        )
     return CacheIdentity(
         model_id=get("KVP_MODEL_ID"),
         model_revision=get("KVP_MODEL_REVISION"),
@@ -252,7 +277,7 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         max_model_len=int(get("KVP_MAX_MODEL_LEN") or 0),
         chat_template_digest=get("KVP_CHAT_TEMPLATE_DIGEST"),
         namespace_hint=get("KVP_NAMESPACE_HINT"),
-        l2_serde=get("LMCACHE_L2_SERDE") or get("KVP_L2_SERDE"),
+        l2_serde=serde,
     )
 
 
