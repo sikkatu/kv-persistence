@@ -117,6 +117,11 @@ a truncated DMA read, a bit flip, or a frame written under a different codec is
 detected at deserialize time and reported as a cache **miss** — never returned
 as silently corrupt KV.
 
+**Dependencies:** the uncompressed default (`none`) needs **no** compression
+packages at all. `zstd` needs only `zstandard`, `lz4` needs only `lz4` — a
+startup check (`require_codec`) verifies exactly the selected codec before the
+server starts, and never requires an unused one.
+
 Enable lossless compression for one run:
 
 ```bash

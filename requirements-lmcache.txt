@@ -33,9 +33,12 @@ nixl==1.5.2
 
 # Lossless L2 compression codecs, used ONLY when the operator selects
 # LMCACHE_L2_SERDE=zstd|lz4 (or USE_LOSSLESS_SERDE=1). With the default
-# LMCACHE_L2_SERDE=none neither package is needed and the L2 tier stores
-# byte-exact raw chunks. zstandard is the preferred codec (better ratio);
-# lz4 is the faster alternative. Both are pure additions -- removing them
-# only disables the corresponding codec, it never breaks the default path.
+# LMCACHE_L2_SERDE=none NEITHER package is needed -- the cache starts and runs
+# without them (a startup check requires exactly the SELECTED codec, never an
+# unused one). zstandard is the preferred codec (better ratio); lz4 is the
+# faster alternative. Both are pure additions -- removing them only disables
+# the corresponding codec, it never breaks the default path.
+#   LMCACHE_L2_SERDE=zstd -> needs zstandard only
+#   LMCACHE_L2_SERDE=lz4  -> needs lz4 only
 zstandard>=0.22,<1
 lz4>=4.3,<5

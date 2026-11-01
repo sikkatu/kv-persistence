@@ -64,11 +64,16 @@ introduce that window on the uncompressed path. (This directly answers the
 review point that load_wrapper used to run even for serde=none.)
 
 FAIL-FAST CODEC AVAILABILITY
-`register()` verifies the codec bindings UP FRONT and raises CodecError if a
-requested codec cannot be imported. The server therefore refuses to start
+`require_codec()` verifies the bindings of the ONE codec this launch selects
+and raises CodecError if they are missing, so the server refuses to start
 instead of reaching READY and failing later inside the serde thread pool.
-In docker mode the same check runs inside the container via
-scripts/start-cache.sh's probe path.
+`resolve_required_codec()` finds that codec from the `--l2-adapter` JSON
+(the real serde in use), falling back to `LMCACHE_L2_SERDE`/`KVP_L2_SERDE`.
+The uncompressed mode (none/raw) requires NOTHING -- lz4 and zstandard are
+never needed unless the deployment actually selects them. `register()`
+registers all three factories unconditionally; a missing codec package is
+not a registration error (review fix: the old code required BOTH packages on
+every start).
 
 SAFETY
 Everything is opt-in: nothing here runs unless the adapter JSON asks for
@@ -308,8 +313,12 @@ def _make_factory(codec: str):
 def check_codec_available(codec: str) -> None:
     """Raise CodecError immediately when the codec's bindings are missing.
 
-    Called at registration time (fail-fast): the server must refuse to start
-    rather than reach READY and fail later inside the serde thread pool.
+    Used at TWO points:
+      * `require_codec()` -- hard startup check for the codec the deployment
+        actually selected (fail-fast: the server must refuse to start rather
+        than reach READY and fail later inside the serde thread pool).
+      * the serde factory -- when an adapter config names a kvp-* serde whose
+        codec is missing, adapter construction fails with a clear message.
     """
     if codec == "lz4":
         try:
@@ -333,18 +342,80 @@ def check_codec_available(codec: str) -> None:
         raise CodecError(f"unknown codec {codec!r}")
 
 
+def require_codec(codec: str | None) -> None:
+    """Hard startup check for the ONE codec this deployment selected.
+
+    Review fix: only the SELECTED codec is required. A cache running
+    `LMCACHE_L2_SERDE=none` must not need lz4 or zstandard at all, and a zstd
+    deployment must not need lz4 (and vice versa). `codec` is "none"/"raw"/
+    ""/None for the uncompressed mode -- nothing is required then.
+    """
+    if codec is None:
+        return
+    c = str(codec).strip().lower()
+    if c in ("", "none", "raw"):
+        return
+    check_codec_available(c)
+
+
+def resolve_required_codec(argv: list[str] | None = None) -> str | None:
+    """Return the codec this launch actually needs, or None for raw mode.
+
+    Authority order (highest first):
+      1. the `--l2-adapter` JSON(s) in argv -- what the server will really
+         configure (a `"serde": {"type": "kvp-<codec>"}` block);
+      2. `LMCACHE_L2_SERDE` / `KVP_L2_SERDE` from the environment;
+      3. None (no codec required).
+
+    Used by `kvpersist.launch` and by the start-cache probes so the fail-fast
+    check covers exactly the codec in use -- never an unused one.
+    """
+    import json as _json
+    import os as _os
+    import re as _re
+
+    args = list(argv if argv is not None else sys.argv[1:])
+    for i, a in enumerate(args):
+        raw = None
+        if a == "--l2-adapter" and i + 1 < len(args):
+            raw = args[i + 1]
+        elif a.startswith("--l2-adapter="):
+            raw = a.split("=", 1)[1]
+        if not raw:
+            continue
+        try:
+            spec = _json.loads(raw)
+        except Exception:  # noqa: BLE001 - malformed spec is not our error here
+            continue
+        if not isinstance(spec, dict):
+            continue
+        serde = spec.get("serde")
+        if isinstance(serde, dict):
+            stype = str(serde.get("type", ""))
+            m = _re.match(r"^kvp-([a-z0-9]+)$", stype)
+            if m:
+                return m.group(1)
+    env = (_os.environ.get("LMCACHE_L2_SERDE") or _os.environ.get("KVP_L2_SERDE") or "").strip().lower()
+    return env or None
+
+
 def register() -> bool:
     """Register kvp-lz4 / kvp-zstd / kvp-raw in LMCache's serde registry.
 
-    Returns True when registration succeeded. Raises CodecError (fail-fast)
-    when a requested codec's bindings are unavailable.
+    ALL three factories are registered unconditionally -- a missing codec
+    package is NOT a registration error. The codec's availability is checked
+    when it is actually needed:
+
+      * `require_codec()` at startup for the SELECTED codec (fail-fast);
+      * inside the factory, when an adapter config asks for that serde.
+
+    This keeps `LMCACHE_L2_SERDE=none` launches independent of lz4/zstandard
+    (review fix: the old code required BOTH packages on every start).
     """
     try:
         from lmcache.v1.distributed.serde.factory import register_serde_factory
     except Exception:  # noqa: BLE001 - LMCache not installed
         return False
-    for name, codec in (("kvp-lz4", "lz4"), ("kvp-zstd", "zstd"), ("kvp-raw", "raw")):
-        check_codec_available(codec)  # fail-fast: raises CodecError
     for name, codec in (("kvp-lz4", "lz4"), ("kvp-zstd", "zstd"), ("kvp-raw", "raw")):
         try:
             register_serde_factory(name, _make_factory(codec))
@@ -462,27 +533,31 @@ def _install_size_patch() -> bool:
 
 
 def apply() -> bool:
-    """Register the lossless serdes (fail-fast on missing codecs).
+    """Register the lossless serdes and require the SELECTED codec.
 
-    Returns True when registration succeeded. Raises CodecError when a
-    selected codec is unavailable -- the caller should abort the launch.
-    The size patch installs itself when the first kvp-* serde is built.
+    Returns True when registration succeeded. Raises CodecError only when the
+    codec this launch actually uses is unavailable (never for unused codecs).
     """
-    return register()
+    register()
+    require_codec(resolve_required_codec())
+    return True
 
 
 def main() -> None:
     """Apply patches, then delegate to the real LMCache CLI entry point."""
+    reg_ok = register()
     try:
-        reg_ok = register()
+        require_codec(resolve_required_codec())
     except CodecError as e:
         print(f"[kvp] FATAL: {e}", file=sys.stderr)
         raise SystemExit(1) from e
     if reg_ok:
+        sel = resolve_required_codec()
         print(
             "[kvp] lossless compress serde registered "
-            "(kvp-lz4 / kvp-zstd / kvp-raw); the L2 file-size patch installs "
-            "when a kvp-* serde is configured",
+            "(kvp-lz4 / kvp-zstd / kvp-raw); "
+            + (f"required codec '{sel}' is available; " if sel else "no codec required (raw mode); ")
+            + "the L2 file-size patch installs when a kvp-* serde is configured",
             file=sys.stderr,
         )
     else:

@@ -45,19 +45,25 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    # Fail-fast: if a lossless codec is requested but its Python bindings are
-    # missing, abort here instead of reaching READY and failing later inside
-    # the serde thread pool (log-only, invisible to the readiness check).
+    # Fail-fast: if the SELECTED lossless codec's Python bindings are missing,
+    # abort here instead of reaching READY and failing later inside the serde
+    # thread pool (log-only, invisible to the readiness check). Unused codecs
+    # are never required -- a `LMCACHE_L2_SERDE=none` cache starts without
+    # lz4/zstandard at all (review fix).
     try:
         reg_ok = compress_serde.register()
+        required = compress_serde.resolve_required_codec()
+        compress_serde.require_codec(required)
     except compress_serde.CodecError as e:
         print(f"[kvp] FATAL: {e}", file=sys.stderr)
         raise SystemExit(1) from e
     if reg_ok:
         print(
             "[kvp] lossless compress serde registered "
-            "(kvp-lz4 / kvp-zstd / kvp-raw); the L2 file-size patch installs "
-            "when a kvp-* serde is configured in the L2 adapter JSON",
+            "(kvp-lz4 / kvp-zstd / kvp-raw); "
+            + (f"required codec '{required}' is available; " if required else "no codec required (raw mode); ")
+            + "the L2 file-size patch installs when a kvp-* serde is configured "
+            "in the L2 adapter JSON",
             file=sys.stderr,
         )
     else:

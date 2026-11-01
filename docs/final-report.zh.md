@@ -194,9 +194,10 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
   来自其他编解码的帧会在反序列化时被检测并报告为缓存 MISS。
 * 负载之后的填充被显式清零 —— 回收的 L1 slab 块绝不能把其他租户的字节
   泄漏进我们的缓存文件（`tests/unit/test_compress_serde.py::test_padding_is_zeroed`）。
-* Fail-fast：`register()` 与 `start-cache.sh` 在服务器启动**之前**验证
-  编解码的 Python 绑定（host venv 探测，或 docker 模式下**容器内**探测）。
-  缺失绑定会中止启动，而不是达到 READY 后在 serde 线程池中失败。
+* Fail-fast：服务器启动前，`require_codec()` 只验证**所选**编解码的绑定
+  （host venv 探测，或 docker 模式下**容器内**探测）。`LMCACHE_L2_SERDE=none`
+  的缓存根本不需要任何压缩包 —— lz4 与 zstandard 仅在其编解码被实际选用时
+  才必需。缺失绑定会中止启动，而不是达到 READY 后在 serde 线程池中失败。
 * L2 文件大小补丁仅在真正构建 kvp-* serde 时安装；`LMCACHE_L2_SERDE=none`
   时适配器类完全不动（逐字节 upstream load/store），因此 raw 路径上短的
   DMA 读取绝不会被我们的包装器掩盖。

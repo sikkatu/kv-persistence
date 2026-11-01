@@ -87,6 +87,9 @@ stable_prefix_tokens 少 = 动态值破坏前缀。为缓存截断历史被禁�
 `bash scripts/budget-report.sh status` 检查（字段 `tmp_files` 与
 `tmp_files_bytes`），用 `bash scripts/budget-report.sh purge --tmp --yes`
 （保留所有真实缓存文件）或 `purge --all --yes` 删除它们。
+两条命令都会**跳过**最近 15 分钟内修改过的 `*.tmp.*` 文件：刚修改的文件
+可能是进行中的 DMA 写入，删除它会破坏该次写入。等写入结束（或进程退出）
+后再运行一次 purge 即可清扫它们。
 
 ## Grafana 无数据
 在缓存服务开始推送遥测之前，该栈是被动的。用 `USE_OBSERVABILITY=1`

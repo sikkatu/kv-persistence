@@ -314,10 +314,12 @@ runtime (same launcher pattern as the salt filename patch, now unified in
 * The padding after the payload is explicitly zeroed -- a recycled L1 slab
   block must never leak another tenant's bytes into our cache file
   (`tests/unit/test_compress_serde.py::test_padding_is_zeroed`).
-* Fail-fast: `register()` and `start-cache.sh` verify the codec's Python
-  bindings BEFORE the server starts (host venv probe, or a probe INSIDE the
-  container in docker mode). Missing bindings abort the launch instead of
-  reaching READY and failing later inside the serde thread pool.
+* Fail-fast: before the server starts, `require_codec()` verifies the
+  bindings of the **selected** codec only (host venv probe, or a probe INSIDE
+  the container in docker mode). A `LMCACHE_L2_SERDE=none` cache needs no
+  compression packages at all — lz4 and zstandard are required only when
+  their codec is actually selected. Missing bindings abort the launch instead
+  of reaching READY and failing later inside the serde thread pool.
 * The L2 file-size patch installs ONLY when a kvp-* serde is actually built;
   with `LMCACHE_L2_SERDE=none` the adapter class is untouched (byte-for-byte
   upstream load/store), so a short DMA read can never be masked by our

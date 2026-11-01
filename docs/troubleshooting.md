@@ -129,6 +129,10 @@ while staying invisible to the cache index (they are never returned as KV).
 Check with `bash scripts/budget-report.sh status` (fields `tmp_files` and
 `tmp_files_bytes`) and remove them with `bash scripts/budget-report.sh purge
 --tmp --yes` (keeps every real cache file) or `purge --all --yes`.
+Both commands SKIP `*.tmp.*` files modified within the last 15 minutes: a
+recently-modified file may be an active DMA write in progress, and deleting it
+would corrupt that store. Run the purge again later to sweep those once the
+write has finished (or the process has died).
 
 ## Grafana shows no data
 The stack is passive until the cache service pushes telemetry. Start the cache

@@ -107,6 +107,35 @@ def _tmp_files(root: str) -> list:
     return out
 
 
+# A ``*.tmp.<uuid>`` file younger than this is treated as an ACTIVE write and
+# is never deleted: the adapter creates it, DMA-writes into it, then atomically
+# renames it. Deleting it mid-write would corrupt a store in progress.
+# 15 minutes is deliberately generous -- a chunk store is milliseconds to a
+# few seconds even for the largest KV blocks.
+_TMP_ACTIVE_WINDOW_SEC = 15 * 60
+
+
+def _tmp_files_safe_to_delete(root: str) -> list:
+    """Crash leftovers that are definitely NOT an in-flight write.
+
+    Splits ``_tmp_files()`` into (safe, active) by mtime: anything modified
+    within ``_TMP_ACTIVE_WINDOW_SEC`` is considered an active store and is
+    skipped. Review fix: ``purge --tmp`` on a production host must not delete
+    a file the adapter is still writing into.
+    """
+    import time as _time
+
+    safe, active = [], []
+    now = _time.time()
+    for p, final in _tmp_files(root):
+        try:
+            age = now - os.path.getmtime(p)
+        except OSError:
+            continue
+        (safe if age >= _TMP_ACTIVE_WINDOW_SEC else active).append((p, final))
+    return safe
+
+
 def _real_cache_files(root: str) -> list:
     """Actual L2 cache data files the LMCache adapter writes.
 
@@ -205,7 +234,9 @@ def cmd_status(_args) -> int:
                 "model_name prefixes of those files. tmp_files are crash "
                 "leftovers (*.bin.tmp.<uuid>) -- invisible to the cache "
                 "index, never returned as KV, but they do consume disk; "
-                "remove with `purge --all --yes` or `purge --tmp --yes`",
+                "remove with `purge --all --yes` or `purge --tmp --yes`. "
+                "Files modified within the active-write window are kept "
+                "(they may be an in-flight store).",
     })
     print(json.dumps(rep, indent=2))
     return 0
@@ -235,13 +266,22 @@ def cmd_purge(args) -> int:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
         # Crash leftovers: sweep them too on --all (upstream only does this on
         # a clean shutdown, so after a crash they linger and eat disk).
-        for p, _final in _tmp_files(root):
+        # Active writes (young *.tmp.*) are skipped -- deleting a file the
+        # adapter is still writing into would corrupt a store in progress.
+        for p, _final in _tmp_files_safe_to_delete(root):
             try:
                 freed += os.path.getsize(p)
                 os.remove(p)
                 targets.append(p)
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
+        skipped_active = len(_tmp_files(root)) - len(_tmp_files_safe_to_delete(root))
+        if skipped_active:
+            print(
+                f"note: kept {skipped_active} *.tmp.* file(s) modified within "
+                f"{_TMP_ACTIVE_WINDOW_SEC}s -- treated as active writes",
+                file=sys.stderr,
+            )
         # Legacy per-namespace dirs.
         for n in sorted(os.listdir(root)):
             ns_dir = os.path.join(root, n)
@@ -251,13 +291,21 @@ def cmd_purge(args) -> int:
                 targets.append(ns_dir)
     elif getattr(args, "tmp", False):
         # --tmp: remove ONLY the crash leftovers, keep every cache file.
-        for p, _final in _tmp_files(root):
+        # Active writes (young *.tmp.*) are skipped (review fix).
+        for p, _final in _tmp_files_safe_to_delete(root):
             try:
                 freed += os.path.getsize(p)
                 os.remove(p)
                 targets.append(p)
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
+        skipped_active = len(_tmp_files(root)) - len(_tmp_files_safe_to_delete(root))
+        if skipped_active:
+            print(
+                f"note: kept {skipped_active} *.tmp.* file(s) modified within "
+                f"{_TMP_ACTIVE_WINDOW_SEC}s -- treated as active writes",
+                file=sys.stderr,
+            )
     elif ns:
         # Review round 13: EXACT namespace match only. The old substring rule
         # (`ns in prefix`) deleted `MiMo` AND `MiMo-V2.6-Pro` -- and `--namespace -`
@@ -337,7 +385,9 @@ def main(argv=None) -> int:
     p.add_argument("--tmp", action="store_true",
                    help="remove ONLY crash leftovers (*.bin.tmp.<uuid>), keep "
                         "every cache file. Useful after a hard kill: upstream "
-                        "sweeps those files only on a clean shutdown.")
+                        "sweeps those files only on a clean shutdown. Files "
+                        "modified within the active-write window "
+                        "(15 min) are kept -- they may be an in-flight store.")
     p.add_argument("--yes", action="store_true", help="required to actually delete")
     q = sub.add_parser("quota", help="show or set per-namespace quota")
     q.add_argument("--set-namespace")
