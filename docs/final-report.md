@@ -9,7 +9,7 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(67 unit tests), architecture proven against the pinned vLLM build's source
+(70 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -68,7 +68,7 @@ bash scripts/benchmark.sh cold 32768           # per config, see docs/benchmarks
 
 # monitoring / storage
 bash scripts/budget-report.sh status
-bash scripts/budget-report.sh purge --namespace <model_name> --yes   # exact match, explicit only
+bash scripts/budget-report.sh purge --namespace=<model_name> --yes   # = form (name starts with '-'), explicit only
 
 # rollback (one command, production untouched)
 bash $HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh
@@ -132,7 +132,7 @@ before measuring).
 
 ## Eviction and deduplication test results
 
-* Eviction policy semantics: **VERIFIED offline** (67 unit tests, incl. stale
+* Eviction policy semantics: **VERIFIED offline** (70 unit tests, incl. stale
   before recent, rare before frequent, huge useless first, long reused prefix
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.
@@ -219,32 +219,36 @@ before measuring).
   `test-recovery.sh`'s gate passes too, since it verifies the same container).
 * `l2_serde` is now actually part of the identity namespace: `model-name` reads
   the generic config layers (where `LMCACHE_L2_SERDE` lives) in the same order
-  the bash loader seeds them, so `none` vs `fp8` produce DIFFERENT names.
-* `purge --namespace` matches the namespace EXACTLY (the old substring rule
-  deleted `MiMo` AND `MiMo-V2.6-Pro`, and `--namespace -` matched everything).
-  A namespace that matches nothing exits 1 with a message. File names with `_`
-  are parsed with a right-anchored regex (`my_model` no longer truncates to
-  `my`).
-* `retention.py`: the hit weight is now meaningful. The score is
-  `(hits + 1) * tokens * freshness / bytes` -- every hit saves one full
-  recompute of the prefix, so hits dominate reuse-vs-freshness decisions
-  (the earlier `3*hits + 1.5*tokens` made hits ~1% of the benefit at typical
-  sizes: 0 vs 50 hits on a 10k-token entry differed by a factor of 1.01).
-* Config loaders now agree byte-for-byte on precedence: the Python loader
-  applies files in the SAME order as the bash seeder
-  (cache.env -> lmcache-server.env -> identity.env -> *.local), so a key set
-  in both `cache.env.local` and `lmcache-server.env` resolves identically in
-  both loaders (the review measured the divergence).
-* systemd: `kvp-lmcache-server` is mode 100755 with INSTALL instructions in
-  the header; the units render the L2 spec on demand when no rendered file
-  exists yet (clean host, no Restart=on-failure loop); `KVP_REPO_ROOT` is
-  passed via the unit's Environment. Deployment docs (EN/RU/ZH) gained a
-  systemd section.
-* Docs sync (EN/RU/ZH): `eviction-and-deduplication.*` formulas updated from
-  `ln(1+tokens)` to the linear form; `storage-management.*`, `security.*` and
-  `final-report.*` now describe the real L2 layout (flat
-  `<model_name>_<rank8>_<group>_<hash64>.bin` files) instead of the
-  nonexistent `kvp-<hash>` directories.
+  the bash loader seeds them, so `none` vs `fp8` produce DIFFERENT names. The
+  process environment WINS over the files (same as `scripts/env.sh`).
+* `purge --namespace` matches the namespace EXACTLY. Real namespaces look like
+  `--models--MyModel--<hash>` (leading dash), so the docs show `--namespace=NAME`
+  (or the new positional form); `--namespace NAME` is parsed as an unknown
+  option by argparse. No match exits 1 with a message. File names with `_` are
+  parsed with a right-anchored regex (`my_model` no longer truncates to `my`).
+* `retention.py`: the hit weight is now meaningful. Score:
+  `(hits + 1) * tokens * freshness / bytes`. At fixed bytes-per-token this is
+  length-neutral between entries with equal hit counts (the earlier `log1p`
+  form evicted long prefixes first; the previous `3*hits + 1.5*tokens` form
+  made hits ~1% of the benefit). To favour a long entry explicitly, raise
+  `min_keep_tokens` or add a small positive `tokens` exponent.
+* Config loaders agree byte-for-byte on precedence: the Python loader applies
+  files in the same order as the bash seeder (cache.env -> lmcache-server.env
+  -> identity.env -> *.local).
+* systemd: `kvp-lmcache-server` is 100755 with INSTALL instructions; renders
+  the L2 spec on demand and reads `cache.env`/`.local` for `KVP_CACHE_ROOT` and
+  the budget (same precedence as `start-cache.sh`, so a custom cache root in
+  `cache.env.local` is honoured -- no silent 1.5 TB on the system disk);
+  `StateDirectory=kv-persistence` handles the default-path ownership; for a
+  custom `KVP_CACHE_ROOT` run `sudo install -d -o kvp -g kvp -m 0700 <dir>`;
+  `KVP_REPO_ROOT` defaults to `/home/kvp/kv-persistence` (README clones to
+  `~/kv-persistence`; override in `/etc/kv-persistence.env`).
+* Docs sync (EN/RU/ZH): `eviction-and-deduplication.*` formulas updated to
+  the linear form; `storage-management.*`, `security.*` and `final-report.*`
+  describe the real L2 layout (flat `<safe_model_name>_<rank8>_<group>
+  _<hash64>.bin` files) instead of the nonexistent `kvp-<hash>` directories;
+  `deployment.*` gained a systemd section with the ownership and
+  `--namespace=NAME` form documented.
 
 ## Provenance
 

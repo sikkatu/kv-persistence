@@ -80,27 +80,32 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
   `--block-size "${KVP_BLOCK_SIZE:-16}"`（`test-recovery.sh` 的门禁也因此通过）。
 * `l2_serde` 现已真正进入身份命名空间：`model-name` 按 bash 加载器的相同顺序
   读取 generic 配置层（`LMCACHE_L2_SERDE` 所在处），因此 `none` 与 `fp8`
-  产生**不同**的名字。
-* `purge --namespace` 仅按**精确**匹配命名空间（旧的子串规则会同时删除
-  `MiMo` 和 `MiMo-V2.6-Pro`，`--namespace -` 匹配全部）。无匹配项时以退出码 1
-  和明确消息结束。带 `_` 的文件名用右锚定正则解析（`my_model` 不再被截成
-  `my`）。
+  产生**不同**的名字。进程环境变量优先于文件（与 `scripts/env.sh` 一致）。
+* `purge --namespace` 仅按**精确**匹配命名空间。真实命名空间形如
+  `--models--MyModel--<hash>`（以短横线开头），因此文档给出 `--namespace=NAME`
+  形式（或新的位置参数形式）；`--namespace NAME` 会被 argparse 解析为未知选项。
+  无匹配项时以退出码 1 和明确消息结束。带 `_` 的文件名用右锚定正则解析
+  （`my_model` 不再被截成 `my`）。
 * `retention.py`：命中权重变得有意义。公式为
-  `(hits + 1) * tokens * 新鲜度 / 字节`——每次命中省去一次完整前缀重算，
-  因此复用与新鲜度的权衡由 hits 主导（旧的 `3*hits + 1.5*tokens` 使 hits
-  仅占约 1% 收益：10k token 条目 0 次与 50 次命中仅差 1.01 倍）。
+  `(hits + 1) × tokens × 新鲜度 ÷ 字节`——在每 token 字节数恒定时，对 hits
+  相同的条目长度中性（旧的 `log1p` 会优先淘汰长前缀；更早的
+  `3*hits + 1.5*tokens` 使 hits 仅占约 1%）。若要显式保护长条目——提高
+  `min_keep_tokens` 或给 `tokens` 加一个小的正指数。
 * 两个配置加载器优先级逐字节一致：Python 加载器按 bash seeder 的相同顺序
-  应用文件（cache.env -> lmcache-server.env -> identity.env -> *.local），
-  因此 `cache.env.local` 与 `lmcache-server.env` 中的重复键在两者中解析
-  结果一致（审阅确认了此前的偏差）。
-* systemd：`kvp-lmcache-server` 权限 100755，头部含安装说明；单元在渲染文件
-  不存在时按需渲染 L2 规格（干净主机，无 `Restart=on-failure` 死循环）；
-  `KVP_REPO_ROOT` 通过单元 Environment 传递。deployment 文档（EN/RU/ZH）
-  新增 systemd 章节。
-* 文档同步（EN/RU/ZH）：`eviction-and-deduplication.*` 公式由 `ln(1+tokens)`
-  更新为线性形式；`storage-management.*`、`security.*` 与 `final-report.*`
-  现在描述真实的 L2 布局（扁平 `<model_name>_<rank8>_<group>_<hash64>.bin`
-  文件）而非不存在的 `kvp-<hash>` 目录。
+  应用文件（cache.env -> lmcache-server.env -> identity.env -> *.local）。
+* systemd：`kvp-lmcache-server` 权限 100755 含安装说明；按需渲染 L2 规格
+  并读取 `cache.env`/`.local` 中的 `KVP_CACHE_ROOT` 与预算（与
+  `start-cache.sh` 相同的优先级——`cache.env.local` 中的自定义缓存根目录
+  会被尊重，不会在系统盘上悄悄放 1.5 TB）；`StateDirectory=kv-persistence`
+  处理默认路径的权限；自定义 `KVP_CACHE_ROOT` 时执行一次
+  `sudo install -d -o kvp -g kvp -m 0700 <dir>`；`KVP_REPO_ROOT` 默认为
+  `/home/kvp/kv-persistence`（README 克隆到 `~/kv-persistence`；可在
+  `/etc/kv-persistence.env` 覆盖）。
+* 文档同步（EN/RU/ZH）：`eviction-and-deduplication.*` 公式更新为线性形式；
+  `storage-management.*`、`security.*` 与 `final-report.*` 描述真实的 L2 布局
+  （扁平 `<safe_model_name>_<rank8>_<group>_<hash64>.bin` 文件）而非不存在的
+  `kvp-<hash>` 目录；`deployment.*` 新增含权限与 `--namespace=NAME` 形式的
+  systemd 章节。
 
 ## 已知限制（同前）
 1. 硬件验收（A/B 测试）未在本会话执行——目标主机不可达；脚本与协议完全就绪。

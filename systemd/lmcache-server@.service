@@ -18,7 +18,14 @@ User=%i
 Group=%i
 EnvironmentFile=-/etc/kv-persistence.env
 Environment=PYTHONUNBUFFERED=1
-Environment=KVP_REPO_ROOT=/opt/kv-persistence
+# README clones to ~/kv-persistence; override in /etc/kv-persistence.env.
+# The wrapper reads cache.env/.local for KVP_CACHE_ROOT and the budget (same
+# "env wins over files" rule as scripts/env.sh).
+Environment=KVP_REPO_ROOT=/home/kvp/kv-persistence
+# Cache root ownership: StateDirectory= creates /var/lib/kv-persistence owned
+# by the instance user. For a custom KVP_CACHE_ROOT run once:
+#   sudo install -d -o <user> -g <user> -m 0700 <your-cache-root>
+StateDirectory=kv-persistence
 ExecStart=/usr/local/sbin/kvp-lmcache-server
 Restart=on-failure
 RestartSec=5

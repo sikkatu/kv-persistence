@@ -47,14 +47,18 @@ EnvironmentFile=-/etc/kv-persistence.env
 Environment=PYTHONUNBUFFERED=1
 # Where the kv-persistence repo lives, so the wrapper can render the L2
 # adapter spec from configs/<KVP_MODEL_CONFIG>/l2-adapter.json.in when the
-# rendered file does not exist yet (clean host). Set this to the repo checkout
-# path in /etc/kv-persistence.env if it differs.
-Environment=KVP_REPO_ROOT=/opt/kv-persistence
-# The wrapper reads (or renders) the L2 adapter JSON and passes it to `lmcache
-# server` as an inline JSON string (the pinned 0.5.3 CLI does json.loads on
-# --l2-adapter, so a file path is rejected). The optional argument is a
-# pre-rendered adapter file; when absent the wrapper renders it from the
-# template -- so the unit starts on a clean host BEFORE start-cache.sh ran.
+# rendered file does not exist yet (clean host). README clones to
+# ~/kv-persistence; override in /etc/kv-persistence.env if it differs.
+# NOTE: the wrapper ALSO reads cache.env/.local for KVP_CACHE_ROOT and the
+# budget (same "env wins over files" rule as scripts/env.sh), so a custom
+# cache root in cache.env.local is honoured -- no silent 1.5 TB on the
+# system disk.
+Environment=KVP_REPO_ROOT=/home/kvp/kv-persistence
+# Review round 14: the service user (kvp) must own the cache root. For the
+# DEFAULT path StateDirectory= creates /var/lib/kv-persistence with the right
+# ownership; for a custom KVP_CACHE_ROOT run once:
+#   sudo install -d -o kvp -g kvp -m 0700 <your-cache-root>
+StateDirectory=kv-persistence
 ExecStart=/usr/local/sbin/kvp-lmcache-server
 Restart=on-failure
 RestartSec=5

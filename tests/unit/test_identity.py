@@ -197,3 +197,35 @@ def test_l2_serde_part_of_identity():
     base = make_identity().namespace()
     assert make_identity(l2_serde="fp8").namespace() != base
     assert make_identity(l2_serde="none").namespace() != base
+
+
+def test_identity_from_env_files_env_wins(tmp_path, monkeypatch):
+    """`LMCACHE_L2_SERDE` in the process env must WIN over the file value --
+    otherwise `model-name` reports the file's namespace while the server
+    actually runs with the env serde (review round 14)."""
+    from kvpersist.identity import identity_from_env_files
+    f = tmp_path / "identity.env"
+    f.write_text(
+        "KVP_MODEL_ID=x\n"
+        "KVP_MODEL_REVISION=" + "a" * 40 + "\n"
+        "KVP_TOKENIZER_NAME=t\n"
+        "KVP_TOKENIZER_REVISION=" + "b" * 40 + "\n"
+        "KVP_KV_CACHE_DTYPE=fp16\n"
+        "KVP_BLOCK_SIZE=16\n"
+        "KVP_NUM_KV_HEADS=8\n"
+        "KVP_HEAD_DIM=128\n"
+        "KVP_TP_SIZE=4\n"
+        "KVP_CONNECTOR=LMCacheMPConnector\n"
+        "KVP_CONNECTOR_VERSION=v\n"
+        "KVP_MAX_MODEL_LEN=1024\n"
+        "KVP_CHAT_TEMPLATE_DIGEST=" + "c" * 64 + "\n"
+        "LMCACHE_L2_SERDE=none\n"
+    )
+    monkeypatch.delenv("LMCACHE_L2_SERDE", raising=False)
+    ident_file = identity_from_env_files(str(f))
+    assert ident_file.l2_serde == "none"
+    monkeypatch.setenv("LMCACHE_L2_SERDE", "fp8")
+    ident_env = identity_from_env_files(str(f))
+    assert ident_env.l2_serde == "fp8", "process env must win over the file"
+    assert ident_env.namespace() != ident_file.namespace(), \
+        "env-vs-file serde difference must change the namespace"

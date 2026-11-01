@@ -165,12 +165,25 @@ journalctl -u lmcache-server -f
   `configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in` when no
   rendered file exists yet (clean host), so the unit starts before
   `start-cache.sh` has ever run. Set `KVP_REPO_ROOT` in
-  `/etc/kv-persistence.env` to the repo checkout path if it differs from
-  `/opt/kv-persistence`.
+  `/etc/kv-persistence.env` to the repo checkout path (README clones to
+  `~/kv-persistence`; the unit defaults to `/home/kvp/kv-persistence`).
+* The wrapper reads `cache.env` / `cache.env.local` for `KVP_CACHE_ROOT` and
+  `KVP_CACHE_BUDGET_GB` with the same precedence as `scripts/env.sh` (process
+  env wins over files), so a custom cache root pinned in `cache.env.local` is
+  honoured -- no silent 1.5 TB on the system disk.
 * The unit runs as user `kvp` (create it or edit `User=`/`Group=`); for
   per-instance users use the template unit `lmcache-server@.service`
   (`systemctl enable --now lmcache-server@<user>` — `User=%i` is only valid in
   a template unit).
+* **Cache root ownership**: the service user must be able to write the cache
+  root. For the DEFAULT `/var/lib/kv-persistence` the unit's
+  `StateDirectory=kv-persistence` creates it with the right ownership. For a
+  custom `KVP_CACHE_ROOT` run once:
+  ```bash
+  sudo install -d -o kvp -g kvp -m 0700 /mnt/nvme/kvp   # example path
+  ```
+  The wrapper also checks writability at startup and prints this exact command
+  if the directory is not writable.
 * Do NOT run both the unit and `start-cache.sh` at the same time: they would
   fight over the same cache root and ports.
 

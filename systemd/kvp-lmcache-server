@@ -22,19 +22,53 @@ REPO_ROOT="${KVP_REPO_ROOT:-}"
 [ -z "$REPO_ROOT" ] && [ -d "$HERE/../configs" ] && REPO_ROOT="$(cd "$HERE/.." && pwd)"
 ADAPTER_FILE="${1:-}"
 
-# Review round 13: a missing adapter file used to be a hard failure, so on a
-# clean host the unit crashed and Restart=on-failure spun it in a loop before
-# start-cache.sh ever ran. Now the spec is RENDERED on demand from the
-# template -- the same rendering rules as scripts/start-cache.sh.
+# Review round 14: the settings below must come from the REPO config files
+# (cache.env / cache.env.local), not from bare defaults -- docs/deployment.md
+# tells users to pin KVP_CACHE_ROOT and the budget in cache.env.local, and
+# start-cache.sh honours them ("env wins" over files). Reading only
+# /etc/kv-persistence.env here would render file_path=/var/lib/kv-persistence/l2
+# with a 1.5 TB budget while the real cache lives elsewhere (a 1.5 TB cache on
+# the system disk). The effective value = process env > repo .local > repo base
+# > the defaults below -- identical to scripts/env.sh.
+repo_cfg() { # repo_cfg <KEY> <default>
+  local k="$1" def="$2" v=""
+  if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/configs/generic/cache.env" ]; then
+    v="$(sed -n "s/^${k}=//p" "$REPO_ROOT/configs/generic/cache.env" "$REPO_ROOT/configs/generic/cache.env.local" 2>/dev/null | tail -1 | tr -d '\"' | sed 's/ *#.*//')"
+  fi
+  echo "${!k:-${v:-$def}}"
+}
+
 render_adapter() {
   local tmpl="$REPO_ROOT/configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in"
   [ -f "$tmpl" ] || { echo "adapter template not found: $tmpl (set KVP_REPO_ROOT and KVP_MODEL_CONFIG)" >&2; exit 1; }
-  sed -e "s|__KVP_CACHE_ROOT__|${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}|" \
-      -e "s|__KVP_CACHE_BUDGET_GB__|${KVP_CACHE_BUDGET_GB:-1500}|" \
+  local root budget
+  root="$(repo_cfg KVP_CACHE_ROOT /var/lib/kv-persistence/l2)"
+  budget="$(repo_cfg KVP_CACHE_BUDGET_GB 1500)"
+  sed -e "s|__KVP_CACHE_ROOT__|$root|" \
+      -e "s|__KVP_CACHE_BUDGET_GB__|$budget|" \
       -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${KVP_EVICT_TRIGGER_WATERMARK:-0.9}|" \
       -e "s|__KVP_EVICT_RATIO__|${KVP_EVICT_RATIO:-0.1}|" \
       "$tmpl" \
     | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)'
+}
+
+# Review round 14: the cache root must exist and be writable by the service
+# user (the systemd unit runs as `kvp`, the directory is usually root-owned).
+# StateDirectory= in the unit handles the default path; for a custom
+# KVP_CACHE_ROOT we create and chown it here (best effort -- chown needs
+# root, which systemd does not give us, so document `install -d` as well).
+ensure_cache_root() {
+  local root budget
+  root="$(repo_cfg KVP_CACHE_ROOT /var/lib/kv-persistence/l2)"
+  if [ ! -d "$root" ]; then
+    mkdir -p "$root" 2>/dev/null \
+      || { echo "cannot create cache root $root -- create it first (see docs/deployment.md systemd section)" >&2; exit 1; }
+  fi
+  if [ ! -w "$root" ]; then
+    echo "cache root $root is not writable by $(id -un) -- run:" >&2
+    echo "  sudo install -d -o kvp -g kvp -m 0700 $root" >&2
+    exit 1
+  fi
 }
 
 if [ -n "$ADAPTER_FILE" ] && [ -f "$ADAPTER_FILE" ]; then
@@ -45,6 +79,8 @@ else
 fi
 echo "$ADAPTER_JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
   || { echo "adapter spec is not valid JSON" >&2; exit 1; }
+# Review round 14: the service user must be able to write the cache root.
+ensure_cache_root
 exec lmcache server \
   --host "${LMCACHE_HOST:-127.0.0.1}" \
   --port "${LMCACHE_PORT:-5555}" \

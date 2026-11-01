@@ -64,9 +64,13 @@ kv-persistence 的任何脚本都不会触碰它们。
   空间低于预算时也会在启动时告警。
 ### 手动清理 —— 仅显式执行
 ```bash
-bash scripts/budget-report.sh purge --namespace <model_name> --yes
+bash scripts/budget-report.sh purge --namespace=<model_name> --yes
 bash scripts/budget-report.sh purge --all --yes
 ```
+命名空间形如 `--models--MyModel--<hash>`（以短横线开头），因此请用
+`--namespace=NAME` 形式——`--namespace NAME`（以及位置参数形式）对以短横线
+开头的名称会被 argparse 解析为未知选项。位置参数形式适用于不以短横线
+开头的命名空间。
 需要 `--yes`。删除范围严格限定在 `KVP_CACHE_ROOT` 内的缓存数据 ——
 其他路径一律拒绝并返回退出码 2。命名空间是经过清理的 `model_name`
 （L2 文件名中 `_<rank8>_<group>_<hash64>.bin` 后缀之前的部分），按**精确**

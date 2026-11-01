@@ -215,10 +215,20 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
     Used by the launchers to compute the LMCache model_name from the SAME
     values the identity gate verifies, so the storage-level namespace and the
     verified pins can never drift apart.
+
+    Precedence (review round 14): the process environment WINS over the files,
+    matching `scripts/env.sh` (`_kvp_load_env`) and `kvpersist.config.load_config`.
+    Without this, `LMCACHE_L2_SERDE=fp8` in the env with `none` in the file gave
+    the file's namespace while `start-cache.sh` actually started the server
+    with fp8 -- data written under one serde read back with the other.
     """
     vals: Dict[str, str] = {}
     for p in paths:
         vals.update(_read_env_config(p))
+    import os as _os
+    for k in list(vals):
+        if k in _os.environ:
+            vals[k] = _os.environ[k]
     def get(name: str, default: str = "") -> str:
         return vals.get(name, default)
     return CacheIdentity(

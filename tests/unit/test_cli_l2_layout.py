@@ -94,3 +94,38 @@ def test_purge_no_match_exits_nonzero(tmp_path, monkeypatch):
         yes = True
     rc = cli_mod.cmd_purge(_Args())
     assert rc == 1, "purge with no matching namespace must exit 1, not 0"
+
+
+def test_purge_accepts_positional_namespace(tmp_path, monkeypatch):
+    """The positional form works for namespaces WITHOUT a leading dash.
+    Namespaces that START with '-' (like `--models--MyModel--<hash>`) are
+    parsed as options by argparse regardless of position -- for those, the
+    `--namespace=NAME` form is the documented one (review round 14)."""
+    root = _make_cache_dir(tmp_path)
+    _touch(root, "plain-model_00000000_0_" + "a" * 64 + ".bin")
+    monkeypatch.setenv("KVP_CACHE_ROOT", str(root))
+    from kvpersist import cli as cli_mod
+    class _Args:
+        namespace = None
+        namespace_pos = "plain-model"
+        all = False
+        yes = True
+    rc = cli_mod.cmd_purge(_Args())
+    assert rc == 0
+    assert not list(root.iterdir())
+
+
+def test_purge_equals_form_namespace(tmp_path, monkeypatch):
+    """`--namespace=NAME` (the `=` form) must also work for dashed names."""
+    root = _make_cache_dir(tmp_path)
+    _touch(root, "--models--MyModel--a84fadf1_00000000_0_" + "a" * 64 + ".bin")
+    monkeypatch.setenv("KVP_CACHE_ROOT", str(root))
+    from kvpersist import cli as cli_mod
+    class _Args:
+        namespace = "--models--MyModel--a84fadf1"
+        namespace_pos = None
+        all = False
+        yes = True
+    rc = cli_mod.cmd_purge(_Args())
+    assert rc == 0
+    assert not list(root.iterdir())

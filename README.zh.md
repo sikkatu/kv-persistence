@@ -86,7 +86,7 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 | `configs/mimo-v2.6-pro/` | MiMo 身份固定与 L2 适配器模板，EN/RU/ZH |
 | `scripts/` | 预检、缓存启停、启动器、恢复测试、基准、管理 CLI |
 | `implementation/` | `kvpersist` 包：身份、预算、保留排序、管理 CLI |
-| `tests/` | 单元（67 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
+| `tests/` | 单元（70 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
 
 ## 状态
 

@@ -115,9 +115,20 @@ journalctl -u lmcache-server -f
 * 包装脚本在渲染文件不存在时（干净主机）从
   `configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in` 渲染规格，
   因此单元可以先于第一次 `start-cache.sh` 启动。若仓库路径不同于
-  `/opt/kv-persistence`，请在 `/etc/kv-persistence.env` 中设置 `KVP_REPO_ROOT`。
+  `/home/kvp/kv-persistence`（README 克隆到 `~/kv-persistence`），请在
+  `/etc/kv-persistence.env` 中设置 `KVP_REPO_ROOT`。
+* 包装脚本读取 `cache.env`/`.local` 中的 `KVP_CACHE_ROOT` 与预算，与
+  `scripts/env.sh` 优先级一致（env 优先于文件）——`cache.env.local` 中的
+  自定义缓存根目录会被尊重。
 * 单元以用户 `kvp` 运行；按实例用户请用模板单元 `lmcache-server@.service`
   （`User=%i` 仅在模板单元中合法）。
+* **缓存根目录权限**：服务用户必须有写权限。默认路径 `/var/lib/kv-persistence`
+  由单元的 `StateDirectory=kv-persistence` 创建并设置正确属主。自定义
+  `KVP_CACHE_ROOT` 时执行一次：
+  ```bash
+  sudo install -d -o kvp -g kvp -m 0700 /mnt/nvme/kvp   # 示例路径
+  ```
+  包装脚本在启动时也会检查可写性，若目录不可写则打印这条命令。
 * 不要同时运行单元和 `start-cache.sh`——会争夺同一缓存目录和端口。
 
 ## 回滚（一条命令）

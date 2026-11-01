@@ -75,9 +75,13 @@
 
 ### Явная очистка — только вручную
 ```bash
-bash scripts/budget-report.sh purge --namespace <model_name> --yes
+bash scripts/budget-report.sh purge --namespace=<model_name> --yes
 bash scripts/budget-report.sh purge --all --yes
 ```
+Пространства имён выглядят как `--models--MyModel--<hash>` (начинаются с дефиса),
+поэтому передавайте значение как `--namespace=NAME` — форма `--namespace NAME`
+(и позиционная) для имён с дефисом распознаётся argparse как неизвестные опции.
+Позиционная форма работает для пространств без ведущего дефиса.
 Требуется `--yes`. Удаление ограничено данными кэша внутри `KVP_CACHE_ROOT` —
 всё остальное отклоняется с кодом 2. Пространство имён — это санитизированное
 `model_name` (начальная часть имени файла L2 до хвоста

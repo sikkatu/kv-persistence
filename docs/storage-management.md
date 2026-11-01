@@ -83,9 +83,13 @@ Automatic eviction is mandatory and always on:
 
 ### Manual cleanup (explicit only)
 ```bash
-bash scripts/budget-report.sh purge --namespace <model_name> --yes
+bash scripts/budget-report.sh purge --namespace=<model_name> --yes
 bash scripts/budget-report.sh purge --all --yes
 ```
+Namespaces look like `--models--MyModel--<hash>` (they start with a dash), so
+pass the value as `--namespace=NAME` -- `--namespace NAME` (and the positional
+form) are parsed as unknown options by argparse for dashed names. The
+positional form works for namespaces without a leading dash.
 Never automatic; requires `--yes`; deletion is confined to cache data inside
 `KVP_CACHE_ROOT` (path safety checks; refusal exit code 2 otherwise). The
 namespace is the sanitized `model_name` (the leading part of the L2 file

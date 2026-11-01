@@ -172,6 +172,12 @@ def cmd_purge(args) -> int:
     if not args.yes:
         print("refusing to delete anything without --yes", file=sys.stderr)
         return 2
+    # Accept the namespace from either form: --namespace=NAME (or
+    # --namespace NAME when NAME has no leading dash) OR the positional
+    # argument. Real namespaces look like `--models--MyModel--<hash>` and
+    # argparse rejects `--namespace --models--...` as an unknown option, so
+    # the positional form (and the `=` form) is what the docs recommend.
+    ns = getattr(args, "namespace", None) or getattr(args, "namespace_pos", None)
     freed = 0
     targets = []
     if args.all:
@@ -190,14 +196,13 @@ def cmd_purge(args) -> int:
                 freed += _dir_size(ns_dir)
                 shutil.rmtree(ns_dir, ignore_errors=True)
                 targets.append(ns_dir)
-    elif args.namespace:
+    elif ns:
         # Review round 13: EXACT namespace match only. The old substring rule
         # (`ns in prefix`) deleted `MiMo` AND `MiMo-V2.6-Pro` -- and `--namespace -`
         # matched every file. The namespace is the sanitized model_name (the
         # part before the trailing _<rank8>_<group>_<hash64>.bin), so equality
         # on it is unambiguous. Nothing found -> non-zero exit and a clear
         # message, never a silent "purged 0".
-        ns = args.namespace
         found = False
         for p, fns in _real_cache_files(root):
             if fns != ns:
@@ -259,7 +264,13 @@ def main(argv=None) -> int:
     e = sub.add_parser("emergency-evict", help="forced LRU eviction when physical free space < 5 GB (DESTRUCTIVE, needs --yes)")
     e.add_argument("--yes", action="store_true", help="required to actually delete")
     p = sub.add_parser("purge", help="manual cleanup (explicit, never automatic)")
-    p.add_argument("--namespace")
+    p.add_argument("--namespace",
+                   help="namespace to purge (EXACT match). Namespaces may start "
+                        "with '-' (e.g. --models--MyModel--<hash>), so pass the "
+                        "value as --namespace=NAME or as a positional argument.")
+    p.add_argument("namespace_pos", nargs="?", default=None,
+                   help="same as --namespace, positional form (safe for names "
+                        "starting with '-')")
     p.add_argument("--all", action="store_true")
     p.add_argument("--yes", action="store_true", help="required to actually delete")
     q = sub.add_parser("quota", help="show or set per-namespace quota")

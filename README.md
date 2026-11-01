@@ -95,7 +95,7 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 | `configs/<model>/` | per-model identity pins and L2 adapter template (example: `mimo-v2.6-pro`), EN/RU/ZH |
 | `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
 | `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
-| `tests/` | unit (67, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
+| `tests/` | unit (70, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
 
 ## Status
 
