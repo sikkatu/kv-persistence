@@ -20,7 +20,7 @@ Nothing here is claimed working without its marker.
 | Restore after vLLM restart | acceptance requirement | NEEDS TESTING on host |
 | Restore after both restarts | acceptance requirement | NEEDS TESTING on host |
 | Model | MiMo-V2.6-Pro-MOPD + custom patches | VERIFIED (production) |
-| KV dtype | brief: fp16; production runs bf16 | CONFIG CHOICE; re-measure after change |
+| KV dtype | bf16 (effective project dtype; part of cache identity) | CONFIG CHOICE; re-measure after change |
 | NVMe backend | POSIX (GDS deliberately deferred) | NEEDS TESTING |
 
 ## Version pinning policy

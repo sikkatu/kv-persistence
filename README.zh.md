@@ -24,10 +24,11 @@
 [故障排查](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting.zh) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ.zh)
 
-适用于 **任何 vLLM 服务模型与任何 NVIDIA GPU 主机**（测试参考配置：
-4× NVIDIA RTX PRO 6000 上的 MiMo-V2.6-Pro，经由 `sikkatu/recipes` 配方）。
-缓存层模型无关；模型专属配置位于 `configs/<model>/` —— 新模型请复制该
-目录并填写对应身份固定值。
+设计用于**任何 vLLM 服务模型与任何 NVIDIA GPU 主机**的复用——模型无关的
+核心将策略层与模型集成分离。经硬件确认的仅有参考配置：
+4× NVIDIA RTX PRO 6000 上的 MiMo-V2.6-Pro（经 `sikkatu/recipes` 配方）。
+其他模型或主机在通过验收测试（`scripts/test-recovery.sh`）之前均属
+**实验性兼容**；架构差异较大的模型预期需要适配启动器（补丁/模型加载器）。
 
 ## 作用
 
@@ -86,7 +87,7 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 | `configs/mimo-v2.6-pro/` | MiMo 身份固定与 L2 适配器模板，EN/RU/ZH |
 | `scripts/` | 预检、缓存启停、启动器、恢复测试、基准、管理 CLI |
 | `implementation/` | `kvpersist` 包：身份、预算、保留排序、管理 CLI |
-| `tests/` | 单元（70 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
+| `tests/` | 单元（74 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
 
 ## 状态
 
@@ -98,7 +99,9 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 ## 设计规则
 
 * 生产配方（`sikkatu/recipes`）对本项目**只读**。
-* 无未认证的管理端点；缓存根目录权限 `0700`。
+* 管理端点（lmcache HTTP + ZMQ）仅限 loopback，缓存根目录权限 `0700`。
+  Loopback 并非身份验证：同一主机上的其他本地用户仍可访问这些端口。
+  主机共享使用时需要额外隔离（见 docs/security.md）。
 * 树中不含凭证、令牌、提示词文本或缓存数据。
 * 导出前置变量（`IMAGE`、`MODEL_DIR`、`API_KEY`）后，文档中所有命令均可直接
   执行 —— 「快速开始」给出线性流程。

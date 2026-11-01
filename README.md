@@ -28,10 +28,13 @@ as verified yet.
 [Troubleshooting](https://github.com/sikkatu/kv-persistence/wiki/Troubleshooting) ·
 [FAQ](https://github.com/sikkatu/kv-persistence/wiki/FAQ)
 
-Works with **any vLLM-served model on any NVIDIA GPU host** (tested reference:
-MiMo-V2.6-Pro on 4× NVIDIA RTX PRO 6000 via the `sikkatu/recipes` recipe).
-The cache layer is model-agnostic; model-specific settings live under
-`configs/<model>/` — copy that directory for a new model and fill in its pins.
+Designed for reuse with **any vLLM-served model on any NVIDIA GPU host** — the
+model-agnostic core keeps policy code separate from model integration.
+The only hardware-confirmed stack is the reference one: MiMo-V2.6-Pro on
+4× NVIDIA RTX PRO 6000 via the `sikkatu/recipes` recipe. Every other model or
+host is **experimental compatibility** until it passes the acceptance suite
+(`scripts/test-recovery.sh`); expect to adapt the launcher (patches / model
+loader) for architecturally different models.
 
 ## What it does
 
@@ -49,9 +52,10 @@ Chat client → vLLM (TP4) → KV connector (LMCacheMPConnector)
   chat template are part of the cache key: incompatible deployments never read each
   other's KV data; anything uncertain is a cache miss, never a wrong hit. The namespace
   is enforced at the LMCache storage level via `lmcache_model_name()` (embedded in the
-  `model_name` that forms the ObjectKey and L2 file name). Known gap: `cache_salt`
-  alone does NOT isolate the `nixl_store_dynamic` L2 tier (see docs/final-report.md);
-  use a per-tenant discriminator in `lmcache_model_name()` or a separate cache root.
+  `model_name` that forms the ObjectKey and L2 file name). For per-user/tenant
+  isolation use `cache_salt` (fixed at the disk-key level in review round 15 by
+  `kvpersist/salt_filename_patch.py`, which ALL launchers use) or
+  `lmcache_model_name(extra_discriminator=...)` / a separate cache root.
 * **Model-agnostic core** — policy code is separate from model integration; a new model
   adds configuration, not code. KV data of different models is never shared.
 
@@ -95,7 +99,7 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 | `configs/<model>/` | per-model identity pins and L2 adapter template (example: `mimo-v2.6-pro`), EN/RU/ZH |
 | `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
 | `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
-| `tests/` | unit (70, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
+| `tests/` | unit (74, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
 
 ## Status
 

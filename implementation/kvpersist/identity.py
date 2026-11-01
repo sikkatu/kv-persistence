@@ -23,18 +23,24 @@ tests/integration/test_l2_persistence.py::test_identity_namespace_isolates_lmcac
     cannot see the old objects (proven at the LMCache API level: LOOKUP returns
     0/N chunks where the original identity returns N/N).
 
-REMAINING LIMITATION (review P1-3, now precisely characterized):
+REMAINING LIMITATION (review P1-3, RESOLVED at the disk-key level in round 15):
 ``cache_salt`` (the per-user field of ObjectKey) is part of the key's
-equality/hash but is NOT part of the ``nixl_store_dynamic`` L2 file name (the
-fs/s3/bigtable adapters do include it). After a restart, a secondary (disk)
-lookup of the same tokens under a DIFFERENT salt can therefore find the file
-written under the original salt. Measured live: store under salt=tenantA,
-restart-free lookup under salt=tenantB -> 4/4 chunks returned from L2. Until
-upstream includes the salt in the file name, do NOT rely on cache_salt for
-isolation on the L2 tier: put any per-tenant discriminator into the
-``model_name`` itself (``lmcache_model_name(extra_discriminator=...)``) or use
-a separate L2 cache root per tenant. See docs/final-report.md
-known-limitations.
+equality/hash but upstream ``nixl_store_dynamic`` does NOT put it into the L2
+file name (the fs/s3/bigtable adapters do include it). After a restart, a
+secondary (disk) lookup of the same tokens under a DIFFERENT salt found the
+file written under the original salt. Measured live: store under salt=tenantA,
+lookup under salt=tenantB -> 4/4 chunks returned from L2.
+
+FIX IN THIS REPO: `kvpersist/salt_filename_patch.py` appends the salt to the
+L2 file name at the disk-key level. All launchers (scripts/start-cache.sh,
+systemd/kvp-lmcache-server) start the server through that patch, so the two
+salts map to DIFFERENT files and cross-salt reads MISS. Verified live:
+store salt=tenantA -> lookup salt=tenantB = 0/4 (test
+test_cache_salt_isolates_l2_storage). When running the server WITHOUT the
+patch (a bare `lmcache server`), do NOT rely on cache_salt for isolation:
+put any per-tenant discriminator into the ``model_name`` itself
+(``lmcache_model_name(extra_discriminator=...)``) or use a separate L2 cache
+root per tenant.
 """
 
 from __future__ import annotations

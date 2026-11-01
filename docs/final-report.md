@@ -9,7 +9,7 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(70 unit tests), architecture proven against the pinned vLLM build's source
+(74 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -132,7 +132,7 @@ before measuring).
 
 ## Eviction and deduplication test results
 
-* Eviction policy semantics: **VERIFIED offline** (70 unit tests, incl. stale
+* Eviction policy semantics: **VERIFIED offline** (74 unit tests, incl. stale
   before recent, rare before frequent, huge useless first, long reused prefix
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.
@@ -249,6 +249,35 @@ before measuring).
   _<hash64>.bin` files) instead of the nonexistent `kvp-<hash>` directories;
   `deployment.*` gained a systemd section with the ownership and
   `--namespace=NAME` form documented.
+
+## Review round 15 fixes (verified on this host)
+
+* **cache_salt isolation fixed AT THE DISK-KEY LEVEL**: upstream 0.5.3 omits
+  the salt from the `nixl_store_dynamic` L2 file name (measured leak: store
+  salt=tenantA -> lookup salt=tenantB returned 4/4 chunks after restart).
+  New `kvpersist/salt_filename_patch.py` appends the salt to the file name;
+  ALL launchers (`scripts/start-cache.sh` host+docker, `systemd/kvp-lmcache-server`)
+  start the server through it. Verified live: tenantA -> tenantB = 0/4
+  (`test_cache_salt_isolates_l2_storage` -- the test now REQUIRES isolation
+  and fails loudly if the leak reappears). Empty salt keeps the upstream name
+  (backward compatible); salt data written by an unpatched server is a safe
+  miss, never a wrong read.
+* **README compatibility claim narrowed** (EN/RU/ZH): "works with any model"
+  -> "designed for reuse with any vLLM-served model; the ONLY
+  hardware-confirmed stack is MiMo-V2.6-Pro on 4x RTX PRO 6000 via
+  sikkatu/recipes; other models are experimental compatibility until the
+  acceptance suite passes".
+* **README.ru security wording fixed**: "Никаких неаутентифицированных
+  эндпоинтов управления" was wrong -- the management endpoints (HTTP + ZMQ)
+  are loopback-only, which is NOT authentication; another local user can
+  reach them. All three README locales now state this (matching
+  docs/security.*).
+* **KV dtype BF16 confirmed everywhere** (review instruction): the launcher
+  default, `identity.env` pin and the identity gate all use bf16; the
+  comments claiming "target is fp16" are corrected (EN/RU/ZH in
+  identity.env.* and run-vllm-with-persist.sh; compatibility.* table).
+  KV dtype remains part of the cache identity -- a dtype change is a MISS,
+  never a wrong-format read.
 
 ## Provenance
 

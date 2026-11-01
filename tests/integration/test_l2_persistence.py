@@ -288,9 +288,19 @@ def _start_server(adapter: Path, zmq_port: int, http_port: int,
     """Start a real lmcache server subprocess; stdout+stderr go to `log`.
 
     The L2 data directory is NEVER wiped between phases -- the same directory
-    is reused across the restart by design (that is the whole point)."""
-    cmd = [
-        LMBIN, "server",
+    is reused across the restart by design (that is the whole point).
+
+    Review round 15: the server is launched through
+    `kvpersist.salt_filename_patch` (the same launcher scripts/start-cache.sh
+    uses) so that cache_salt is part of the L2 file names. Without the patch
+    the upstream nixl_store_dynamic adapter leaks data across salts after a
+    restart (store salt=tenantA -> lookup salt=tenantB returned 4/4 chunks).
+    """
+    impl = str(Path(__file__).resolve().parents[2] / "implementation")
+    env = dict(os.environ, PYTHONPATH=impl + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    launch = [sys.executable, "-m", "kvpersist.salt_filename_patch"]
+    cmd = launch + [
+        "server",
         "--host", "127.0.0.1", "--port", str(zmq_port),
         "--l1-size-gb", "1", "--chunk-size", "16",
         "--eviction-policy", "LRU",
@@ -301,7 +311,7 @@ def _start_server(adapter: Path, zmq_port: int, http_port: int,
     f = open(log, "ab")
     f.write(("\n=== %s: %s ===\n" % (phase, " ".join(cmd))).encode())
     f.flush()
-    return subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+    return subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
 
 
 def _stop_server(proc: subprocess.Popen, log: Path, label: str) -> None:
@@ -718,18 +728,21 @@ def test_identity_namespace_isolates_lmcache_storage(tmp_path):
 
 @pytest.mark.skipif(
     os.environ.get("KVP_LIVE_LMCACHE") != "1",
-    reason="known-limitation probe needs the pinned lmcache package (0.5.3)",
+    reason="cache_salt isolation test needs the pinned lmcache package (0.5.3)",
 )
-def test_cache_salt_isolation_gap_in_nixl_store_dynamic(tmp_path):
-    """Documents a REAL residual gap: `cache_salt` does NOT isolate L2 in 0.5.3.
+def test_cache_salt_isolates_l2_storage(tmp_path):
+    """cache_salt MUST isolate L2 storage (review round 15).
 
-    ObjectKey includes cache_salt in equality/hash, but the nixl_store_dynamic
-    L2 file name is ``<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`` --
-    no salt. A secondary (disk) lookup after a restart therefore returns the
-    same object for ANY salt. This test proves the gap exists (and fails loudly
-    if upstream ever fixes it), so nobody mistakes cache_salt for an isolation
-    guarantee on this adapter. Use CacheIdentity.lmcache_model_name() or a
-    separate L2 root per tenant instead (see identity.py docstring).
+    Upstream LMCache 0.5.3 derives the nixl_store_dynamic L2 file name from
+    (model_name, kv_rank, group, chunk_hash) only -- the salt participates in
+    the key's equality but NOT in the file name, so a secondary (disk) lookup
+    after a restart returned another salt's objects (measured: store
+    salt=tenantA -> lookup salt=tenantB returned 4/4 chunks).
+
+    This project fixes the gap AT THE DISK-KEY LEVEL via
+    `kvpersist.salt_filename_patch` (the launcher this test uses): the salt is
+    appended to the L2 file name, so the two salts map to DIFFERENT files.
+    This test asserts the leak is GONE and fails loudly if it reappears.
     """
     from lmc_protocol_client import LmcClient, LMC_IMPORT_ERROR, build_token_ids
 
@@ -738,12 +751,12 @@ def test_cache_salt_isolation_gap_in_nixl_store_dynamic(tmp_path):
 
     l2 = tmp_path / "l2"
     adapter = _render_adapter(tmp_path, budget_gb="1")
-    log = tmp_path / "salt-gap.log"
+    log = tmp_path / "salt-isolation.log"
     zmq_port, http_port = _free_port(), _free_port()
     tokens = build_token_ids(seq_no=13, num_tokens=_ISO_NUM_TOKENS)
     total_chunks = 4
 
-    server = _start_server(adapter, zmq_port, http_port, log, "salt-gap")
+    server = _start_server(adapter, zmq_port, http_port, log, "salt-isolation")
     cli = None
     try:
         _wait_ready(server, http_port, log)
@@ -757,25 +770,24 @@ def test_cache_salt_isolation_gap_in_nixl_store_dynamic(tmp_path):
                 break
             time.sleep(1)
 
+        # The salt must be part of the on-disk file name.
+        salt_files = [p for p in l2.glob("*.bin") if "tenantA" in p.name]
+        assert salt_files, \
+            "L2 file names must embed the cache_salt (tenantA); got: %s" % \
+            sorted(p.name for p in l2.glob("*.bin"))
+
         hits_same = cli.lookup_hits(tokens, "salt-lookup-A", cache_salt="tenantA")
         hits_other = cli.lookup_hits(tokens, "salt-lookup-B", cache_salt="tenantB")
         assert hits_same == total_chunks, \
             "salt=tenantA must see its own data, got %s" % hits_same
-
-        if hits_other == 0:
-            pytest.fail(
-                "cache_salt isolation now WORKS in nixl_store_dynamic -- "
-                "update identity.py docstring, docs and this test: the "
-                "documented gap (salt not in L2 filename) appears FIXED upstream")
-        # Gap still present: document it, do not claim isolation.
-        print("\n[known limitation CONFIRMED] cache_salt does NOT isolate L2 "
-              "in the pinned nixl_store_dynamic adapter:\n"
-              "  store salt=tenantA, lookup salt=tenantB -> %d/%d chunks "
-              "returned (data leak across salts)" % (hits_other, total_chunks))
-        assert hits_other == total_chunks, \
-            "expected the documented full leak (%d/%d), got %d" \
-            % (total_chunks, total_chunks, hits_other)
+        assert hits_other == 0, \
+            ("ISOLATION BROKEN: salt=tenantB read %d/%d chunks of salt=tenantA's "
+             "data from L2 -- the disk-level filename fix is not in effect"
+             % (hits_other, total_chunks))
+        print("\n[cache_salt isolation PASS] store salt=tenantA -> lookup "
+              "salt=tenantB = %d/%d (miss, data isolated on disk)"
+              % (hits_other, total_chunks))
     finally:
         if cli is not None:
             cli.close()
-        _stop_server(server, log, "salt-gap")
+        _stop_server(server, log, "salt-isolation")

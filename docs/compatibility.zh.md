@@ -19,7 +19,7 @@
 | vLLM 重启后恢复 | 验收要求 | 目标主机 NEEDS TESTING |
 | 双服务重启后恢复 | 验收要求 | 目标主机 NEEDS TESTING |
 | 模型 | MiMo-V2.6-Pro-MOPD + 自定义补丁 | VERIFIED（生产配方可运行） |
-| KV 类型 | 规格书：fp16；生产现为 bf16 | 配置选择；变更后需重测 |
+| KV 类型 | bf16（项目实际类型；属于缓存身份） | 配置选择；变更后需重测 |
 | NVMe 后端 | POSIX（刻意推迟 GDS） | NEEDS TESTING |
 
 ## 版本固定策略

@@ -35,10 +35,18 @@ esac
 # so probing on the host silently unsets all optional flags AND made the later
 # `${LMCACHE_HTTP_PORT}` expansion fail with "unbound variable" (set -u). Probe
 # inside the container in docker mode; on the host only in host mode.
+# Review round 15: the server is started through the kv-persistence filename
+# patch (kvpersist.salt_filename_patch) so that cache_salt is embedded in the
+# L2 file names -- the only disk-level fix for the measured cross-salt leak.
+# The probe must run through the same launcher to match the actual server.
+export PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}"
+LAUNCH=(python3 -m kvpersist.salt_filename_patch)
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
-  LMCACHE_HELP="$(docker run --rm --entrypoint lmcache "$DOCKER_IMAGE" server --help 2>&1 || true)"
+  LMCACHE_HELP="$(docker run --rm -v "$ROOT/implementation:/kvp-impl:ro" \
+    -e PYTHONPATH=/kvp-impl --entrypoint python3 "$DOCKER_IMAGE" \
+    -m kvpersist.salt_filename_patch server --help 2>&1 || true)"
 else
-  LMCACHE_HELP="$(lmcache server --help 2>&1 || true)"
+  LMCACHE_HELP="$("${LAUNCH[@]}" server --help 2>&1 || true)"
 fi
 case "$LMCACHE_HELP" in *--http-host*) : ;; *) unset LMCACHE_HTTP_HOST ;; esac
 case "$LMCACHE_HELP" in *--http-port*) : ;; *) unset LMCACHE_HTTP_PORT ;; esac
@@ -106,7 +114,9 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     -p "127.0.0.1:$LMCACHE_PORT:$LMCACHE_PORT" \
     ${LMCACHE_HTTP_PORT:+-p "127.0.0.1:$LMCACHE_HTTP_PORT:$LMCACHE_HTTP_PORT"} \
     -v "$ROOT_PATH:$ROOT_PATH" \
-    "$DOCKER_IMAGE" lmcache server \
+    -v "$ROOT/implementation:/kvp-impl:ro" \
+    -e PYTHONPATH=/kvp-impl \
+    "$DOCKER_IMAGE" python3 -m kvpersist.salt_filename_patch server \
     --host 0.0.0.0 --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
     --eviction-policy "$LMCACHE_EVICTION_POLICY" \
@@ -119,7 +129,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
     >>"$LOG" 2>&1 &
 else
-  setsid nohup lmcache server \
+  setsid nohup "${LAUNCH[@]}" server \
     --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
     --eviction-policy "$LMCACHE_EVICTION_POLICY" \

@@ -27,8 +27,10 @@ API_KEY="${API_KEY:-}"
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # NOTE on REQUESTED settings from the task brief vs the VERIFIED recipe:
-#  KV_CACHE_DTYPE: the brief says fp16; the production deployment effectively
-#  runs bf16 until re-measured. Set what is ACTUALLY in effect (identity too).
+#  KV_CACHE_DTYPE: BF16 is the effective dtype of this project (review round
+#  15: an earlier note claimed fp16 -- the launcher, identity.env and the
+#  identity gate all use bf16; KV dtype is part of the cache identity, so a
+#  dtype change is a cache MISS). Set what is ACTUALLY in effect (identity too).
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bf16}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"

@@ -99,9 +99,11 @@ def _real_cache_files(root: str) -> list:
     if not os.path.isdir(root):
         return out
     # rank is exactly 8 hex chars, group is hex, chunk hash is 64 hex chars.
+    # Review round 15: the kv-persistence filename patch appends the cache_salt
+    # (`_<hash>_<salt>.bin`), so an optional trailing salt field is allowed.
     pat = re.compile(
         r"^(?P<model>.+)_(?P<rank>[0-9a-f]{8})_(?P<group>[0-9a-f]+)"
-        r"_(?P<hash>[0-9a-f]{64})\.bin$"
+        r"_(?P<hash>[0-9a-f]{64})(?:_(?P<salt>[^/\\@]+))?\.bin$"
     )
     for name in os.listdir(root):
         p = os.path.join(root, name)

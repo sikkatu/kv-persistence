@@ -20,6 +20,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # explicit repo root for template rendering.
 REPO_ROOT="${KVP_REPO_ROOT:-}"
 [ -z "$REPO_ROOT" ] && [ -d "$HERE/../configs" ] && REPO_ROOT="$(cd "$HERE/.." && pwd)"
+# The wrapper launches `python3 -m kvpersist.salt_filename_patch`, which lives
+# in the repo's implementation/ directory -- it must be importable.
+if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/implementation" ]; then
+  export PYTHONPATH="$REPO_ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}"
+fi
 ADAPTER_FILE="${1:-}"
 
 # Review round 14: the settings below must come from the REPO config files
@@ -81,7 +86,10 @@ echo "$ADAPTER_JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev
   || { echo "adapter spec is not valid JSON" >&2; exit 1; }
 # Review round 14: the service user must be able to write the cache root.
 ensure_cache_root
-exec lmcache server \
+# Review round 15: launch through the kv-persistence filename patch so that
+# cache_salt is embedded in the L2 file names (the only disk-level fix for
+# the measured cross-salt leak; see kvpersist/salt_filename_patch.py).
+exec python3 -m kvpersist.salt_filename_patch server \
   --host "${LMCACHE_HOST:-127.0.0.1}" \
   --port "${LMCACHE_PORT:-5555}" \
   --l1-size-gb "${LMCACHE_L1_SIZE_GB:-64}" \

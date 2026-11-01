@@ -107,6 +107,28 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
   `kvp-<hash>` 目录；`deployment.*` 新增含权限与 `--namespace=NAME` 形式的
   systemd 章节。
 
+## 第 15 轮审阅修复（已在本机验证）
+
+* **cache_salt 隔离已在磁盘键层面修复**：上游 0.5.3 不把 salt 写入
+  `nixl_store_dynamic` 的 L2 文件名（实测泄漏：salt=tenantA 写入 → salt=tenantB
+  查找返回 4/4 分块）。新增 `kvpersist/salt_filename_patch.py` 把 salt 追加到
+  文件名；所有启动器（`scripts/start-cache.sh` host+docker、
+  `systemd/kvp-lmcache-server`）都通过它启动服务器。实测验证：
+  tenantA → tenantB = 0/4（`test_cache_salt_isolates_l2_storage`——该测试现在
+  **要求**隔离成立，泄漏复现即明确失败）。空 salt 保持上游命名（向后兼容）；
+  未打补丁的服务器带 salt 写入的数据是安全未命中，绝不会错误读取。
+* **README 兼容性声明已收窄**（EN/RU/ZH）：「适用于任何模型」->
+  「设计用于任何 vLLM 模型的复用；经硬件确认的仅有 MiMo-V2.6-Pro +
+  4× RTX PRO 6000（sikkatu/recipes）；其他模型在通过验收测试前属实验性兼容」。
+* **README.ru 安全表述已修正**：「Никаких неаутентифицированных эндпоинтов
+  управления」不正确——管理端点（HTTP + ZMQ）仅限 loopback，但这不是身份
+  验证；同一主机的其他本地用户仍可访问。三个 README 语言版本均已改写
+  （与 docs/security.* 一致）。
+* **KV dtype BF16 全面确认**（按审阅指示）：启动器默认值、`identity.env`
+  固定值与身份门禁均使用 bf16；声称「目标是 fp16」的注释已更正
+  （identity.env.* 与 run-vllm-with-persist.sh 的 EN/RU/ZH；compatibility.* 表）。
+  KV dtype 仍是缓存身份的一部分——dtype 变更即未命中，绝不会按错误格式读取。
+
 ## 已知限制（同前）
 1. 硬件验收（A/B 测试）未在本会话执行——目标主机不可达；脚本与协议完全就绪。
 2. LMCache 0.5.3 与生产镜像 PyTorch/CUDA 组合待硬件最终验证。
