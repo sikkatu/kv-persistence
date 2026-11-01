@@ -82,14 +82,16 @@ Automatic eviction is mandatory and always on:
   docs/eviction-and-deduplication.md and the known-limits in docs/final-report.md.
 
 ### Manual cleanup (explicit only)
-
 ```bash
-bash scripts/budget-report.sh purge --namespace kvp-<ns> --yes
+bash scripts/budget-report.sh purge --namespace <model_name> --yes
 bash scripts/budget-report.sh purge --all --yes
 ```
-
-Never automatic; requires `--yes`; deletion is confined to namespace directories
-inside `KVP_CACHE_ROOT` (path safety checks; refusal exit code 2 otherwise).
+Never automatic; requires `--yes`; deletion is confined to cache data inside
+`KVP_CACHE_ROOT` (path safety checks; refusal exit code 2 otherwise). The
+namespace is the sanitized `model_name` (the leading part of the L2 file
+name before `_<rank8>_<group>_<hash64>.bin`), matched EXACTLY -- run
+`budget-report.sh status` to see the namespace names in use. Purging a
+namespace that matches nothing exits 1 with a message (never a silent no-op).
 
 ### Storage-pressure warnings
 
@@ -109,8 +111,9 @@ accepting new stores and TTFT would degrade silently.
 * `python3 -m kvpersist.cli free` — reports physical free space on the cache
   filesystem (`physical_free_gb` and `needs_emergency_eviction`).
 * `python3 -m kvpersist.cli emergency-evict` — **forced** LRU-style eviction of
-  the oldest `kvp-*` namespaces until physical free space recovers above the
-  5 GB threshold (or nothing remains to delete). Run it from a systemd timer or
+  the oldest cache data files (and legacy `kvp-*` directories) inside
+  `KVP_CACHE_ROOT` until physical free space recovers above the 5 GB threshold
+  (or nothing remains to delete). Run it from a systemd timer or
   a cron job with access to `KVP_CACHE_ROOT`; it is a NO-OP when the threshold
   is not breached.
 * `scripts/budget-report.sh` already prints `physical_free_gb` and a warning
@@ -123,10 +126,16 @@ that LRU-order (oldest mtime) namespaces were the ones removed.
 
 ## Namespaces and cleanup policy
 
-Each compatibility identity maps to one `kvp-<hash>` directory. Model revision
-changes create NEW namespaces; old ones are NEVER auto-deleted (the brief
-requires explicit documented policy). To reclaim old namespaces deliberately,
-list them (`budget-report.sh status` → `namespaces`) and purge by name.
+The L2 adapter (`nixl_store_dynamic`) writes FLAT files named
+`<safe_model_name>_<kv_rank:08x>_<object_group:x>_<chunkhash:64>.bin` directly
+into `KVP_CACHE_ROOT` -- there are NO per-namespace subdirectories. The
+namespace is therefore the sanitized `model_name` prefix of those files (the
+leading part before the trailing `_<rank8>_<group>_<hash64>.bin` suffix), e.g.
+`--models--my_model--a84fadf1b808e8cfa5ef24f7a2924fa9`. Model revision
+changes create NEW namespaces (new file prefixes); old ones are NEVER
+auto-deleted (the brief requires explicit documented policy). To reclaim old
+namespaces deliberately, list them (`budget-report.sh status` → `namespaces`)
+and purge by name (EXACT match -- no substring matching).
 
 ## Changing the limit
 

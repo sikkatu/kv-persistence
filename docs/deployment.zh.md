@@ -98,6 +98,27 @@ bash scripts/run-vllm-with-persist.sh
 bash scripts/verify-engine-identity.sh      # 强制门禁：引擎几何 == 身份固定
 bash scripts/test-recovery.sh               # 验收：见 docs/benchmarks.md
 ```
+## 在 systemd 下运行缓存服务（可选）
+
+不用 `scripts/start-cache.sh`（`setsid nohup`）时，缓存服务可作为 systemd
+单元运行——可跨重启存活、失败自动重启、日志进 journald。单元调用
+`kvp-lmcache-server` 包装脚本，以 JSON 字符串传入 L2 适配器规格（锁定的
+LMCache 0.5.3 CLI 的 `--l2-adapter` 接受 JSON 字符串，而非文件路径）。
+
+```bash
+sudo install -m 0755 systemd/kvp-lmcache-server /usr/local/sbin/kvp-lmcache-server
+sudo install -m 0644 systemd/lmcache-server.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now lmcache-server
+journalctl -u lmcache-server -f
+```
+
+* 包装脚本在渲染文件不存在时（干净主机）从
+  `configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in` 渲染规格，
+  因此单元可以先于第一次 `start-cache.sh` 启动。若仓库路径不同于
+  `/opt/kv-persistence`，请在 `/etc/kv-persistence.env` 中设置 `KVP_REPO_ROOT`。
+* 单元以用户 `kvp` 运行；按实例用户请用模板单元 `lmcache-server@.service`
+  （`User=%i` 仅在模板单元中合法）。
+* 不要同时运行单元和 `start-cache.sh`——会争夺同一缓存目录和端口。
 
 ## 回滚（一条命令）
 

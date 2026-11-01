@@ -136,6 +136,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --served-model-name mimo-pro \
   --trust-remote-code \
   --tensor-parallel-size 4 \
+  --block-size "${KVP_BLOCK_SIZE:-16}" \
   --disable-custom-all-reduce \
   --offload-backend uva \
   --cpu-offload-gb "$CPU_OFFLOAD_GB" \

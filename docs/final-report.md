@@ -9,7 +9,7 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(61 unit tests), architecture proven against the pinned vLLM build's source
+(67 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -68,7 +68,7 @@ bash scripts/benchmark.sh cold 32768           # per config, see docs/benchmarks
 
 # monitoring / storage
 bash scripts/budget-report.sh status
-bash scripts/budget-report.sh purge --namespace kvp-<ns> --yes   # explicit only
+bash scripts/budget-report.sh purge --namespace <model_name> --yes   # exact match, explicit only
 
 # rollback (one command, production untouched)
 bash $HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh
@@ -132,7 +132,7 @@ before measuring).
 
 ## Eviction and deduplication test results
 
-* Eviction policy semantics: **VERIFIED offline** (61 unit tests, incl. stale
+* Eviction policy semantics: **VERIFIED offline** (67 unit tests, incl. stale
   before recent, rare before frequent, huge useless first, long reused prefix
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.
@@ -209,6 +209,42 @@ before measuring).
   protection. `prompt_probe.py` serializes `tool_calls`/`tool_call_id`.
 * `preflight.sh`: `lsblk -p` output no longer yields `/dev//dev/...` device
   names. `.commitmsg11` removed from the tree.
+
+## Review round 14 fixes (verified on this host)
+
+* **CRITICAL**: `run-vllm-with-persist.sh` passed `--block-size` nowhere, so the
+  post-launch identity gate could never verify `block_size` (INCONCLUSIVE,
+  exit 5) and the launcher immediately `docker rm -f`'d its own container.
+  `--block-size "${KVP_BLOCK_SIZE:-16}"` is now passed to vLLM (and
+  `test-recovery.sh`'s gate passes too, since it verifies the same container).
+* `l2_serde` is now actually part of the identity namespace: `model-name` reads
+  the generic config layers (where `LMCACHE_L2_SERDE` lives) in the same order
+  the bash loader seeds them, so `none` vs `fp8` produce DIFFERENT names.
+* `purge --namespace` matches the namespace EXACTLY (the old substring rule
+  deleted `MiMo` AND `MiMo-V2.6-Pro`, and `--namespace -` matched everything).
+  A namespace that matches nothing exits 1 with a message. File names with `_`
+  are parsed with a right-anchored regex (`my_model` no longer truncates to
+  `my`).
+* `retention.py`: the hit weight is now meaningful. The score is
+  `(hits + 1) * tokens * freshness / bytes` -- every hit saves one full
+  recompute of the prefix, so hits dominate reuse-vs-freshness decisions
+  (the earlier `3*hits + 1.5*tokens` made hits ~1% of the benefit at typical
+  sizes: 0 vs 50 hits on a 10k-token entry differed by a factor of 1.01).
+* Config loaders now agree byte-for-byte on precedence: the Python loader
+  applies files in the SAME order as the bash seeder
+  (cache.env -> lmcache-server.env -> identity.env -> *.local), so a key set
+  in both `cache.env.local` and `lmcache-server.env` resolves identically in
+  both loaders (the review measured the divergence).
+* systemd: `kvp-lmcache-server` is mode 100755 with INSTALL instructions in
+  the header; the units render the L2 spec on demand when no rendered file
+  exists yet (clean host, no Restart=on-failure loop); `KVP_REPO_ROOT` is
+  passed via the unit's Environment. Deployment docs (EN/RU/ZH) gained a
+  systemd section.
+* Docs sync (EN/RU/ZH): `eviction-and-deduplication.*` formulas updated from
+  `ln(1+tokens)` to the linear form; `storage-management.*`, `security.*` and
+  `final-report.*` now describe the real L2 layout (flat
+  `<model_name>_<rank8>_<group>_<hash64>.bin` files) instead of the
+  nonexistent `kvp-<hash>` directories.
 
 ## Provenance
 

@@ -72,6 +72,36 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 | Quick-Start 步骤 | Python 3.12/venv 在 Debian/Ubuntu (tested on Debian 12) | 明确安装命令与 `python3.12 -m venv` |
 | README | 测试数 29→49、"not code"、"as-is" | 已更正 |
 
+## 第 14 轮审阅修复（已在本机验证）
+
+* **严重**：`run-vllm-with-persist.sh` 未传入 `--block-size`，导致启动后身份门禁
+  永远无法核验 `block_size`（INCONCLUSIVE，exit 5），启动器随即
+  `docker rm -f` 刚创建的容器。现在向 vLLM 传入
+  `--block-size "${KVP_BLOCK_SIZE:-16}"`（`test-recovery.sh` 的门禁也因此通过）。
+* `l2_serde` 现已真正进入身份命名空间：`model-name` 按 bash 加载器的相同顺序
+  读取 generic 配置层（`LMCACHE_L2_SERDE` 所在处），因此 `none` 与 `fp8`
+  产生**不同**的名字。
+* `purge --namespace` 仅按**精确**匹配命名空间（旧的子串规则会同时删除
+  `MiMo` 和 `MiMo-V2.6-Pro`，`--namespace -` 匹配全部）。无匹配项时以退出码 1
+  和明确消息结束。带 `_` 的文件名用右锚定正则解析（`my_model` 不再被截成
+  `my`）。
+* `retention.py`：命中权重变得有意义。公式为
+  `(hits + 1) * tokens * 新鲜度 / 字节`——每次命中省去一次完整前缀重算，
+  因此复用与新鲜度的权衡由 hits 主导（旧的 `3*hits + 1.5*tokens` 使 hits
+  仅占约 1% 收益：10k token 条目 0 次与 50 次命中仅差 1.01 倍）。
+* 两个配置加载器优先级逐字节一致：Python 加载器按 bash seeder 的相同顺序
+  应用文件（cache.env -> lmcache-server.env -> identity.env -> *.local），
+  因此 `cache.env.local` 与 `lmcache-server.env` 中的重复键在两者中解析
+  结果一致（审阅确认了此前的偏差）。
+* systemd：`kvp-lmcache-server` 权限 100755，头部含安装说明；单元在渲染文件
+  不存在时按需渲染 L2 规格（干净主机，无 `Restart=on-failure` 死循环）；
+  `KVP_REPO_ROOT` 通过单元 Environment 传递。deployment 文档（EN/RU/ZH）
+  新增 systemd 章节。
+* 文档同步（EN/RU/ZH）：`eviction-and-deduplication.*` 公式由 `ln(1+tokens)`
+  更新为线性形式；`storage-management.*`、`security.*` 与 `final-report.*`
+  现在描述真实的 L2 布局（扁平 `<model_name>_<rank8>_<group>_<hash64>.bin`
+  文件）而非不存在的 `kvp-<hash>` 目录。
+
 ## 已知限制（同前）
 1. 硬件验收（A/B 测试）未在本会话执行——目标主机不可达；脚本与协议完全就绪。
 2. LMCache 0.5.3 与生产镜像 PyTorch/CUDA 组合待硬件最终验证。

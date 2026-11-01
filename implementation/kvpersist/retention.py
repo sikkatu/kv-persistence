@@ -11,17 +11,20 @@ Value signals (all measured, never guessed):
 - prefix length: token count of the cached prefix (benefit of a hit)
 - storage cost: bytes actually consumed on disk
 
-Value score = (hits_weight * hits + len_weight * tokens) * freshness,
-divided by storage cost. The prefix-length term is LINEAR in tokens on
-purpose (review round 13): the benefit of keeping a prefix is the recompute
-cost it saves, which is linear in its length, while storage cost is also
-linear in length -- so the ratio is length-neutral and a long prefix with
-reuses must outrank a short stale one. The old `log1p(tokens)` term made the
-benefit grow logarithmically against a linear cost, which EVICTED LONG
-PREFIXES FIRST (measured: 1M-token/5-hits entry scored 0.68 while a
-2k-token/0-hits/48h-old entry scored 43.95 at 50 KiB/token). Entries with
-identical policy inputs keep a stable (deterministic) order by key, so tests
-are reproducible.
+Value score = (hits + 1) * tokens * freshness / bytes_on_disk.
+
+Both benefit and cost are LINEAR in the prefix length, so the ratio is
+length-neutral and ORDER IS DECIDED BY REUSE (hits) and FRESHNESS, which is
+the intent: every hit saves one full recompute of the prefix, so a hit is
+worth exactly the prefix's recompute cost. (Earlier revisions used
+`3*hits + 1.5*tokens`, which made hits ~1% of the benefit at typical sizes --
+0 vs 50 hits on a 10k-token entry differed by a factor of 1.01 -- and before
+that `log1p(tokens)`, which EVICTED LONG PREFIXES FIRST. Both are wrong for
+the same reason: the value of keeping a prefix is the recompute it saves, and
+that is linear in length and linear in hit count.)
+
+Entries with identical policy inputs keep a stable (deterministic) order by
+key, so tests are reproducible.
 
 This module never deletes files itself: it only produces an ordered eviction
 plan. Applying the plan is the job of the admin CLI / L2 adapter delete calls,
@@ -79,12 +82,15 @@ class EntryStats:
         now = now or time.time()
         age_h = max(0.0, (now - self.last_access_ts) / 3600.0)
         recency = math.exp(-age_h / half_life_h)          # 1.0 fresh -> 0 stale
-        # LINEAR in tokens (review round 13): the benefit of keeping a prefix is
-        # the recompute cost it saves, which is linear in its length; storage
-        # cost below is also linear, so the ratio is length-neutral. The old
-        # log1p(tokens) made benefit grow logarithmically against a linear cost
-        # and evicted long reused prefixes first.
-        benefit = 3.0 * self.hits + 1.5 * self.tokens
+        # (hits + 1) * tokens: every hit saves one full recompute of this
+        # prefix, so the benefit of keeping it is linear in BOTH the prefix
+        # length and the number of hits. The "+1" keeps a never-reused entry
+        # (hits=0) worth exactly one potential recompute -- the baseline a
+        # MISS would cost. Review round 13: the earlier `3*hits + 1.5*tokens`
+        # made hits ~1% of the benefit at typical sizes (0 vs 50 hits on a
+        # 10k-token entry differed by a factor of 1.01), so eviction order was
+        # effectively decided by freshness and size alone.
+        benefit = (self.hits + 1) * self.tokens
         cost = max(1, self.bytes_on_disk)
         # A shared object survives eviction of one ref -- freeing little real
         # space. Keep shared entries longer: multiply score by sqrt(shared_refs)

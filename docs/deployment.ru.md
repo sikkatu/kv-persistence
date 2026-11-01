@@ -139,6 +139,29 @@ bash scripts/budget-report.sh status      # занято, пространств
 bash scripts/budget-report.sh quota       # квоты по пространствам
 bash scripts/budget-report.sh purge --help
 ```
+## Запуск сервиса кэша под systemd (опционально)
+
+Вместо `scripts/start-cache.sh` (`setsid nohup`) сервис может работать как
+systemd-юнит — переживает перезагрузку, перезапуск при сбое, логи в journald.
+Юнит вызывает обёртку `kvp-lmcache-server`, передающую L2-спецификацию
+JSON-строкой (закреплённый CLI LMCache 0.5.3 принимает `--l2-adapter` как
+JSON-строку, а не путь).
+
+```bash
+sudo install -m 0755 systemd/kvp-lmcache-server /usr/local/sbin/kvp-lmcache-server
+sudo install -m 0644 systemd/lmcache-server.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now lmcache-server
+journalctl -u lmcache-server -f
+```
+
+* Обёртка рендерит спецификацию из `configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in`,
+  если отрендеренного файла нет (чистый хост) — юнит стартует и ДО первого
+  `start-cache.sh`. Укажите `KVP_REPO_ROOT` в `/etc/kv-persistence.env`, если
+  путь к репозиторию отличается от `/opt/kv-persistence`.
+* Юнит работает от пользователя `kvp`; для по-инстансных пользователей —
+  шаблонный юнит `lmcache-server@.service` (`User=%i` легален только там).
+* НЕ запускайте юнит и `start-cache.sh` одновременно — конфликт за каталог
+  кэша и порты.
 
 ## Откат (одна команда)
 

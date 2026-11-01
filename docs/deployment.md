@@ -140,12 +140,39 @@ per phase under `benchmarks/results/`. PASS requires disk-backed recovery
 evidence, not speed alone (see docs/benchmarks.md).
 
 ## Monitoring
-
 ```bash
 bash scripts/budget-report.sh status      # usage vs budget, namespaces, disk free
 bash scripts/budget-report.sh quota       # per-namespace quotas
 bash scripts/budget-report.sh purge --help
 ```
+## Running the cache service under systemd (optional)
+
+Instead of `scripts/start-cache.sh` (which detaches via `setsid nohup`), the
+cache service can run as a systemd unit — survives reboot, restarts on
+failure, logs in journald. The unit calls a small wrapper that inlines the L2
+adapter JSON (the pinned LMCache 0.5.3 CLI takes `--l2-adapter` as a JSON
+STRING, not a file path).
+
+```bash
+sudo install -m 0755 systemd/kvp-lmcache-server /usr/local/sbin/kvp-lmcache-server
+sudo install -m 0644 systemd/lmcache-server.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now lmcache-server
+journalctl -u lmcache-server -f
+```
+
+* The wrapper renders the adapter spec from
+  `configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in` when no
+  rendered file exists yet (clean host), so the unit starts before
+  `start-cache.sh` has ever run. Set `KVP_REPO_ROOT` in
+  `/etc/kv-persistence.env` to the repo checkout path if it differs from
+  `/opt/kv-persistence`.
+* The unit runs as user `kvp` (create it or edit `User=`/`Group=`); for
+  per-instance users use the template unit `lmcache-server@.service`
+  (`systemctl enable --now lmcache-server@<user>` — `User=%i` is only valid in
+  a template unit).
+* Do NOT run both the unit and `start-cache.sh` at the same time: they would
+  fight over the same cache root and ports.
 
 ## Rollback (one command)
 

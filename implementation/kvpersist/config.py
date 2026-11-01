@@ -75,27 +75,32 @@ def load_config(repo_root: str, *, env_wins: bool = True, model_config: Optional
 
     1. existing process environment (always wins -- documented contract)
     2. identity.env.local
-    3. identity.env
-    4. lmcache-server.env.local
-    5. lmcache-server.env
-    6. cache.env.local
+    3. lmcache-server.env.local
+    4. cache.env.local
+    5. identity.env
+    6. lmcache-server.env
     7. cache.env
 
-    That is: files are applied in the order below and a LATER file overrides an
-    EARLIER one for the same key (`.local` is applied over its base), which is
-    exactly what the bash loader (`scripts/env.sh` `_kvp_seed`) does. The
-    previous docstring claimed the reverse for the base files -- that was a
-    documentation bug (review round 13); the code now matches bash.
+    Files are applied in the order below and a LATER file overrides an
+    EARLIER one for the same key. This is EXACTLY the order the bash loader
+    seeds them in `scripts/env.sh` `_kvp_load_env`:
+    cache.env -> lmcache-server.env -> identity.env -> cache.env.local ->
+    lmcache-server.env.local -> identity.env.local. (Review round 13: an
+    earlier revision put the .local files BEFORE some base files here, so a
+    key set in both cache.env.local and lmcache-server.env resolved to the
+    lmcache-server.env value in Python but to the cache.env.local value in
+    bash. The two loaders now agree byte-for-byte on precedence.)
     env_wins=False returns the file values only (used for consistency checks).
     """
     root = Path(repo_root)
+    mc = model_config if model_config else _resolve_model_config(root)
     order = [
         root / "configs/generic/cache.env",
-        root / "configs/generic/cache.env.local",
         root / "configs/generic/lmcache-server.env",
+        root / f"configs/{mc}/identity.env",
+        root / "configs/generic/cache.env.local",
         root / "configs/generic/lmcache-server.env.local",
-        root / f"configs/{model_config}/identity.env" if model_config else root / f"configs/{_resolve_model_config(root)}/identity.env",
-        root / f"configs/{model_config}/identity.env.local" if model_config else root / f"configs/{_resolve_model_config(root)}/identity.env.local",
+        root / f"configs/{mc}/identity.env.local",
     ]
     merged: Dict[str, str] = {}
     for p in order:

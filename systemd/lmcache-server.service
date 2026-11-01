@@ -1,6 +1,7 @@
 # systemd/lmcache-server.service -- cache-service unit for systemd deployments.
-# Install:
-#   sudo cp systemd/lmcache-server.service /etc/systemd/system/
+# Install (the wrapper MUST be installed and executable -- the unit calls it):
+#   sudo install -m 0755 systemd/kvp-lmcache-server /usr/local/sbin/kvp-lmcache-server
+#   sudo install -m 0644 systemd/lmcache-server.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now lmcache-server
 # Logs: journalctl -u lmcache-server -f   ; Restart handling managed by systemd.
@@ -44,10 +45,17 @@ User=kvp
 Group=kvp
 EnvironmentFile=-/etc/kv-persistence.env
 Environment=PYTHONUNBUFFERED=1
-# The wrapper reads the rendered L2 adapter JSON and passes it to `lmcache
+# Where the kv-persistence repo lives, so the wrapper can render the L2
+# adapter spec from configs/<KVP_MODEL_CONFIG>/l2-adapter.json.in when the
+# rendered file does not exist yet (clean host). Set this to the repo checkout
+# path in /etc/kv-persistence.env if it differs.
+Environment=KVP_REPO_ROOT=/opt/kv-persistence
+# The wrapper reads (or renders) the L2 adapter JSON and passes it to `lmcache
 # server` as an inline JSON string (the pinned 0.5.3 CLI does json.loads on
-# --l2-adapter, so a file path is rejected).
-ExecStart=/usr/local/sbin/kvp-lmcache-server /var/lib/kv-persistence/l2/l2-adapter.rendered.json
+# --l2-adapter, so a file path is rejected). The optional argument is a
+# pre-rendered adapter file; when absent the wrapper renders it from the
+# template -- so the unit starts on a clean host BEFORE start-cache.sh ran.
+ExecStart=/usr/local/sbin/kvp-lmcache-server
 Restart=on-failure
 RestartSec=5
 # Cannot be kill -9'd by accident loops; give it time to flush files on SIGTERM.

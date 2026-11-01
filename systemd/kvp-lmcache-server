@@ -3,18 +3,48 @@
 #
 # Why a wrapper: the pinned LMCache 0.5.3 CLI takes --l2-adapter as a JSON
 # STRING (it does json.loads on the value), NOT a file path. systemd's
-# ExecStart does not support $(cat ...) expansion, so the wrapper reads the
-# rendered adapter file and passes its content inline.
+# ExecStart does not support $(cat ...) expansion, so the wrapper reads (or
+# renders) the adapter spec and passes its content inline.
 #
-# Usage: kvp-lmcache-server <rendered-l2-adapter.json>
+# INSTALL:
+#   sudo install -m 0755 systemd/kvp-lmcache-server /usr/local/sbin/kvp-lmcache-server
+#   sudo install -m 0644 systemd/lmcache-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now lmcache-server
+#
+# Usage: kvp-lmcache-server [rendered-l2-adapter.json]
 # All other settings (host, port, L1 size, chunk size, eviction, HTTP) come
 # from the environment (/etc/kv-persistence.env), matching scripts/start-cache.sh.
 set -Eeuo pipefail
-ADAPTER_FILE="${1:?usage: kvp-lmcache-server <rendered-l2-adapter.json>}"
-[ -f "$ADAPTER_FILE" ] || { echo "adapter file not found: $ADAPTER_FILE" >&2; exit 1; }
-ADAPTER_JSON="$(cat "$ADAPTER_FILE")"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# When installed to /usr/local/sbin the repo may not be nearby; allow an
+# explicit repo root for template rendering.
+REPO_ROOT="${KVP_REPO_ROOT:-}"
+[ -z "$REPO_ROOT" ] && [ -d "$HERE/../configs" ] && REPO_ROOT="$(cd "$HERE/.." && pwd)"
+ADAPTER_FILE="${1:-}"
+
+# Review round 13: a missing adapter file used to be a hard failure, so on a
+# clean host the unit crashed and Restart=on-failure spun it in a loop before
+# start-cache.sh ever ran. Now the spec is RENDERED on demand from the
+# template -- the same rendering rules as scripts/start-cache.sh.
+render_adapter() {
+  local tmpl="$REPO_ROOT/configs/${KVP_MODEL_CONFIG:-mimo-v2.6-pro}/l2-adapter.json.in"
+  [ -f "$tmpl" ] || { echo "adapter template not found: $tmpl (set KVP_REPO_ROOT and KVP_MODEL_CONFIG)" >&2; exit 1; }
+  sed -e "s|__KVP_CACHE_ROOT__|${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}|" \
+      -e "s|__KVP_CACHE_BUDGET_GB__|${KVP_CACHE_BUDGET_GB:-1500}|" \
+      -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${KVP_EVICT_TRIGGER_WATERMARK:-0.9}|" \
+      -e "s|__KVP_EVICT_RATIO__|${KVP_EVICT_RATIO:-0.1}|" \
+      "$tmpl" \
+    | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)'
+}
+
+if [ -n "$ADAPTER_FILE" ] && [ -f "$ADAPTER_FILE" ]; then
+  ADAPTER_JSON="$(cat "$ADAPTER_FILE")"
+else
+  [ -n "$REPO_ROOT" ] || { echo "no adapter file and KVP_REPO_ROOT is unset -- cannot render the L2 spec" >&2; exit 1; }
+  ADAPTER_JSON="$(render_adapter)"
+fi
 echo "$ADAPTER_JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
-  || { echo "adapter file is not valid JSON: $ADAPTER_FILE" >&2; exit 1; }
+  || { echo "adapter spec is not valid JSON" >&2; exit 1; }
 exec lmcache server \
   --host "${LMCACHE_HOST:-127.0.0.1}" \
   --port "${LMCACHE_PORT:-5555}" \

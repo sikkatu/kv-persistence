@@ -20,8 +20,12 @@ Two layers cooperate:
    * benefit of a hit (prefix length in tokens),
    * storage cost (bytes actually used), and shared-references penalty.
 
-   Value score = (3·hits + 1.5·ln(1+tokens)) × (0.3 + 0.7·recency) ÷ bytes (scaled),
-   with deterministic tie-break by key. `select_victims()` returns the minimal
+   Value score = (hits + 1) × tokens × recency ÷ bytes (scaled),
+   with deterministic tie-break by key. Every hit saves one full recompute of
+   the prefix, so both the benefit and the cost are linear in the prefix
+   length and the ORDER IS DECIDED BY REUSE AND FRESHNESS (earlier revisions
+   used `3·hits + 1.5·ln(1+tokens)`, which made hits ~1% of the benefit).
+   `select_victims()` returns the minimal
    set of least-valuable entries covering the required bytes and skips
    "valuable long prefixes" (tokens ≥ `min_keep_tokens` **and** hits > 0) until
    cheaper candidates are exhausted. The math is offline-testable — see

@@ -17,7 +17,7 @@
 | 凭证 | 绝不存在仓库或缓存配置中；vLLM API 密钥存于配方自身的 `live/api_key`（chmod 600，在 .gitignore 中） |
 | 日志记录 | 脚本和管理 CLI 只记录键、大小和计数 —— 绝不记录提示词文本或请求头 |
 | 命名空间隔离 | 不兼容的部署无法读取彼此的 KV 数据 |
-| 删除安全 | `purge` 拒绝 `KVP_CACHE_ROOT/kvp-*` 以外的路径（退出码 2），且需要 `--yes` |
+| 删除安全 | `purge` 仅删除 `KVP_CACHE_ROOT` 内的缓存数据（扁平 `*.bin` 文件与遗留 `kvp-*` 目录；`--namespace` 按精确匹配），且需要 `--yes` |
 | 共享存储 | 不支持作为缓存根目录（预检对网络文件系统发出警告） |
 | 启动清空 | 绝不发生 —— 重启和升级后数据保留在原处 |
 | 显式清理 | `bash scripts/budget-report.sh purge --all --yes` —— 仅手动 |

@@ -18,7 +18,7 @@ treat the cache root as if it contained the conversation text itself).
 | Credentials | never in repository or cache config; `live/api_key` (gitignored, chmod 600) holds the vLLM API key exactly like the production recipe does |
 | Diagnostics logging | scripts and admin CLI log keys, sizes and counts only — never prompt text, headers or tokens |
 | Cache isolation | compatibility namespaces make cross-model/cross-configuration reads impossible (`docs/architecture.md`) |
-| Deletion safety | `kvp-admin purge` refuses any path outside `KVP_CACHE_ROOT/*kvp-*` (exit 2) and requires `--yes` |
+| Deletion safety | `kvp-admin purge` deletes only cache data inside `KVP_CACHE_ROOT` (flat `*.bin` files and legacy `kvp-*` dirs; exact namespace match for `--namespace`) and requires `--yes` |
 | Shared storage | NOT supported as the cache root (preflight warns if the filesystem is a network mount) — do not put this on NFS/CIFS/shared NVMe |
 | Startup wipe | never happens: preserved across restarts and upgrades |
 | Clearing data explicitly | `bash scripts/budget-report.sh purge --all --yes` (manual only) |

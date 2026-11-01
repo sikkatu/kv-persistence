@@ -1,6 +1,7 @@
 # systemd/lmcache-server@.service -- TEMPLATE unit (per-instance user).
 # Install:
-#   sudo cp systemd/lmcache-server@.service /etc/systemd/system/
+#   sudo install -m 0755 systemd/kvp-lmcache-server /usr/local/sbin/kvp-lmcache-server
+#   sudo install -m 0644 systemd/lmcache-server@.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now lmcache-server@kvp
 # The instance name (%i) is the user to run as -- this is the ONLY unit form
@@ -17,7 +18,8 @@ User=%i
 Group=%i
 EnvironmentFile=-/etc/kv-persistence.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/local/sbin/kvp-lmcache-server /var/lib/kv-persistence/l2/l2-adapter.rendered.json
+Environment=KVP_REPO_ROOT=/opt/kv-persistence
+ExecStart=/usr/local/sbin/kvp-lmcache-server
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

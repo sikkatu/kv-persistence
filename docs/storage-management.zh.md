@@ -62,18 +62,24 @@ kv-persistence 的任何脚本都不会触碰它们。
   按实测价值排序：新鲜度（24 小时衰减）、复用次数、前缀长度和存储成本。
 * 存储压力告警：状态报告中 `soft_pressure: true`；启动器在文件系统空闲
   空间低于预算时也会在启动时告警。
-
 ### 手动清理 —— 仅显式执行
-
 ```bash
-bash scripts/budget-report.sh purge --namespace kvp-<ns> --yes
+bash scripts/budget-report.sh purge --namespace <model_name> --yes
 bash scripts/budget-report.sh purge --all --yes
 ```
-
-需要 `--yes`。删除范围严格限定在 `KVP_CACHE_ROOT` 内的 `kvp-*` 目录 ——
-其他路径一律拒绝并返回退出码 2。启动绝不会自动清空缓存。
-
+需要 `--yes`。删除范围严格限定在 `KVP_CACHE_ROOT` 内的缓存数据 ——
+其他路径一律拒绝并返回退出码 2。命名空间是经过清理的 `model_name`
+（L2 文件名中 `_<rank8>_<group>_<hash64>.bin` 后缀之前的部分），按**精确**
+匹配 —— 用 `budget-report.sh status` 查看当前使用的命名空间名。若无任何
+匹配项，purge 以退出码 1 和明确消息结束（绝不静默无操作）。启动绝不会自动清空缓存。
 ## 命名空间与清理策略
 
-每个兼容性身份对应一个 `kvp-<hash>` 目录。版本变更会创建新命名空间；
-旧命名空间绝不自动删除（策略已记录：清理是管理员的显式决定）。
+L2 适配器（`nixl_store_dynamic`）把**扁平**文件（命名形如
+`<safe_model_name>_<kv_rank:08x>_<object_group:x>_<chunkhash:64>.bin`）直接
+写入 `KVP_CACHE_ROOT` —— 没有按命名空间划分子目录。因此命名空间就是这些文件
+中 `model_name` 的前缀（`_<rank8>_<group>_<hash64>.bin` 后缀之前的部分），例如
+`--models--my_model--a84fadf1b808e8cfa5ef24f7a2924fa9`。版本变更会创建
+新命名空间（新的文件前缀）；旧命名空间绝不会被自动删除
+（已记录的策略：清理是管理员的显式决定）。要定向回收旧命名空间，
+请列出它们（`budget-report.sh status` → `namespaces`）并按名字 purge
+（精确匹配 —— 无子串匹配）。

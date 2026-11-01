@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 
@@ -84,21 +85,34 @@ def _real_cache_files(root: str) -> list:
     """Actual L2 cache data files the LMCache adapter writes.
 
     The nixl_store_dynamic adapter writes FLAT files
-    ``<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`` directly into the
-    cache root -- NOT into per-namespace subdirectories. The CLI must account
+    ``<safe_model_name>_<kv_rank:08x>_<group:x>_<chunkhash>.bin`` directly into
+    the cache root -- NOT into per-namespace subdirectories. The CLI must account
     for these files, otherwise used_bytes is 0 and purge/emergency-evict
     delete nothing (review: "kvpersist.cli does not see the real cache").
+
+    Review round 13: the model name may itself contain ``_`` (e.g. ``my_model``),
+    so the namespace must be parsed with a RIGHT-anchored regex, not by
+    splitting at the first ``_`` (which truncated ``my_model`` to ``my``).
+    Returns a list of ``(path, namespace)`` tuples.
     """
     out = []
     if not os.path.isdir(root):
         return out
+    # rank is exactly 8 hex chars, group is hex, chunk hash is 64 hex chars.
+    pat = re.compile(
+        r"^(?P<model>.+)_(?P<rank>[0-9a-f]{8})_(?P<group>[0-9a-f]+)"
+        r"_(?P<hash>[0-9a-f]{64})\.bin$"
+    )
     for name in os.listdir(root):
         p = os.path.join(root, name)
-        if os.path.isfile(p) and name.endswith(".bin"):
-            try:
-                out.append(p)
-            except OSError:
-                pass
+        if not (os.path.isfile(p) and name.endswith(".bin")):
+            continue
+        m = pat.match(name)
+        ns = m.group("model") if m else name[:-4]
+        try:
+            out.append((p, ns))
+        except OSError:
+            pass
     return out
 
 
@@ -124,9 +138,8 @@ def cmd_status(_args) -> int:
     # sanitized model_name (the LMCache identity namespace), so group by that
     # prefix to report per-namespace usage that matches reality.
     real_files = _real_cache_files(root)
-    for p in real_files:
-        name = os.path.basename(p)
-        ns = name.split("_", 1)[0] or "(unnamed)"
+    for p, ns in real_files:
+        ns = ns or "(unnamed)"
         try:
             sizes[ns] = sizes.get(ns, 0) + os.path.getsize(p)
         except OSError:
@@ -163,7 +176,7 @@ def cmd_purge(args) -> int:
     targets = []
     if args.all:
         # Real L2 layout: flat *.bin files in the cache root.
-        for p in _real_cache_files(root):
+        for p, _ns in _real_cache_files(root):
             try:
                 freed += os.path.getsize(p)
                 os.remove(p)
@@ -178,26 +191,36 @@ def cmd_purge(args) -> int:
                 shutil.rmtree(ns_dir, ignore_errors=True)
                 targets.append(ns_dir)
     elif args.namespace:
-        # Match the namespace against the sanitized model_name file prefix and
-        # against legacy kvp-* directories. The prefix of a flat file is the
-        # part before the first '_' (safe_model_name), e.g.
-        # "mimo-pro--a84fadf1b808e8cfa5ef24f7a2924fa9_...bin".
+        # Review round 13: EXACT namespace match only. The old substring rule
+        # (`ns in prefix`) deleted `MiMo` AND `MiMo-V2.6-Pro` -- and `--namespace -`
+        # matched every file. The namespace is the sanitized model_name (the
+        # part before the trailing _<rank8>_<group>_<hash64>.bin), so equality
+        # on it is unambiguous. Nothing found -> non-zero exit and a clear
+        # message, never a silent "purged 0".
         ns = args.namespace
-        for p in _real_cache_files(root):
-            prefix = os.path.basename(p).split("_", 1)[0]
-            if prefix == ns or ns in prefix:
-                try:
-                    freed += os.path.getsize(p)
-                    os.remove(p)
-                    targets.append(p)
-                except OSError as exc:
-                    print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
+        found = False
+        for p, fns in _real_cache_files(root):
+            if fns != ns:
+                continue
+            try:
+                freed += os.path.getsize(p)
+                os.remove(p)
+                targets.append(p)
+                found = True
+            except OSError as exc:
+                print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
         if ns.startswith(_NS_PREFIX):
             p = _safe_namespace_dir(root, ns)
             if os.path.isdir(p):
                 freed += _dir_size(p)
                 shutil.rmtree(p, ignore_errors=True)
                 targets.append(p)
+                found = True
+        if not found:
+            print(f"purge: no cache items match namespace {ns!r} "
+                  "(exact match required -- see `status` for the namespace "
+                  "names in use)", file=sys.stderr)
+            return 1
     else:
         print("specify --namespace NS or --all", file=sys.stderr)
         return 2
@@ -306,7 +329,7 @@ def cmd_emergency_evict(args):
     # Sort cache items by mtime: oldest first (closest to LRU semantics).
     # Real L2 layout: flat *.bin files. Legacy: kvp-* namespace directories.
     items = []
-    for p in _real_cache_files(root):
+    for p, _ns in _real_cache_files(root):
         try:
             items.append((os.path.getmtime(p), "file", p,
                           os.path.getsize(p)))
@@ -364,17 +387,28 @@ def cmd_model_name(args) -> int:
             os.path.abspath(__file__))))
         root = here
     model_cfg = os.environ.get("KVP_MODEL_CONFIG", "").strip()
-    cfg_dir = os.path.join(root, "configs", model_cfg) if model_cfg else None
     paths = []
-    if cfg_dir:
-        paths.append(os.path.join(cfg_dir, "identity.env"))
-        paths.append(os.path.join(cfg_dir, "identity.env.local"))
+    # Layer ALL config sources in the same order the bash loader seeds them
+    # (later file wins per key). Review round 13: LMCACHE_L2_SERDE lives in
+    # configs/generic/lmcache-server.env, not in identity.env -- reading only
+    # identity.env made l2_serde invisible to the namespace (none/fp8 gave the
+    # SAME name). The generic files are layered BELOW the model identity files.
+    import glob
+    gen = os.path.join(root, "configs", "generic")
+    paths += [os.path.join(gen, "cache.env"),
+              os.path.join(gen, "lmcache-server.env")]
+    if model_cfg:
+        dirs = [os.path.join(root, "configs", model_cfg)]
     else:
-        # layer every model config dir we can find; the last one wins per key
-        import glob
-        for d in sorted(glob.glob(os.path.join(root, "configs", "*"))):
-            paths.append(os.path.join(d, "identity.env"))
-            paths.append(os.path.join(d, "identity.env.local"))
+        # every model config dir we can find; the last one wins per key
+        dirs = sorted(d for d in glob.glob(os.path.join(root, "configs", "*"))
+                      if os.path.basename(d) != "generic")
+    for d in dirs:
+        paths.append(os.path.join(d, "identity.env"))
+    paths += [os.path.join(gen, "cache.env.local"),
+              os.path.join(gen, "lmcache-server.env.local")]
+    for d in dirs:
+        paths.append(os.path.join(d, "identity.env.local"))
     try:
         from .identity import identity_from_env_files
         ident = identity_from_env_files(*paths)
