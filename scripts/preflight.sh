@@ -43,7 +43,16 @@ echo "-- storage location (device-level check) --"
 TARGET_DEV="${KVP_CACHE_DEVICE:-}"
 if command -v findmnt >/dev/null && command -v lsblk >/dev/null; then
   MOUNT_SRC="$(findmnt -nro SOURCE --target "$ROOT_PATH" 2>/dev/null || true)"
-  PARENT_DISK="$(lsblk -npo NAME,PKNAME 2>/dev/null | awk -v m="${MOUNT_SRC#/dev/}" '$1=="/dev/"m || $1==m {print ($2==""?$1:"/dev/"$2)}' | head -1 || true)"
+  # Review round 13: `lsblk -p` prints NAME and PKNAME as FULL device paths
+  # (e.g. PKNAME=/dev/nvme0n1). The old awk prepended "/dev/" to PKNAME
+  # unconditionally, producing "/dev//dev/nvme0n1". Normalize: use the value
+  # as-is when it already starts with /dev/, else prepend.
+  PARENT_DISK="$(lsblk -npo NAME,PKNAME 2>/dev/null | awk -v m="${MOUNT_SRC#/dev/}" '
+    $1=="/dev/"m || $1==m {
+      if ($2=="") print $1;
+      else if ($2 ~ /^\/dev\//) print $2;
+      else print "/dev/" $2
+    }' | head -1 || true)"
   FS_TYPE="$(df -T "$ROOT_PATH" 2>/dev/null | awk 'NR==2{print $2}')"
   note "mount point of $ROOT_PATH: ${MOUNT_SRC:-unknown} (fs: ${FS_TYPE:-?}, disk: ${PARENT_DISK:-unknown})"
   case ",$FS_TYPE," in

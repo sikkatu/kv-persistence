@@ -39,36 +39,73 @@ HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"; SITE="${SITE:-}"
 PIDF="$KVP_CACHE_ROOT/lmcache-server.pid"
 [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null \
   || die "lmcache server not running -- start it first: bash scripts/start-cache.sh"
-# Identity gate: engine vs config must match before cache is trusted.
-echo "-- identity gate: verifying engine config matches identity pins --"
-rc=0
-bash "$HERE/verify-engine-identity.sh" "$CONTAINER" || rc=$?
-if [ "$rc" -ne 0 ]; then
-  if [ "$rc" -eq 5 ]; then
-    die "INCONCLUSIVE: engine identity could not be verified (see output above).
-Cache reuse is REFUSED by policy -- fix value sources and rerun, or set
-KVP_PERSIST_ENABLED=0 to launch without persistent cache."
-  fi
-  die "ENGINE IDENTITY MISMATCH (exit $rc): cache must NOT be reused. Fix
-configs/${KVP_MODEL_CONFIG}/identity.env(.local) and rerun, or launch without
-persistent cache (KVP_PERSIST_ENABLED=0)."
+# Review fix (round 13): the identity gate inspects the RUNNING container. On a
+# first run there is no container yet -- gate AFTER launch instead of failing
+# with INCONCLUSIVE. On reruns the gate checks the container that is about to
+# be REPLACED (it holds the OLD args), so the meaningful check is against the
+# args we are about to pass, plus the container as a secondary signal. The
+# gate is therefore split: pre-launch arg check (always), post-launch
+# container check (after docker run).
+# KVP_PERSIST_ENABLED=0 genuinely bypasses both gates: without the connector
+# there is no cache to mistrust, so refusing to launch would be wrong.
+PERSIST="${KVP_PERSIST_ENABLED:-true}"
+if [ "$PERSIST" != "true" ] && [ "$PERSIST" != "false" ] && [ "$PERSIST" != "0" ] && [ "$PERSIST" != "1" ]; then
+  die "KVP_PERSIST_ENABLED must be true/false (got '$PERSIST')"
 fi
-echo "identity verified -- proceeding to attach persistent cache"
-# Review P1-1 fix: KVP_PERSIST_ENABLED=0 is a REAL bypass -- the connector flag
-# is genuinely omitted (not just documented as if it were). When disabled, the
-# identity gate above may still fail and stop the launcher: that is intended,
-# because even without the connector a mismatch means the pins are stale and
-# silently starting with wrong config is worse than a clear stop.
+case "$PERSIST" in
+  false|0) PERSIST=false ;;
+  *) PERSIST=true ;;
+esac
+# Identity gate (pre-launch, config-side): engine-independent fields must be
+# present and well-formed BEFORE anything is launched. The engine-side match
+# (container args) runs right after docker run below.
+if [ "$PERSIST" = "true" ]; then
+  echo "-- identity gate (pre-launch): verifying identity config is complete --"
+  bash "$HERE/verify-engine-identity.sh" --check-config-only \
+    || die "identity config incomplete/invalid -- fix configs/${KVP_MODEL_CONFIG}/identity.env(.local)"
+else
+  echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted); identity gate skipped (no cache to mistrust)"
+fi
+# Review P1-1 fix: KVP_PERSIST_ENABLED=false is a REAL bypass -- the connector
+# flag is genuinely omitted (not just documented as if it were). The pre-launch
+# gate above is also skipped when disabled: without the connector there is no
+# cache to mistrust.
 KV_TRANSFER_CONFIG=""
 KV_TRANSFER_ARGS=()
-if [ "${KVP_PERSIST_ENABLED:-true}" = "true" ]; then
+if [ "$PERSIST" = "true" ]; then
   KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$LMCACHE_HOST\",\"lmcache.mp.port\":\"$LMCACHE_PORT\"}}"
   KV_TRANSFER_ARGS=(--kv-transfer-config "$KV_TRANSFER_CONFIG")
   echo "persistent cache: attached (KV_TRANSFER_CONFIG=$KV_TRANSFER_CONFIG)"
 else
-  echo "KVP_PERSIST_ENABLED=0 -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
+  echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
 fi
-MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface" -v "$MODEL_DIR:/model:ro")
+MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
+# Review round 13 (critical): LMCache derives its cache identity (ObjectKey and
+# the L2 file name) from vLLM's `model_config.model`, which is whatever `--model`
+# was passed. Mounting every model at the SAME path `/model` meant all
+# deployments registered one identical name and shared/collided on the same L2
+# objects -- the identity namespace never reached the storage layer.
+#
+# Fix: mount the model under a namespace-coded path so `--model <path>` is
+# unique per identity. The name comes from the SAME identity values the gate
+# verifies (kvpersist.identity.lmcache_model_name), so the storage namespace
+# and the verified pins cannot drift apart.
+export KVP_REPO_ROOT="$ROOT"
+export PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}"
+if [ "$PERSIST" = "true" ]; then
+  export KVP_SERVED_MODEL_NAME="${KVP_SERVED_MODEL_NAME:-$(basename "$MODEL_DIR")}"
+  KVP_MODEL_NAME="$(python3 -m kvpersist.cli model-name ${KVP_TENANT_DISCRIMINATOR:+--discriminator "$KVP_TENANT_DISCRIMINATOR"})" \
+    || die "cannot derive LMCache model_name from the identity config"
+  [ -n "$KVP_MODEL_NAME" ] || die "empty LMCache model_name -- identity config incomplete"
+  # `/models/<name>` where <name> encodes the identity namespace (no '/' in it).
+  MODEL_MOUNT="/models/$KVP_MODEL_NAME"
+  MOUNTS+=(-v "$MODEL_DIR:$MODEL_MOUNT:ro")
+  echo "LMCache identity namespace: $KVP_MODEL_NAME"
+  echo "model mounted at: $MODEL_MOUNT (so model_config.model is namespace-coded)"
+else
+  MODEL_MOUNT="/model"
+  MOUNTS+=(-v "$MODEL_DIR:$MODEL_MOUNT:ro")
+fi
 if [ -d "$RECIPE/patches" ]; then
   ( cd "$RECIPE/patches" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1 ) \
     || die "recipe patches do not match MANIFEST.sha256 - refusing to run"
@@ -95,7 +132,7 @@ docker run -d --name "$CONTAINER" --restart no \
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 \
   -e "VLLM_API_KEY=$API_KEY" \
   "${MOUNTS[@]}" "$IMAGE" \
-  --model /model \
+  --model "$MODEL_MOUNT" \
   --served-model-name mimo-pro \
   --trust-remote-code \
   --tensor-parallel-size 4 \
@@ -116,6 +153,24 @@ docker run -d --name "$CONTAINER" --restart no \
   --tool-call-parser mimo \
   --enable-auto-tool-choice \
   --host "$BIND" --port "$PORT"
+# Post-launch identity gate (review round 13): now the container EXISTS and
+# carries the args we just passed -- verify them against the identity pins
+# before any cache data is trusted. INCONCLUSIVE/MISMATCH here stops the run.
+if [ "$PERSIST" = "true" ]; then
+  echo "-- identity gate (post-launch): verifying engine args match identity pins --"
+  rc=0
+  bash "$HERE/verify-engine-identity.sh" "$CONTAINER" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    if [ "$rc" -eq 5 ]; then
+      die "INCONCLUSIVE: engine identity could not be verified (see output above).
+Cache reuse is REFUSED by policy -- fix value sources and rerun."
+    fi
+    die "ENGINE IDENTITY MISMATCH (exit $rc): cache must NOT be reused. Fix
+configs/${KVP_MODEL_CONFIG}/identity.env(.local) and rerun."
+  fi
+  echo "identity verified -- persistent cache attached and trusted"
+fi
 echo "launched; model load takes ~13-16 min. progress every 10s:"
 URLHOST=127.0.0.1; case "$BIND" in 0.0.0.0) URLHOST=127.0.0.1 ;; *:*) URLHOST="[$BIND]" ;; *) URLHOST="$BIND" ;; esac
 LOG_SHOWN=0; START_TS=$(date +%s)

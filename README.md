@@ -47,7 +47,11 @@ Chat client → vLLM (TP4) → KV connector (LMCacheMPConnector)
   itself on startup.
 * **Compatibility namespaces** — model revision, tokenizer, KV dtype, block layout and
   chat template are part of the cache key: incompatible deployments never read each
-  other's KV data; anything uncertain is a cache miss, never a wrong hit.
+  other's KV data; anything uncertain is a cache miss, never a wrong hit. The namespace
+  is enforced at the LMCache storage level via `lmcache_model_name()` (embedded in the
+  `model_name` that forms the ObjectKey and L2 file name). Known gap: `cache_salt`
+  alone does NOT isolate the `nixl_store_dynamic` L2 tier (see docs/final-report.md);
+  use a per-tenant discriminator in `lmcache_model_name()` or a separate cache root.
 * **Model-agnostic core** — policy code is separate from model integration; a new model
   adds configuration, not code. KV data of different models is never shared.
 
@@ -91,7 +95,7 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 | `configs/<model>/` | per-model identity pins and L2 adapter template (example: `mimo-v2.6-pro`), EN/RU/ZH |
 | `scripts/` | preflight, cache start/stop, launcher, recovery test, benchmark, admin CLI |
 | `implementation/` | `kvpersist` package: identity, budgets, retention ranking, admin CLI |
-| `tests/` | unit (59, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
+| `tests/` | unit (61, run anywhere), integration (needs `lmcache`), recovery (GPU host) |
 
 ## Status
 
@@ -119,25 +123,34 @@ The cache layer is model-agnostic — adding a model does NOT require code chang
    ```bash
    cp -r "$REPO/configs/mimo-v2.6-pro" "$REPO/configs/<your-model>"
    ```
-2. Edit `configs/<your-model>/identity.env`:
+2. **Select the model config** — with a second config dir present the scripts no
+   longer auto-pick one (ambiguous layouts are refused, never guessed):
+   ```bash
+   export KVP_MODEL_CONFIG=<your-model>
+   ```
+   `KVP_MODEL_CONFIG` is read by `setup-identity.sh`, `start-cache.sh`,
+   `run-vllm-with-persist.sh`, `verify-engine-identity.sh` and the `kvpersist`
+   config loader. `CONFIG_FILE` (used only by `setup-identity.sh`) additionally
+   lets you target the exact file to write; you normally do not need it.
+3. Edit `configs/<your-model>/identity.env`:
    * `KVP_MODEL_ID` = your model's HF id (or any unique label).
    * `KVP_TP_SIZE`, `KVP_BLOCK_SIZE`, `KVP_NUM_KV_HEADS`, `KVP_HEAD_DIM`,
      `KVP_MAX_MODEL_LEN`, `KVP_KV_CACHE_DTYPE` = the KV geometry vLLM reports
      for YOUR model (see `docs/architecture.md`, "identity fields").
    * `KVP_CONNECTOR_VERSION` = a descriptive tag for your vLLM+LMCache combo.
-3. Run `bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"` to fill
+4. Run `bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"` to fill
    and verify the revision/digest fields automatically.
-4. Point `scripts/preflight.sh`, `start-cache.sh` and the vLLM launcher at
-   `configs/<your-model>/` (the scripts read the path from `CONFIG_FILE`/env;
-   see `docs/deployment.md`).
+5. Launch with `KVP_MODEL_CONFIG=<your-model>` exported; the scripts resolve
+   `configs/<your-model>/` from it (see `docs/deployment.md`).
 
 Each model gets its own cache namespace — KV data of different models is never
 mixed, and a change to any identity field safely falls back to a cache miss.
 
 **Note:** support for non-MiMo models is untested until exercised on hardware;
-treat the `configs/mimo-v2.6-pro/` directory as the single VERIFIED reference
-configuration and expect to adapt the launcher (patches / model loader) for
-architecturally different models.
+treat the `configs/mimo-v2.6-pro/` directory as the single REFERENCE configuration
+(shape and fields are pinned; nothing in this repo has run on GPU hardware yet —
+the "Status" section above is authoritative) and expect to adapt the launcher
+(patches / model loader) for architecturally different models.
 
 ## License
 

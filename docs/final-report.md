@@ -9,7 +9,7 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(59 unit tests), architecture proven against the pinned vLLM build's source
+(61 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -132,7 +132,7 @@ before measuring).
 
 ## Eviction and deduplication test results
 
-* Eviction policy semantics: **VERIFIED offline** (59 unit tests, incl. stale
+* Eviction policy semantics: **VERIFIED offline** (61 unit tests, incl. stale
   before recent, rare before frequent, huge useless first, long reused prefix
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.
@@ -150,6 +150,9 @@ before measuring).
    review's protocol.
 2. Value-based retention ranking applies where per-entry stats are available;
    LMCache's in-service LRU is used otherwise (documented, honest split).
+   Review round 13: the score's prefix-length term is now LINEAR in tokens
+   (was `log1p`), which made long reused prefixes evict FIRST; the offline
+   planner is the only consumer of this ranking today.
 3. LMCache is version-pinned (`requirements-lmcache.txt`, `lmcache==0.5.3`); the
    exact wheel must match the production image ABI. If it does not, `lmcache
    server` runs from the production image (documented fallback). This exact
@@ -170,6 +173,42 @@ before measuring).
    refers to design decisions reachable only for the project author's process;
    the generic operations described here are reproducible without them, but exact
    pass criteria should be adapted before third-party site acceptance.
+
+## Review round 13 fixes (verified on this host)
+
+* `setup-identity.sh` no longer writes quoted values (its own verifier used to
+  fail with `got '"76ce..."'`); quoting is now stripped on read too.
+* `run-vllm-with-persist.sh`: the identity gate runs BEFORE launch as a
+  config-only check (`verify-engine-identity.sh --check-config-only`) and AFTER
+  `docker run` against the NEW container's args (the old order inspected a
+  container that did not exist yet, or one with stale args). `KVP_PERSIST_ENABLED=0`
+  genuinely skips both gates (no cache to mistrust).
+* Per-identity isolation is now enforced in the REAL vLLM path: the model is
+  mounted at `/models/<lmcache_model_name>` (namespace-coded) so
+  `model_config.model` — the value LMCache derives ObjectKey and L2 file names
+  from — differs per identity. Previously every deployment used `--model /model`.
+* `kvpersist.cli` sees the real L2 layout (flat `*.bin` files written by
+  `nixl_store_dynamic`): `status` reports their bytes, `purge --all` and
+  `emergency-evict` actually delete them. The budget default is 1500 GB (was
+  750). `KVP_CACHE_ROOT`/`KVP_CACHE_BUDGET_GB` fall back to the repo config
+  files, so `emergency-evict` works from cron without exported env. Quotas are
+  documented as report-only (they are not wired into the store path).
+* systemd units: `lmcache-server.service` (plain, `User=kvp`) and
+  `lmcache-server@.service` (template, `User=%i` — the only valid form for
+  that), plus `systemd/kvp-lmcache-server` wrapper that inlines the rendered
+  adapter JSON (`--l2-adapter` takes a JSON string, not a path).
+* `test-recovery.sh`: hard FAILs no longer get erased by an INCONCLUSIVE
+  (`V`/`VI` counted separately, FAIL dominates); the cold prefix carries a
+  per-run nonce so a repeated run is genuinely cold.
+* Docker launch mode: `--help` probing happens inside the container, the server
+  binds `0.0.0.0` inside it (published ports are still loopback-only on the
+  host), `--gpus all --ipc host` added, and the optional-flag log line no longer
+  crashes on an unset variable.
+* `retention.py`: linear prefix-length term (the `log1p` version evicted long
+  reused prefixes first); `min_keep_tokens` documented as the only direct
+  protection. `prompt_probe.py` serializes `tool_calls`/`tool_call_id`.
+* `preflight.sh`: `lsblk -p` output no longer yields `/dev//dev/...` device
+  names. `.commitmsg11` removed from the tree.
 
 ## Provenance
 

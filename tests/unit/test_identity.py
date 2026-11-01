@@ -153,3 +153,47 @@ def test_lmcache_model_name_extra_discriminator():
     assert plain != tenant_b
     assert tenant_a != tenant_b
     assert "tenantA" in tenant_a and "tenantB" in tenant_b
+
+
+def test_lmcache_model_name_rejects_colliding_discriminators():
+    """`tenant/a` and `tenant--a` map to the SAME L2 filename ('/' -> '--').
+
+    The discriminator must be rejected up front, otherwise two tenants would
+    collide on disk despite different names (review round 13). Note the '/'
+    used as the separator between base/namespace/discriminator is fine -- only
+    a '/' INSIDE the discriminator would collide after the adapter maps it."""
+    ident = make_identity()
+    with pytest.raises(IdentityError):
+        ident.lmcache_model_name("mimo-pro", extra_discriminator="tenant/a")
+    with pytest.raises(IdentityError):
+        ident.lmcache_model_name("mimo-pro", extra_discriminator="tenant@a")
+    with pytest.raises(IdentityError):
+        ident.lmcache_model_name("mimo-pro", extra_discriminator="ten\\ant")
+    name = ident.lmcache_model_name("mimo-pro", extra_discriminator="tenantA")
+    assert name.endswith("/tenantA")
+
+
+def test_lmcache_model_name_rejects_nul():
+    """NUL must be rejected (ObjectKey invariant), even if it reaches base_model."""
+    with pytest.raises(IdentityError):
+        make_identity().lmcache_model_name("bad\x00name")
+
+
+def test_namespace_from_config_optional_fields_not_required():
+    """lora/multimodal/rope/speculative/l2_serde are optional, not demanded."""
+    cfg = make_identity().canonical()
+    for field in ("lora_adapters", "multimodal_components",
+                  "rope_config_digest", "speculative_config", "l2_serde",
+                  "namespace_hint"):
+        cfg.pop(field, None)
+    # must NOT raise
+    namespace_from_config(cfg)
+
+
+def test_l2_serde_part_of_identity():
+    """Changing the L2 serde must change the namespace (the file name does not
+    encode the serde, so sharing a root with a different serde would read data
+    with the wrong deserializer -- review round 13)."""
+    base = make_identity().namespace()
+    assert make_identity(l2_serde="fp8").namespace() != base
+    assert make_identity(l2_serde="none").namespace() != base

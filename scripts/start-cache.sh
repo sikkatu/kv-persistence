@@ -30,10 +30,22 @@ case "$KVP_LAUNCH_MODE" in
 esac
 # Optional HTTP / serde flags: keep only those THIS build's --help understands,
 # so a build without them still starts rather than crash on an unknown flag.
-LMCACHE_HELP="$(lmcache server --help 2>&1 || true)"
+# Review round 13 (docker mode): `lmcache server --help` must run in the SAME
+# environment as the server itself. In docker mode the host has no lmcache CLI,
+# so probing on the host silently unsets all optional flags AND made the later
+# `${LMCACHE_HTTP_PORT}` expansion fail with "unbound variable" (set -u). Probe
+# inside the container in docker mode; on the host only in host mode.
+if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+  LMCACHE_HELP="$(docker run --rm --entrypoint lmcache "$DOCKER_IMAGE" server --help 2>&1 || true)"
+else
+  LMCACHE_HELP="$(lmcache server --help 2>&1 || true)"
+fi
 case "$LMCACHE_HELP" in *--http-host*) : ;; *) unset LMCACHE_HTTP_HOST ;; esac
 case "$LMCACHE_HELP" in *--http-port*) : ;; *) unset LMCACHE_HTTP_PORT ;; esac
 case "$LMCACHE_HELP" in *--l2-serde*|*--serde*) : ;; *) unset LMCACHE_L2_SERDE ;; esac
+# The optional-flag expansions below use ${VAR:+...}, which is safe under
+# `set -u` even when the variable is unset -- but the *log line* at the end
+# referenced ${LMCACHE_HTTP_PORT} unconditionally. Use a safe fallback there.
 BUDGET_GB="${KVP_CACHE_BUDGET_GB:?}"
 ROOT_PATH="${KVP_CACHE_ROOT:?}"
 mkdir -p "$ROOT_PATH"; chmod 700 "$ROOT_PATH"
@@ -53,7 +65,7 @@ echo "  path   : $ROOT_PATH"
 echo "  budget : ${BUDGET_GB} GB hard, soft-watermark ${KVP_EVICT_TRIGGER_WATERMARK:-0.9}"
 
 if [ "${KVP_PERSIST_ENABLED:-true}" != "true" ]; then
-  die "KVP_PERSIST_ENABLED=false is not supported: it contradicts the persistence
+  die "KVP_PERSIST_ENABLED=${KVP_PERSIST_ENABLED:-} is not supported: it contradicts the persistence
 requirement (data would be deleted on shutdown) and the L2 template is
 persist_enabled=true. To discard cache data, purge explicitly:
   bash scripts/budget-report.sh purge --all --yes"
@@ -79,21 +91,30 @@ PIDF="$ROOT_PATH/lmcache-server.pid"
 ADAPTER_JSON_ARGS="$(cat "$ADAPTER_JSON")"
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  # Review 2C: explicit loopback-bound port mapping instead of --network host,
-  # so even if lmcache misbinds inside the container the host exposure stays local.
+  # Review round 13 (docker mode fixes):
+  #  * The server must bind 0.0.0.0 INSIDE the container: binding 127.0.0.1
+  #    there means only the loopback inside the container, and the published
+  #    port mapping (-p) cannot reach it. The HOST-side exposure is controlled
+  #    by the 127.0.0.1 prefix of -p (review 2C), so this is safe.
+  #  * --gpus all and --ipc host are required by the upstream LMCache docs for
+  #    CUDA IPC and shared-memory zero-copy transfers (the mp connector uses
+  #    CUDA IPC / POSIX SHM between the engine and the cache server).
+  #  * The HTTP frontend also binds 0.0.0.0 inside the container; the -p
+  #    mapping keeps it loopback-only on the host.
   setsid nohup docker run --name "$CONTAINER_NAME" --rm \
+    --gpus all --ipc host \
     -p "127.0.0.1:$LMCACHE_PORT:$LMCACHE_PORT" \
     ${LMCACHE_HTTP_PORT:+-p "127.0.0.1:$LMCACHE_HTTP_PORT:$LMCACHE_HTTP_PORT"} \
     -v "$ROOT_PATH:$ROOT_PATH" \
     "$DOCKER_IMAGE" lmcache server \
-    --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
+    --host 0.0.0.0 --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
     --eviction-policy "$LMCACHE_EVICTION_POLICY" \
     --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
     --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
     --chunk-size "$LMCACHE_CHUNK_SIZE" \
     --l2-adapter "$ADAPTER_JSON_ARGS" \
-    ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
+    ${LMCACHE_HTTP_HOST:+--http-host 0.0.0.0} \
     ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
     ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"} \
     >>"$LOG" 2>&1 &
@@ -115,7 +136,7 @@ echo $! > "$PIDF"
 SERVER_PID="$(cat "$PIDF")"
 echo "lmcache server started: pid $SERVER_PID, log $LOG"
 echo "request port : $LMCACHE_HOST:$LMCACHE_PORT"
-echo "HTTP frontend: 127.0.0.1:${LMCACHE_HTTP_PORT} (management/metrics)"
+echo "HTTP frontend: 127.0.0.1:${LMCACHE_HTTP_PORT:-<disabled>} (management/metrics)"
 
 # -- readiness: a written pid is NOT proof the service works ---------------
 echo "-- waiting for cache-service readiness (adapter load + request port)"
@@ -126,7 +147,10 @@ READY=0
 for i in $(seq 1 30); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "ERROR: lmcache server died within ${i}s of startup. Last log lines:" >&2
-    tail -n +"$((LOG_START_BYTES > 0 ? LOG_START_BYTES : 1))" "$LOG" >&2 || true
+    # Review round 13: `tail -n +BYTES` treats BYTES as a LINE number, not a
+    # byte offset -- with a large existing log the requested start line is
+    # beyond EOF and the diagnostic is EMPTY. Use `tail -c +N` (byte offset).
+    tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
     exit 1
   fi
   NEW_BYTES=$(wc -c < "$LOG" 2>/dev/null || echo 0)

@@ -47,9 +47,16 @@ touched.
   deterministic file namespace IS the index (rebuilt lazily at startup).
   `bash scripts/budget-report.sh status` reports `used_bytes` (data+metadata
   on disk), `free_bytes`, `usage_fraction` and per-namespace byte counts.
-* Concurrency: admission is serialized inside the adapter and
-  `BudgetLedger.admit()` refuses once the hard cap would be exceeded
-  (`test_concurrent_admits_cannot_exceed_budget`).
+* Concurrency: admission is serialized inside the adapter, and the hard cap is
+  enforced by the LMCache `nixl_store_dynamic` adapter itself
+  (`max_capacity_gb`: stores above it are rejected). The repository's
+  `BudgetLedger.admit()` provides the same admission check for callers who feed
+  it (see `test_concurrent_admits_cannot_exceed_budget`), but it is **NOT
+  called on the production store path** (review round 13): LMCache writes
+  chunks without consulting it. Per-namespace quotas in `quotas.json` are
+  therefore REPORTING/RANKING data today, not a store-time enforcement point --
+  do not assume a quota prevents storage growth until the ledger is wired into
+  the store path (e.g. via the adapter's capacity or an eviction policy).
 * **Restart accounting (NEEDS TESTING)**: after `lmcache server` restarts,
   upstream docs describe an in-memory index lazily rebuilt from on-disk file
   sizes as they are touched. Until the pinned LMCache build is confirmed to feed

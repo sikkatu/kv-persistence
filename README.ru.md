@@ -92,7 +92,7 @@ bash scripts/test-recovery.sh           # приёмка: рестарт → д�
 | `configs/mimo-v2.6-pro/` | пины идентичности MiMo и шаблон L2-адаптера, EN/RU/ZH |
 | `scripts/` | preflight, старт/стоп кэша, лаунчер, тест восстановления, бенчмарк, админ-CLI |
 | `implementation/` | пакет `kvpersist`: идентичность, бюджеты, ранжирование, админ-CLI |
-| `tests/` | unit (59, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
+| `tests/` | unit (61, где угодно), интеграция (нужен `lmcache`), восстановление (GPU-хост) |
 
 ## Статус
 
@@ -119,25 +119,32 @@ GPU-хосте заскриптованы (`scripts/test-recovery.sh`, `scripts/
    ```bash
    cp -r "$REPO/configs/mimo-v2.6-pro" "$REPO/configs/<ваша-модель>"
    ```
-2. Отредактируйте `configs/<ваша-модель>/identity.env`:
+2. **Выберите конфиг модели** — при наличии второй конфиг-папки скрипты больше
+   не выбирают её автоматически (неоднозначная раскладка отклоняется, а не
+   угадывается):
+   ```bash
+   export KVP_MODEL_CONFIG=<ваша-модель>
+   ```
+   `KVP_MODEL_CONFIG` читают `setup-identity.sh`, `start-cache.sh`,
+   `run-vllm-with-persist.sh`, `verify-engine-identity.sh` и загрузчик конфигов
+   `kvpersist`. `CONFIG_FILE` (только у `setup-identity.sh`) дополнительно
+   позволяет указать конкретный файл для записи; обычно он не нужен.
+3. Отредактируйте `configs/<ваша-модель>/identity.env`:
    * `KVP_MODEL_ID` = HF-id вашей модели (или любое уникальное имя).
    * `KVP_TP_SIZE`, `KVP_BLOCK_SIZE`, `KVP_NUM_KV_HEADS`, `KVP_HEAD_DIM`,
      `KVP_MAX_MODEL_LEN`, `KVP_KV_CACHE_DTYPE` = KV-геометрия, которую
      vLLM отчитывает для ВАШЕЙ модели (см. `docs/architecture.md`,
      «identity fields»).
    * `KVP_CONNECTOR_VERSION` = дескриптивный тег вашей связки vLLM+LMCache.
-3. Запустите `bash scripts/setup-identity.sh "$HOME/models/<ваша-модель>"` —
+4. Запустите `bash scripts/setup-identity.sh "$HOME/models/<ваша-модель>"` —
    ревизии/digest заполнятся автоматически.
-4. Направьте `scripts/preflight.sh`, `start-cache.sh` и vLLM-лаунчер на
-   `configs/<ваша-модель>/` (скрипты читают путь из `CONFIG_FILE`/env; см.
-   `docs/deployment.md`).
-
+5. Запускайте с экспортированным `KVP_MODEL_CONFIG=<ваша-модель>`; скрипты
+   разрешают `configs/<ваша-модель>/` по нему (см. `docs/deployment.md`).
 Каждая модель получает собственное пространство имён кэша — KV-данные разных
 моделей никогда не смешиваются, а изменение любого поля идентичности безопасно
 переводит в промах кэша.
-
 **Примечание:** поддержка моделей кроме MiMo не тестировалась до прогона на
-железе; рассматривайте `configs/mimo-v2.6-pro/` как единственный проверенный
+железе; рассматривайте `configs/mimo-v2.6-pro/` как единственный референсный
 референс и ожидайте адаптации лаунчера (патчи/загрузчик модели) для
 архитектурно отличающихся моделей.
 

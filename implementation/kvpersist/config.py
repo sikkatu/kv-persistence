@@ -38,6 +38,7 @@ _KNOB_PAIRS: Tuple[Tuple[str, str], ...] = (
 
 
 def _parse_env_file(path: Path) -> Dict[str, str]:
+    """Parse KEY=VALUE env file. MUST match scripts/env.sh `_kvp_parse_line`."""
     out: Dict[str, str] = {}
     if not path.is_file():
         return out
@@ -50,7 +51,19 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
             continue
         name, val = line.split("=", 1)
         name = name.strip()
-        val = val.split(" #")[0].strip().strip('"').strip("'")
+        # Comment cut: a ` #` (whitespace + hash) starts a trailing comment --
+        # the same rule as bash `${_val%% #*}`. (A `#` INSIDE a value with no
+        # preceding whitespace is part of the value.)
+        for sep in (" #", "\t#"):
+            if sep in val:
+                val = val.split(sep, 1)[0]
+        val = val.strip()
+        # Quote stripping: ONE matching outer pair (single or double), same as
+        # the bash loader's `_kvp_unquote`. Review round 13: the old code did
+        # .strip('"').strip("'") which only removes *outermost* characters and
+        # mis-parsed values like "a'b".
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
         val = val.replace("$HOME", os.path.expanduser("~")).replace("${HOME}", os.path.expanduser("~"))
         if name and name.isidentifier():
             out[name] = val
@@ -59,8 +72,20 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
 
 def load_config(repo_root: str, *, env_wins: bool = True, model_config: Optional[str] = None) -> Dict[str, str]:
     """Merge store env files in order. Precedence (env_wins=True):
-    existing process env > cache.env.local > cache.env > lmcache-server.env.local >
-    lmcache-server.env > identity.env. Returns the effective mapping.
+
+    1. existing process environment (always wins -- documented contract)
+    2. identity.env.local
+    3. identity.env
+    4. lmcache-server.env.local
+    5. lmcache-server.env
+    6. cache.env.local
+    7. cache.env
+
+    That is: files are applied in the order below and a LATER file overrides an
+    EARLIER one for the same key (`.local` is applied over its base), which is
+    exactly what the bash loader (`scripts/env.sh` `_kvp_seed`) does. The
+    previous docstring claimed the reverse for the base files -- that was a
+    documentation bug (review round 13); the code now matches bash.
     env_wins=False returns the file values only (used for consistency checks).
     """
     root = Path(repo_root)
@@ -74,9 +99,8 @@ def load_config(repo_root: str, *, env_wins: bool = True, model_config: Optional
     ]
     merged: Dict[str, str] = {}
     for p in order:
-        for k, v in _parse_env_file(p).items():
-            if k not in merged or p.name.endswith(".local") or p.name == "identity.env":
-                merged[k] = v
+        # Later file wins for every key (identical to the bash seeder).
+        merged.update(_parse_env_file(p))
     if env_wins:
         for k in list(merged):
             if k in os.environ:

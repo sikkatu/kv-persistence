@@ -73,7 +73,37 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 | README | 测试数 29→49、"not code"、"as-is" | 已更正 |
 
 ## 已知限制（同前）
-
 1. 硬件验收（A/B 测试）未在本会话执行——目标主机不可达；脚本与协议完全就绪。
 2. LMCache 0.5.3 与生产镜像 PyTorch/CUDA 组合待硬件最终验证。
 3. 去重文档已完整记录；实际效果需在目标配置上度量。
+
+## 第 13 轮审阅修复（已在本机验证）
+
+* `setup-identity.sh` 不再写入带引号的值（其自带校验曾报 `got '"76ce..."'`）；
+  读取时同样剥离引号。
+* `run-vllm-with-persist.sh`：身份门禁在启动前作为纯配置检查
+  （`--check-config-only`）执行，并在 `docker run` 之后对**新**容器参数再次执行
+  （旧顺序检查的是尚未创建或参数过期的容器）。`KVP_PERSIST_ENABLED=0` 会真正
+  跳过两个门禁。
+* 真实 vLLM 路径上的按身份隔离已生效：模型挂载到
+  `/models/<lmcache_model_name>`（名称编码 namespace），因此
+  `model_config.model`（LMCache 据此构建 ObjectKey 与 L2 文件名）随身份不同而
+  不同（此前统一为 `--model /model`）。
+* `kvpersist.cli` 能看到真实 L2 布局（适配器写入的扁平 `*.bin` 文件）：
+  `status` 统计其字节，`purge --all` 与 `emergency-evict` 真正删除它们。
+  预算默认 1500 GB（原 750）。`KVP_CACHE_ROOT`/`KVP_CACHE_BUDGET_GB` 会回退到
+  仓库配置文件，因此 `emergency-evict` 可从 cron 运行。配额被如实记录为仅报告用。
+* systemd 单元：`lmcache-server.service`（普通，`User=kvp`）与
+  `lmcache-server@.service`（模板，`User=%i` —— `%i` 唯一合法形式），以及内联
+  渲染后适配器 JSON 的 wrapper `systemd/kvp-lmcache-server`
+  （`--l2-adapter` 接受 JSON 字符串而非路径）。
+* `test-recovery.sh`：硬 FAIL 不再被 INCONCLUSIVE 覆盖（`V`/`VI` 分开计数，
+  FAIL 优先）；冷前缀携带每次运行的 nonce，使重复运行真正是冷运行。
+* Docker 模式：`--help` 探测在容器内进行，服务器在容器内监听 `0.0.0.0`
+  （宿主机端口仍为 loopback），新增 `--gpus all --ipc host`，日志行不再因
+  未设置变量而崩溃。
+* `retention.py`：前缀长度项改为线性（`log1p` 版本会优先淘汰长的高复用前缀）；
+  `min_keep_tokens` 被记录为唯一直接保护。`prompt_probe.py` 序列化
+  `tool_calls`/`tool_call_id`。
+* `preflight.sh`：`lsblk -p` 输出不再产生 `/dev//dev/...` 形式的设备名。
+  文件 `.commitmsg11` 已从仓库中移除。

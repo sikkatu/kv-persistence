@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# kvp-lmcache-server -- wrapper for the systemd unit.
+#
+# Why a wrapper: the pinned LMCache 0.5.3 CLI takes --l2-adapter as a JSON
+# STRING (it does json.loads on the value), NOT a file path. systemd's
+# ExecStart does not support $(cat ...) expansion, so the wrapper reads the
+# rendered adapter file and passes its content inline.
+#
+# Usage: kvp-lmcache-server <rendered-l2-adapter.json>
+# All other settings (host, port, L1 size, chunk size, eviction, HTTP) come
+# from the environment (/etc/kv-persistence.env), matching scripts/start-cache.sh.
+set -Eeuo pipefail
+ADAPTER_FILE="${1:?usage: kvp-lmcache-server <rendered-l2-adapter.json>}"
+[ -f "$ADAPTER_FILE" ] || { echo "adapter file not found: $ADAPTER_FILE" >&2; exit 1; }
+ADAPTER_JSON="$(cat "$ADAPTER_FILE")"
+echo "$ADAPTER_JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
+  || { echo "adapter file is not valid JSON: $ADAPTER_FILE" >&2; exit 1; }
+exec lmcache server \
+  --host "${LMCACHE_HOST:-127.0.0.1}" \
+  --port "${LMCACHE_PORT:-5555}" \
+  --l1-size-gb "${LMCACHE_L1_SIZE_GB:-64}" \
+  --eviction-policy "${LMCACHE_EVICTION_POLICY:-LRU}" \
+  --eviction-trigger-watermark "${LMCACHE_EVICTION_TRIGGER_WATERMARK:-0.9}" \
+  --eviction-ratio "${LMCACHE_EVICTION_RATIO:-0.1}" \
+  --chunk-size "${LMCACHE_CHUNK_SIZE:-256}" \
+  --l2-adapter "$ADAPTER_JSON" \
+  ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
+  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
+  ${LMCACHE_L2_SERDE:+--l2-serde "$LMCACHE_L2_SERDE"}

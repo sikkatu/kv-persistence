@@ -25,7 +25,8 @@ CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 L2="$KVP_CACHE_ROOT"; LOG="$KVP_CACHE_ROOT/lmcache-server.log"   # adapter writes file_path=KVP_CACHE_ROOT directly
 OUT="$ROOT/benchmarks/results/$(date -u +%Y%m%dT%H%M%SZ)-recovery-v2"
 mkdir -p "$OUT"; echo "results -> $OUT"
-V="0"   # total verdict failures
+V="0"   # hard failures (FAIL)
+VI="0"  # inconclusive findings (INCONCLUSIVE)
 # ---- evidence helpers --------------------------------------------------
 log_mark(){ wc -c < "$LOG" 2>/dev/null || echo 0; }
 new_log(){ tail -c +$(( $1 + 1 )) "$LOG" 2>/dev/null || true; }
@@ -50,8 +51,11 @@ api_ready(){ for i in $(seq 1 180); do
     [ $((i % 6)) -eq 0 ] && echo "  waiting for API... $((i*10))s"
     sleep 10; done
   return 1; }
+# Review round 13: inconc() used to SET V=9, erasing hard-FAIL counts -- two
+# hard FAILs plus one INCONCLUSIVE wrongly reported INCONCLUSIVE. Failures and
+# inconclusive findings are now counted separately: ANY hard FAIL dominates.
 fail(){ echo "FAIL: $*"; V=$((V+1)); echo "$*" >> "$OUT/failures.txt"; }
-inconc(){ echo "INCONCLUSIVE: $*"; V=9; echo "INCONC: $*" >> "$OUT/failures.txt"; }
+inconc(){ echo "INCONCLUSIVE: $*"; VI=$((VI+1)); echo "$*" >> "$OUT/failures.txt"; }
 
 disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume holds Docker, the model and the OS) device -> independent
   # proof of disk-sourced reads (not RAM). Requires KVP_CACHE_DEVICE.
@@ -120,7 +124,14 @@ print(det.get('cached_tokens', 0) if det.get('cached_tokens') is not None else '
 # ================= SCENARIOS ============================================
 echo "== build a long stable prefix (~3000 tokens) =="
 PREFIX="$OUT/prefix.txt"
-python3 -c "fact='The Sumerian sikkatu was a clay cone used to mark the boundary of a building plot.\\n'; open('$PREFIX','w').write(fact*120)"
+# Review round 13: the prefix must be UNIQUE per run. The old fixed text meant
+# a repeat run's "cold" request was already in L2 from the previous run and the
+# "nothing was stored" check failed spuriously (and a warm hit could masquerade
+# as a fresh cold store). A UTC nonce is prepended so every run probes a
+# genuinely cold prefix; the nonce is printed so a rerun can be reproduced.
+RUN_NONCE="$(date -u +%Y%m%dT%H%M%S)-$$"
+python3 -c "import sys; nonce='Run '+sys.argv[1]+' '; fact='The Sumerian sikkatu was a clay cone used to mark the boundary of a building plot.\\n'; open(sys.argv[2],'w').write(nonce + fact*120)" "$RUN_NONCE" "$PREFIX"
+echo "  run nonce (cold-prefix identity): $RUN_NONCE"
 
 echo "== MANDATORY identity gate: engine-verified cache key before anything =="
 echo "(server identity must match the RUNNING engine; exit 5 = INCONCLUSIVE = refuse)"
@@ -236,16 +247,19 @@ fi
 echo
 echo "================ SUMMARY ================"
 cat "$OUT"/*.summary.json 2>/dev/null || true
-if [ "$V" -eq 0 ]; then
-  echo "VERDICT: PASS -- disk-backed KV recovery proven (L2 read events + physical NVMe reads after each restart, data retained)"
-  exit 0
-elif [ "$V" -eq 9 ]; then
-  echo "VERDICT: INCONCLUSIVE -- not all evidence sources were available to prove disk-sourced reads (see $OUT/failures.txt)."
+# Review round 13: verdict precedence -- ANY hard FAIL dominates an
+# INCONCLUSIVE. Two hard FAILs plus one INCONCLUSIVE is FAIL, not INCONCLUSIVE
+# (the old `inconc()` set V=9 and erased the FAIL count).
+if [ "$V" -gt 0 ]; then
+  echo "VERDICT: FAIL ($V failed check(s), $VI inconclusive finding(s)) -- see $OUT/failures.txt"
+  cat "$OUT/failures.txt" 2>/dev/null || true
+  exit 1
+elif [ "$VI" -gt 0 ]; then
+  echo "VERDICT: INCONCLUSIVE ($VI inconclusive finding(s), 0 hard failures) -- not all evidence sources were available to prove disk-sourced reads (see $OUT/failures.txt)."
   echo "Not a cache failure and not a PASS: set KVP_CACHE_DEVICE (and MODEL_DIR) so device counters and identity are verifiable, then rerun. An unproven disk source must never be reported as PASS."
   cat "$OUT/failures.txt" 2>/dev/null || true
   exit 5
 else
-  echo "VERDICT: FAIL ($V failed checks) -- see $OUT/failures.txt"
-  cat "$OUT/failures.txt" 2>/dev/null || true
-  exit 1
+  echo "VERDICT: PASS -- disk-backed KV recovery proven (L2 read events + physical NVMe reads after each restart, data retained)"
+  exit 0
 fi

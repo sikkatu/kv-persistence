@@ -5,6 +5,14 @@ set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 CONTAINER="${1:-mimo-pro-tp4-kvp}"
+# --check-config-only (review round 13): verify the identity CONFIG alone,
+# without docker. Used by the launcher BEFORE the container exists; the
+# engine-side (container-args) check runs right after `docker run`.
+CHECK_CONFIG_ONLY=0
+if [ "$CONTAINER" = "--check-config-only" ]; then
+  CHECK_CONFIG_ONLY=1
+  CONTAINER=""
+fi
 CONFIG="$ROOT/configs/mimo-v2.6-pro/identity.env"
 # Universal model-config selector + .local overlay (review P1: setup writes to
 # identity.env.local; the gate MUST verify the same source, not the stale
@@ -47,9 +55,10 @@ with open(out_path, "w") as fh:
         fh.write(f"{k}={v}\n")
 PY
 MODEL_DIR="${MODEL_DIR:-${KVP_MODEL_DIR:-}}"
-python3 - "$ROOT" "$CONFIG" "$CONTAINER" "$MODEL_DIR" <<'PYEOF'
+python3 - "$ROOT" "$CONFIG" "$CONTAINER" "$MODEL_DIR" "$CHECK_CONFIG_ONLY" <<'PYEOF'
 import json, re, subprocess, sys
 root, config, container, model_dir = sys.argv[1:5]
+check_config_only = sys.argv[5] == "1"
 sys.path.insert(0, root + "/implementation")
 vals = {}
 for line in open(config):
@@ -87,9 +96,38 @@ def model_cfg(field):
         return "UNAVAILABLE"
 
 cmd = docker_args()
-checks = []
-checks.append(("max_model_len", vals.get("KVP_MAX_MODEL_LEN"), arg(cmd, "--max-model-len")))
-checks.append(("tp_size", vals.get("KVP_TP_SIZE"), arg(cmd, "--tensor-parallel-size")))
+# ---- config-side checks (always, incl. --check-config-only) -------------
+# Review round 13: the gate used to verify only 5 of 13 identity fields
+# (max_model_len, tp_size, kv_cache_dtype, num_kv_heads, head_dim). The
+# remaining fields are verified here from their authoritative sources:
+#   model_revision / tokenizer_revision / chat_template_digest -> the identity
+#     config itself must carry well-formed values (setup-identity.sh writes
+#     them; this gate refuses empty/malformed ones).
+#   block_size -> engine arg --block-size when present, else config.json's
+#     `block_size`-related keys, else "auto(default)".
+#   connector / connector_version -> engine arg --kv-transfer-config must
+#     reference the pinned connector when persistence is attached.
+#   model_id / tokenizer_name -> presence + non-empty (provenance fields).
+format_checks = []   # (label, expect, found) -- found from config/model only
+def require(label, expect, pattern, why):
+    v = vals.get(label, "")
+    if not v:
+        format_checks.append((label, v, "EMPTY (identity must pin %s)" % why))
+    elif pattern and not re.match(pattern, v):
+        format_checks.append((label, v, "MALFORMED (want %s)" % why))
+    else:
+        format_checks.append((label, v, v))
+require("KVP_MODEL_ID", vals.get("KVP_MODEL_ID", ""), None, "a non-empty model id")
+require("KVP_TOKENIZER_NAME", vals.get("KVP_TOKENIZER_NAME", ""), None, "a non-empty tokenizer name")
+require("KVP_MODEL_REVISION", vals.get("KVP_MODEL_REVISION", ""), r"^[0-9a-f]{40}$", "a 40-hex revision")
+require("KVP_TOKENIZER_REVISION", vals.get("KVP_TOKENIZER_REVISION", ""), r"^[0-9a-f]{40}$", "a 40-hex revision")
+require("KVP_CHAT_TEMPLATE_DIGEST", vals.get("KVP_CHAT_TEMPLATE_DIGEST", ""), r"^[0-9a-f]{64}$", "a 64-hex sha256")
+require("KVP_CONNECTOR", vals.get("KVP_CONNECTOR", ""), None, "a connector class name")
+require("KVP_CONNECTOR_VERSION", vals.get("KVP_CONNECTOR_VERSION", ""), None, "a connector version tag")
+
+engine_checks = []   # (label, expect, found) -- found from engine/config.json
+engine_checks.append(("max_model_len", vals.get("KVP_MAX_MODEL_LEN"), arg(cmd, "--max-model-len")))
+engine_checks.append(("tp_size", vals.get("KVP_TP_SIZE"), arg(cmd, "--tensor-parallel-size")))
 kvd = arg(cmd, "--kv-cache-dtype") if cmd is not None else "UNAVAILABLE"
 if kvd == "UNAVAILABLE":
     kvd_seen = "UNAVAILABLE"
@@ -97,35 +135,53 @@ elif kvd in ("auto", "MISSING"):
     kvd_seen = "auto(default)"
 else:
     kvd_seen = kvd.lower()
-checks.append(("kv_cache_dtype", vals.get("KVP_KV_CACHE_DTYPE"), kvd_seen))
+engine_checks.append(("kv_cache_dtype", vals.get("KVP_KV_CACHE_DTYPE"), kvd_seen))
+bs = arg(cmd, "--block-size") if cmd is not None else "UNAVAILABLE"
+if bs == "UNAVAILABLE" and model_dir:
+    try:
+        cfg = json.load(open(model_dir + "/config.json"))
+        bs = str(cfg.get("block_size", "auto(default)"))
+    except Exception:
+        bs = "UNAVAILABLE"
+engine_checks.append(("block_size", vals.get("KVP_BLOCK_SIZE"), bs))
 nh = model_cfg("num_key_value_heads")
 hd = model_cfg("head_dim")
 if hd == "MISSING":
     hidden = model_cfg("hidden_size")
     nh_all = model_cfg("num_attention_heads")
     hd = hidden // nh_all if isinstance(hidden, int) and isinstance(nh_all, int) else "UNAVAILABLE"
-checks.append(("num_kv_heads", vals.get("KVP_NUM_KV_HEADS"), nh))
-checks.append(("head_dim", vals.get("KVP_HEAD_DIM"), hd))
+engine_checks.append(("num_kv_heads", vals.get("KVP_NUM_KV_HEADS"), nh))
+engine_checks.append(("head_dim", vals.get("KVP_HEAD_DIM"), hd))
 
 bad, inconc = [], []
-for label, expect, found in checks:
-    if found == "UNAVAILABLE":
-        inconc.append(f"{label}: source unavailable (no container/model_dir) -- identity={expect}")
+for label, expect, found in format_checks:
+    if found == expect:
         continue
-    if found == "MISSING":
-        inconc.append(f"{label}: engine/config has no value for this field -- identity={expect}")
-        continue
-    if str(found) != str(expect):
-        bad.append(f"{label}: identity={expect} != engine/config={found}")
-
-print(f"engine identity check (container={container}, model_dir={model_dir or 'unset'})")
-for label, expect, found in checks:
-    print(f"  {label}: identity={expect}  engine/config={found}")
+    if found.startswith("EMPTY") or found.startswith("MALFORMED"):
+        bad.append(f"{label}: {found} -- identity={expect!r}")
+    else:
+        bad.append(f"{label}: identity={expect!r} != config={found!r}")
+if not check_config_only:
+    for label, expect, found in engine_checks:
+        if found == "UNAVAILABLE":
+            inconc.append(f"{label}: source unavailable (no container/model_dir) -- identity={expect}")
+            continue
+        if found == "MISSING":
+            inconc.append(f"{label}: engine/config has no value for this field -- identity={expect}")
+            continue
+        if str(found) != str(expect):
+            bad.append(f"{label}: identity={expect} != engine/config={found}")
+print("engine identity check (container=%s, model_dir=%s, config_only=%s)" % (container or "none", model_dir or "unset", check_config_only))
+for label, expect, found in format_checks:
+    print("  [config] %s: identity=%s  config=%s" % (label, expect, found))
+if not check_config_only:
+    for label, expect, found in engine_checks:
+        print("  [engine] %s: identity=%s  engine/config=%s" % (label, expect, found))
 if bad:
     print("\nENGINE IDENTITY MISMATCH -- cache reuse is FORBIDDEN:")
     for b in bad:
         print("  !!! " + b)
-    print("Fix configs/mimo-v2.6-pro/identity.env (scripts/setup-identity.sh), rerun.")
+    print("Fix configs/*/identity.env(.local) (scripts/setup-identity.sh), rerun.")
     sys.exit(4)
 if inconc:
     print("\nINCONCLUSIVE -- values could not be verified; cache reuse is REFUSED by policy:")
@@ -134,5 +190,8 @@ if inconc:
     print("Set MODEL_DIR and/or start the container, then rerun. Passing requires")
     print("verified values, not the absence of errors.")
     sys.exit(5)
-print("\nidentity verified against running engine -- cache reuse allowed")
+if check_config_only:
+    print("\nidentity config complete and well-formed (engine-side check runs after launch)")
+else:
+    print("\nidentity verified against running engine -- cache reuse allowed")
 PYEOF

@@ -11,13 +11,31 @@ Value signals (all measured, never guessed):
 - prefix length: token count of the cached prefix (benefit of a hit)
 - storage cost: bytes actually consumed on disk
 
-Value score = hits_weight * hits + len_weight * log1p(tokens) + recency_bonus,
-divided by storage cost. Entries with identical policy inputs keep a stable
-(deterministic) order by key, so tests are reproducible.
+Value score = (hits_weight * hits + len_weight * tokens) * freshness,
+divided by storage cost. The prefix-length term is LINEAR in tokens on
+purpose (review round 13): the benefit of keeping a prefix is the recompute
+cost it saves, which is linear in its length, while storage cost is also
+linear in length -- so the ratio is length-neutral and a long prefix with
+reuses must outrank a short stale one. The old `log1p(tokens)` term made the
+benefit grow logarithmically against a linear cost, which EVICTED LONG
+PREFIXES FIRST (measured: 1M-token/5-hits entry scored 0.68 while a
+2k-token/0-hits/48h-old entry scored 43.95 at 50 KiB/token). Entries with
+identical policy inputs keep a stable (deterministic) order by key, so tests
+are reproducible.
 
 This module never deletes files itself: it only produces an ordered eviction
 plan. Applying the plan is the job of the admin CLI / L2 adapter delete calls,
 which keep shared blocks referenced by other entries intact.
+
+SCOPE (review round 13, honest statement): this policy ranks entries when
+per-entry statistics (hits, last access) are AVAILABLE. The pinned LMCache
+0.5.3 does not export per-entry hit counters through its public API, so in the
+current production path eviction is performed by LMCache's own in-service LRU
+and this module is used only by the offline planner and its unit tests. Do
+NOT assume the value-based ordering is active in production until the
+per-entry stats source is wired in. `min_keep_tokens` (default 0) is the only
+direct protection for long prefixes; raise it explicitly when using this
+planner.
 
 LIMITATION (review): `shared_refs` is a logical hint, NOT a verified
 cross-namespace physical-object refcount. When an entry has shared_refs > 1,
@@ -61,7 +79,12 @@ class EntryStats:
         now = now or time.time()
         age_h = max(0.0, (now - self.last_access_ts) / 3600.0)
         recency = math.exp(-age_h / half_life_h)          # 1.0 fresh -> 0 stale
-        benefit = 3.0 * self.hits + 1.5 * math.log1p(self.tokens)
+        # LINEAR in tokens (review round 13): the benefit of keeping a prefix is
+        # the recompute cost it saves, which is linear in its length; storage
+        # cost below is also linear, so the ratio is length-neutral. The old
+        # log1p(tokens) made benefit grow logarithmically against a linear cost
+        # and evicted long reused prefixes first.
+        benefit = 3.0 * self.hits + 1.5 * self.tokens
         cost = max(1, self.bytes_on_disk)
         # A shared object survives eviction of one ref -- freeing little real
         # space. Keep shared entries longer: multiply score by sqrt(shared_refs)

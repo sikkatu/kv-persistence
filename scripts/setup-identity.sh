@@ -198,6 +198,10 @@ echo "  chat template source: $SRC"
 echo "  digest: $DIGEST"
 
 # --- 3. write values into the config ------------------------------------
+# Values are written WITHOUT surrounding quotes: they are bare hex digests and
+# shell-safe as-is. Quoted values would later be read verbatim (with the quotes)
+# by the verification step and by config parsers -- the round-trip bug this
+# script used to have ("got '\"76ce...\"'").
 python3 - "$CONFIG" "$REV" "$TOK_REV" "$DIGEST" <<'PY'
 import re, sys
 path, rev, tokrev, digest = sys.argv[1:5]
@@ -206,7 +210,7 @@ def setvar(name, value):
     global text
     pat = re.compile(r"^(" + name + r")=.*$", re.M)
     if pat.search(text):
-        text = pat.sub(lambda m: m.group(1) + '="' + value.replace('"', '\\"') + '"', text, count=1)
+        text = pat.sub(lambda m: m.group(1) + "=" + value, text, count=1)
     else:
         text += f"\n{name}={value}\n"
 setvar("KVP_MODEL_REVISION", rev)
@@ -226,7 +230,13 @@ vals = {}
 for line in open(sys.argv[1]).read().splitlines():
     m = re.match(r"^([A-Z][A-Z0-9_]*)=(.*)$", line.strip())
     if m:
-        vals[m.group(1)] = m.group(2)
+        # Strip shell quoting (single or double) so `KVP_X="abc"` and
+        # `KVP_X=abc` both verify as `abc` -- the same normalization the bash
+        # loader applies. Without this, a quoted value fails the hex checks.
+        v = m.group(2).strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        vals[m.group(1)] = v
 try:
     ident = CacheIdentity(
         model_id=vals.get("KVP_MODEL_ID", ""),

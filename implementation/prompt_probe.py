@@ -27,12 +27,15 @@ from typing import List
 
 
 def render_chat_prompt(request: dict) -> str:
-    """Approximate the chat-template rendering for prefix measurement.
+    """Render the chat-template-style serialization for prefix measurement.
 
     We only need consistent, deterministic text here to COMPARE prefixes across
-    requests; the real model uses its own template at serving time. Tool
+    requests; the real model uses its own template at serving time (so this is
+    an APPROXIMATION of the true rendering, not byte-identical to it). Tool
     definitions and system messages participate in the serialized prefix, so
-    they must be included in order.
+    they must be included in order. Review round 13: `tool_calls` and
+    `tool_call_id` are serialized too -- their IDs are exactly the unstable
+    values this probe exists to detect.
     """
     parts: List[str] = []
     system = request.get("system")
@@ -46,6 +49,14 @@ def render_chat_prompt(request: dict) -> str:
         if not isinstance(content, str):
             content = json.dumps(content, sort_keys=True, ensure_ascii=False)
         parts.append(f"<|{role}|>\n{content}")
+        # Tool-call metadata is part of the serialized request and its IDs are
+        # a known source of prefix instability -- include it verbatim so the
+        # common-prefix measurement reflects it.
+        if msg.get("tool_call_id"):
+            parts.append(f"<|tool_call_id|>\n{msg['tool_call_id']}")
+        for tc in msg.get("tool_calls") or []:
+            parts.append("<|tool_call|>\n"
+                         + json.dumps(tc, sort_keys=True, ensure_ascii=False))
     parts.append("<|assistant|>")
     return "\n".join(parts)
 

@@ -86,7 +86,7 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
 | `configs/mimo-v2.6-pro/` | MiMo 身份固定与 L2 适配器模板，EN/RU/ZH |
 | `scripts/` | 预检、缓存启停、启动器、恢复测试、基准、管理 CLI |
 | `implementation/` | `kvpersist` 包：身份、预算、保留排序、管理 CLI |
-| `tests/` | 单元（49 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
+| `tests/` | 单元（61 个，随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
 
 ## 状态
 
@@ -111,22 +111,29 @@ bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据
    ```bash
    cp -r "$REPO/configs/mimo-v2.6-pro" "$REPO/configs/<你的模型>"
    ```
-2. 编辑 `configs/<你的模型>/identity.env`：
+2. **选择模型配置** —— 当存在第二个配置目录时，脚本不再自动选取
+   （歧义布局会被拒绝，而不是猜测）：
+   ```bash
+   export KVP_MODEL_CONFIG=<你的模型>
+   ```
+   `KVP_MODEL_CONFIG` 由 `setup-identity.sh`、`start-cache.sh`、
+   `run-vllm-with-persist.sh`、`verify-engine-identity.sh` 和 `kvpersist`
+   配置加载器读取。`CONFIG_FILE`（仅 `setup-identity.sh`）额外允许指定要写入的
+   具体文件；通常不需要。
+3. 编辑 `configs/<你的模型>/identity.env`：
    * `KVP_MODEL_ID` = 你的模型的 HF id（或任意唯一标签）。
    * `KVP_TP_SIZE`、`KVP_BLOCK_SIZE`、`KVP_NUM_KV_HEADS`、`KVP_HEAD_DIM`、
      `KVP_MAX_MODEL_LEN`、`KVP_KV_CACHE_DTYPE` = vLLM 对你的模型报出的 KV 几何
      （见 `docs/architecture.md`「identity fields」）。
    * `KVP_CONNECTOR_VERSION` = 你的 vLLM+LMCache 组合的描述性标记。
-3. 运行 `bash scripts/setup-identity.sh "$HOME/models/<你的模型>"` 自动填写并
+4. 运行 `bash scripts/setup-identity.sh "$HOME/models/<你的模型>"` 自动填写并
    核验版本/摘要字段。
-4. 将 `scripts/preflight.sh`、`start-cache.sh` 和 vLLM 启动器指向
-   `configs/<你的模型>/`（脚本从 `CONFIG_FILE`/env 读取路径；见 `docs/deployment.md`）。
-
+5. 以导出的 `KVP_MODEL_CONFIG=<你的模型>` 启动；脚本据此解析
+   `configs/<你的模型>/`（见 `docs/deployment.md`）。
 每个模型拥有独立的缓存命名空间 —— 不同模型的 KV 数据绝不混用，任何身份字段
 的变更都会安全地退回缓存未命中。
-
 **注意：** 除 MiMo 外的模型支持尚未在硬件上验证；请把
-`configs/mimo-v2.6-pro/` 视为唯一已验证的参考配置，对架构差异较大的模型预期
+`configs/mimo-v2.6-pro/` 视为参考配置，对架构差异较大的模型预期
 需要适配启动器（补丁/模型加载器）。
 
 ## 许可证

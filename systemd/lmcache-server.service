@@ -8,6 +8,26 @@
 # Why systemd instead of `setsid nohup`: survives reboot, restarts automatically
 # on failure, and logs land in journald. scripts/start-cache.sh remains for
 # non-systemd hosts (session-affine `setsid nohup` mode).
+#
+# Review round 13 fixes:
+#   * User=%i was INVALID here: `%i` is only meaningful in a TEMPLATE unit
+#     (lmcache-server@.service). This is a plain unit, so the user must be
+#     written literally (default: `kvp`), or the unit is installed as a
+#     template (see lmcache-server@.service). `systemd-analyze verify` reports
+#     "Invalid user/group name" for User=%i in a non-template unit.
+#   * `--l2-adapter` takes the adapter spec as a JSON STRING (lmcache 0.5.3
+#     add_l2_adapters_args does json.loads on the value), NOT a file path. The
+#     ExecStart below inlines the rendered spec via an EnvironmentFile value or
+#     the documented `$(cat ...)` expansion is not available in ExecStart --
+#     therefore the spec is passed through a wrapper script
+#     (/usr/local/sbin/kvp-lmcache-server) that reads the rendered file and
+#     inlines its content. See docs/deployment.md.
+#   * EnvironmentFile must end cleanly (no trailing comment on the same line,
+#     which systemd strips incorrectly in some versions) and uses the `-`
+#     prefix when the file is OPTIONAL.
+#   * The LMCACHE_* values are not hardcoded here; they come from
+#     /etc/kv-persistence.env so the unit and scripts/start-cache.sh read the
+#     SAME source.
 
 [Unit]
 Description=LMCache server (persistent KV cache for vLLM, kv-persistence)
@@ -18,17 +38,16 @@ After=network-online.target
 Type=simple
 # Run as the same non-root user that runs Docker (see docs/security.md on the
 # chosen user and cache-dir ownership); never as a public/wide binding service.
-User=%i
-EnvironmentFile=/etc/kv-persistence.env   # optional file with KVP_* / LMCACHE_* overrides
+# NOTE: plain unit, so this is a literal user name. For per-instance users use
+# the template unit lmcache-server@.service (User=%i is valid only there).
+User=kvp
+Group=kvp
+EnvironmentFile=-/etc/kv-persistence.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/env lmcache server \
-  --host 127.0.0.1 --port 5555 \
-  --l1-size-gb 64 \
-  --eviction-policy LRU \
-  --eviction-trigger-watermark 0.9 \
-  --eviction-ratio 0.1 \
-  --chunk-size 256 \
-  --l2-adapter /var/lib/kv-persistence/l2/l2-adapter.rendered.json
+# The wrapper reads the rendered L2 adapter JSON and passes it to `lmcache
+# server` as an inline JSON string (the pinned 0.5.3 CLI does json.loads on
+# --l2-adapter, so a file path is rejected).
+ExecStart=/usr/local/sbin/kvp-lmcache-server /var/lib/kv-persistence/l2/l2-adapter.rendered.json
 Restart=on-failure
 RestartSec=5
 # Cannot be kill -9'd by accident loops; give it time to flush files on SIGTERM.

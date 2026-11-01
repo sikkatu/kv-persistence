@@ -84,6 +84,13 @@ class CacheIdentity:
     multimodal_components: str = ""  # vision/audio encoder ids + revisions if served
     rope_config_digest: str = "" # sha256 of RoPE scaling/theta/section config (64 hex)
     speculative_config: str = "" # MTP / draft-model / speculative settings if active
+    # L2 serializer/deserializer (LMCACHE_L2_SERDE: none|fp8|...). Part of the
+    # identity on purpose (review round 13): the L2 file name does NOT depend on
+    # the serde, so two deployments sharing a cache root with DIFFERENT serde
+    # would read each other's files with the wrong deserializer. Changing the
+    # serde must therefore change the namespace (-> cache miss, never a corrupt
+    # read). "" is treated as "none".
+    l2_serde: str = ""
 
     def validate(self) -> None:
         if not self.model_id:
@@ -148,6 +155,8 @@ class CacheIdentity:
                 Use THIS (or a separate L2 cache root) for isolation between
                 tenants -- do not rely on ``cache_salt`` on the L2 tier (see
                 module docstring: the nixl_store_dynamic file name ignores it).
+                Must not contain ``/`` or ``@``: the L2 file name maps ``/`` to
+                ``--``, so ``tenant/a`` and ``tenant--a`` would collide.
 
         Returns:
             ``"<base>/<namespace>[/extra_discriminator]"`` with the namespace's
@@ -155,13 +164,80 @@ class CacheIdentity:
             ``\\x00``-free to satisfy the ObjectKey invariants (LMCache uses
             ``@`` as a field separator in serialized keys).
         """
-        parts = [p for p in (base_model.strip("/"), self.short_fingerprint(),
-                             extra_discriminator.strip("/")) if p]
-        name = "/".join(parts)
-        if _LMC_MODEL_NAME_FORBIDDEN in name:
+        disc = extra_discriminator.strip("/")
+        if any(c in disc for c in ("/", "@", "\\")):
             raise IdentityError(
-                f"lmcache model_name must not contain '@' (got {name!r})")
+                "extra_discriminator must not contain '/', '@' or '\\\\' "
+                f"(got {extra_discriminator!r}): the L2 file name maps '/' to "
+                "'--', so 'tenant/a' and 'tenant--a' would collide on disk")
+        parts = [p for p in (base_model.strip("/"), self.short_fingerprint(),
+                             disc) if p]
+        name = "/".join(parts)
+        if _LMC_MODEL_NAME_FORBIDDEN in name or "\x00" in name:
+            raise IdentityError(
+                f"lmcache model_name must not contain '@' or NUL (got {name!r})")
         return name
+
+
+def _strip_quotes(value: str) -> str:
+    """Strip one layer of shell quoting so `KVP_X="abc"` == `KVP_X=abc`."""
+    v = value.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1]
+    return v
+
+
+def _read_env_config(path: str) -> Dict[str, str]:
+    """Parse a KEY=VALUE env file the way the bash loader does (quotes stripped)."""
+    out: Dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                line = line.removeprefix("export ").strip()
+                if "=" not in line:
+                    continue
+                name, val = line.split("=", 1)
+                name = name.strip()
+                val = val.split(" #")[0].strip()
+                if name:
+                    out[name] = _strip_quotes(val)
+    except OSError:
+        pass
+    return out
+
+
+def identity_from_env_files(*paths: str) -> "CacheIdentity":
+    """Build a CacheIdentity by layering env files (later files win per key).
+
+    Used by the launchers to compute the LMCache model_name from the SAME
+    values the identity gate verifies, so the storage-level namespace and the
+    verified pins can never drift apart.
+    """
+    vals: Dict[str, str] = {}
+    for p in paths:
+        vals.update(_read_env_config(p))
+    def get(name: str, default: str = "") -> str:
+        return vals.get(name, default)
+    return CacheIdentity(
+        model_id=get("KVP_MODEL_ID"),
+        model_revision=get("KVP_MODEL_REVISION"),
+        tokenizer_name=get("KVP_TOKENIZER_NAME"),
+        tokenizer_revision=get("KVP_TOKENIZER_REVISION"),
+        kv_cache_dtype=get("KVP_KV_CACHE_DTYPE"),
+        block_size=int(get("KVP_BLOCK_SIZE") or 0),
+        num_kv_heads=int(get("KVP_NUM_KV_HEADS") or 0),
+        head_dim=int(get("KVP_HEAD_DIM") or 0),
+        tp_size=int(get("KVP_TP_SIZE") or 0),
+        connector=get("KVP_CONNECTOR"),
+        connector_version=get("KVP_CONNECTOR_VERSION"),
+        max_model_len=int(get("KVP_MAX_MODEL_LEN") or 0),
+        chat_template_digest=get("KVP_CHAT_TEMPLATE_DIGEST"),
+        namespace_hint=get("KVP_NAMESPACE_HINT"),
+        l2_serde=get("LMCACHE_L2_SERDE") or get("KVP_L2_SERDE"),
+    )
 
 
 def namespace_from_config(cfg: Dict[str, Any]) -> str:
@@ -170,7 +246,14 @@ def namespace_from_config(cfg: Dict[str, Any]) -> str:
     unknown = set(cfg) - fields
     if unknown:
         raise IdentityError(f"unknown identity fields: {sorted(unknown)}")
-    required = fields - {"namespace_hint"}
+    # Optional fields (default "") are NOT required: their absence means
+    # "not applicable", which the dataclass already encodes. Only fields with
+    # no sensible default must be present (review: the optional advanced
+    # identity fields lora_adapters / multimodal_components /
+    # rope_config_digest / speculative_config must not be demanded).
+    optional = {"namespace_hint", "lora_adapters", "multimodal_components",
+                "rope_config_digest", "speculative_config", "l2_serde"}
+    required = fields - optional
     missing = required - set(cfg)
     if missing:
         raise IdentityError(f"missing identity fields (uncertain -> miss): {sorted(missing)}")

@@ -38,7 +38,13 @@ kv-persistence 的任何脚本都不会触碰它们。
 * `KVP_CACHE_ROOT` 下每个 KV 块对象一个文件（临时文件 + 原子重命名）。
 * 没有单独的磁盘索引 —— 确定性文件命名空间本身就是索引，启动时惰性重建。
   索引/元数据开销已计入 `used_bytes`。
-* 并发写入安全：即使并行请求，只要会超出硬上限，记账器就会拒绝写入。
+* 并发写入安全：只要会超出硬上限，记账器就会拒绝写入。硬上限由 LMCache
+  `nixl_store_dynamic` 适配器本身执行（`max_capacity_gb`：超过即拒绝写入）。
+  本仓库的 `BudgetLedger.admit()` 为调用方提供相同的准入检查
+  （见 `test_concurrent_admits_cannot_exceed_budget`），但在生产写入路径上
+  **并未被调用**（review round 13）：LMCache 写入分块时不会咨询它。因此
+  `quotas.json` 中的配额目前只是报告/排序数据，而不是写入时的强制执行点——
+  在记账器接入写入路径之前，不要假设配额能阻止存储增长。
 * **重启后核算（NEEDS TESTING）**：lmcache-server 重启后，上游描述内存索引按需
   懒惰重建（只根据文件尺寸）。在确认锁定的 LMCache 构建会把恢复的文件大小
   计入 get_usage()（从而参与 max_capacity_gb 与 LRU 的判定）之前，不要假设
