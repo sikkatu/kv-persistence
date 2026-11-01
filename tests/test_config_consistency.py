@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "implementation"))
 
@@ -86,3 +88,59 @@ def test_ambiguous_model_layout_refuses_silently(tmp_path):
     assert out.returncode != 0, (
         "ambiguous multi-model layout must refuse, not silently pick one")
     assert "multiple model config dirs" in (out.stdout + out.stderr)
+
+
+# --- quote parsing parity (review: KVP_X='abc' disagreed between loaders) ---
+
+
+def _shell_parse(value: str) -> str:
+    tmp = Path("/tmp/kvp-quote-test.env")
+    tmp.write_text(f"KVP_QUOTE_TEST={value}\n")
+    out = subprocess.run(
+        ["bash", "-c",
+         f'line=$(head -1 "{tmp}"); '
+         f'. "{ROOT}/scripts/env.sh"; _kvp_parse_line "$line"; '
+         'printf %s "$_val"'],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout
+
+
+def _python_parse(value: str) -> str:
+    sys.path.insert(0, str(ROOT / "implementation"))
+    from kvpersist.config import _parse_env_file
+
+    tmp = Path("/tmp/kvp-quote-test-py.env")
+    tmp.write_text(f"KVP_QUOTE_TEST={value}\n")
+    return _parse_env_file(tmp).get("KVP_QUOTE_TEST", "")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "abc",
+        "'abc'",
+        '"abc"',
+        "'a b'",
+        '"a b"',
+        "'mixed",
+        "mixed'",
+        '""',
+        "''",
+        "it's",
+        'say "hi"',
+        "'don''t'",
+    ],
+)
+def test_quote_parsing_identical_in_bash_and_python(raw):
+    """Review fix: `KVP_X='abc'` must give `abc` in BOTH loaders.
+
+    Before the fix bash kept the single quotes (only double quotes were
+    stripped), so the two loaders disagreed despite the documented
+    "MUST match scripts/env.sh `_kvp_parse_line`" contract.
+    """
+    assert _shell_parse(raw) == _python_parse(raw), (
+        f"bash and python env parsers disagree for {raw!r}: "
+        f"{_shell_parse(raw)!r} != {_python_parse(raw)!r}"
+    )

@@ -81,6 +81,32 @@ def _dir_size(path: str) -> int:
     return total
 
 
+def _tmp_files(root: str) -> list:
+    """Crash leftovers: ``<final>.tmp.<uuid>`` files the adapter never renamed.
+
+    Upstream nixl_store_dynamic writes to ``<file_path>.tmp.<uuid>`` and
+    atomically renames on success; only a CLEAN shutdown sweeps the leftovers
+    (``cleanup_temp_files``). After a crash they stay forever, invisible to the
+    cache index and to the naive ``*.bin`` scan -- so ``status``/``purge``/
+    ``emergency-evict`` would silently under-report and under-free. Review fix:
+    surface them everywhere, and let purge/delete remove them on request.
+    """
+    out = []
+    if not os.path.isdir(root):
+        return out
+    pat = re.compile(r"^(?P<final>.+\.bin)\.tmp\.[0-9a-f]{32}$")
+    for name in os.listdir(root):
+        p = os.path.join(root, name)
+        if not (os.path.isfile(p) and ".tmp." in name):
+            continue
+        m = pat.match(name)
+        try:
+            out.append((p, m.group("final") if m else name))
+        except OSError:
+            pass
+    return out
+
+
 def _real_cache_files(root: str) -> list:
     """Actual L2 cache data files the LMCache adapter writes.
 
@@ -147,6 +173,17 @@ def cmd_status(_args) -> int:
         except OSError:
             pass
         file_count += 1
+    # Crash leftovers (*.bin.tmp.<uuid>) are counted SEPARATELY: they are not
+    # reachable by the cache index and never returned as KV, but they do
+    # consume disk. Surfacing them here is what lets an operator see (and
+    # purge) space that upstream only sweeps on a clean shutdown.
+    tmp_files = _tmp_files(root)
+    tmp_bytes = 0
+    for p, _final in tmp_files:
+        try:
+            tmp_bytes += os.path.getsize(p)
+        except OSError:
+            pass
     # Legacy per-namespace directories (older layouts / admin bookkeeping).
     if os.path.isdir(root):
         for name in sorted(os.listdir(root)):
@@ -162,8 +199,13 @@ def cmd_status(_args) -> int:
         "cache_files": file_count,
         "disk_free_bytes": shutil.disk_usage(root).free if os.path.isdir(root) else None,
         "namespaces": sorted(sizes),
+        "tmp_files": len(tmp_files),
+        "tmp_files_bytes": tmp_bytes,
         "note": "L2 adapter writes flat *.bin files; namespaces are "
-                "model_name prefixes of those files",
+                "model_name prefixes of those files. tmp_files are crash "
+                "leftovers (*.bin.tmp.<uuid>) -- invisible to the cache "
+                "index, never returned as KV, but they do consume disk; "
+                "remove with `purge --all --yes` or `purge --tmp --yes`",
     })
     print(json.dumps(rep, indent=2))
     return 0
@@ -191,6 +233,15 @@ def cmd_purge(args) -> int:
                 targets.append(p)
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
+        # Crash leftovers: sweep them too on --all (upstream only does this on
+        # a clean shutdown, so after a crash they linger and eat disk).
+        for p, _final in _tmp_files(root):
+            try:
+                freed += os.path.getsize(p)
+                os.remove(p)
+                targets.append(p)
+            except OSError as exc:
+                print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
         # Legacy per-namespace dirs.
         for n in sorted(os.listdir(root)):
             ns_dir = os.path.join(root, n)
@@ -198,6 +249,15 @@ def cmd_purge(args) -> int:
                 freed += _dir_size(ns_dir)
                 shutil.rmtree(ns_dir, ignore_errors=True)
                 targets.append(ns_dir)
+    elif getattr(args, "tmp", False):
+        # --tmp: remove ONLY the crash leftovers, keep every cache file.
+        for p, _final in _tmp_files(root):
+            try:
+                freed += os.path.getsize(p)
+                os.remove(p)
+                targets.append(p)
+            except OSError as exc:
+                print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
     elif ns:
         # Review round 13: EXACT namespace match only. The old substring rule
         # (`ns in prefix`) deleted `MiMo` AND `MiMo-V2.6-Pro` -- and `--namespace -`
@@ -274,6 +334,10 @@ def main(argv=None) -> int:
                    help="same as --namespace, positional form (safe for names "
                         "starting with '-')")
     p.add_argument("--all", action="store_true")
+    p.add_argument("--tmp", action="store_true",
+                   help="remove ONLY crash leftovers (*.bin.tmp.<uuid>), keep "
+                        "every cache file. Useful after a hard kill: upstream "
+                        "sweeps those files only on a clean shutdown.")
     p.add_argument("--yes", action="store_true", help="required to actually delete")
     q = sub.add_parser("quota", help="show or set per-namespace quota")
     q.add_argument("--set-namespace")

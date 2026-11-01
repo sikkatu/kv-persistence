@@ -180,8 +180,9 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 * 默认 `LMCACHE_L2_SERDE=none` —— 逐字节精确的原始块，与未压缩的 upstream
   路径完全一致。不做任何变换。
 * `LMCACHE_L2_SERDE=zstd|lz4`（或操作开关 `USE_LOSSLESS_SERDE`）—— 无损压缩。
-  无法压缩变小的块按原样存储，因此块永不膨胀。预期缩减温和，真实 KV
-  约 1.1–1.4x。
+  无法压缩变小的块按原样存储，因此块永远不会膨胀超过一个 4 KiB 页
+  （28 字节帧头 + 填充到页边界）。常被引用的 1.1–1.4x 缩减是来自 LMCache
+  生态的**规划估算**，并非本仓库的实测结果：这里尚未运行压缩率基准测试。
 * 有损编解码（fp8 / turboquant / lbq / cachegen / kivi）在启动时被明确
   **拒绝** —— 无损是契约，而不是可以漂移的默认值。
 * 编解码被折叠进缓存身份命名空间（`l2_serde`），shell
@@ -189,6 +190,16 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
   （`kvpersist.identity`）均如此；单元测试断言两者一致
   （`tests/unit/test_lossless_serde_switch.py`）。切换编解码是安全的缓存
   miss，绝不会错误命中。
+* 帧格式 `KVCZ` v2 携带未压缩负载的 CRC32：被截断的 DMA 读取、位翻转或
+  来自其他编解码的帧会在反序列化时被检测并报告为缓存 MISS。
+* 负载之后的填充被显式清零 —— 回收的 L1 slab 块绝不能把其他租户的字节
+  泄漏进我们的缓存文件（`tests/unit/test_compress_serde.py::test_padding_is_zeroed`）。
+* Fail-fast：`register()` 与 `start-cache.sh` 在服务器启动**之前**验证
+  编解码的 Python 绑定（host venv 探测，或 docker 模式下**容器内**探测）。
+  缺失绑定会中止启动，而不是达到 READY 后在 serde 线程池中失败。
+* L2 文件大小补丁仅在真正构建 kvp-* serde 时安装；`LMCACHE_L2_SERDE=none`
+  时适配器类完全不动（逐字节 upstream load/store），因此 raw 路径上短的
+  DMA 读取绝不会被我们的包装器掩盖。
 
 **如实状态：** serde 帧逻辑已通过单元测试（往返、成帧、坏帧拒绝、不可压缩
 数据透传），且在未安装 torch/lz4/zstandard 的环境中运行。经 LMCache 的

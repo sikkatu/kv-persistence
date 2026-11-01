@@ -104,9 +104,18 @@ startup. Two storage modes are available:
   (or the `USE_LOSSLESS_SERDE` switch, see below). Chunks are compressed with
   the lossless `kvp-zstd` / `kvp-lz4` serdes registered by
   `implementation/kvpersist/compress_serde.py`. A block that does not shrink
-  is stored raw, so a chunk never grows. Expected size reduction is modest —
-  roughly **1.1–1.4x** on real KV payloads (zstd is the better ratio, lz4 the
-  faster codec).
+  is stored raw, so a chunk never grows by more than one 4 KiB page (the
+  28-byte frame header plus padding up to the page boundary). Expected size
+  reduction on real KV payloads is modest — the commonly cited range is
+  roughly **1.1–1.4x**, but that number is an *estimate*, not a measurement
+  from this repository: no benchmark of the compression ratio has been run
+  here yet (see `docs/final-report.md`). Treat it as a rough planning figure,
+  not a guarantee.
+
+Every frame carries a **CRC32 of the uncompressed payload** (`KVCZ` format v2):
+a truncated DMA read, a bit flip, or a frame written under a different codec is
+detected at deserialize time and reported as a cache **miss** — never returned
+as silently corrupt KV.
 
 Enable lossless compression for one run:
 
@@ -144,6 +153,19 @@ cd observability && docker compose up -d
 * **Prometheus** → <http://localhost:9091>
 * **Tempo** → <http://localhost:3200> (traces)
 * **OTLP gRPC** → `localhost:4320` — where the cache server pushes metrics.
+
+**Security:** every published port is bound to `127.0.0.1` only (the
+`docs/security.md` loopback contract). Grafana runs with anonymous Admin access
+and the login form disabled — exposing it on `0.0.0.0` would hand out admin on
+the whole network. To reach the stack from another host, put an authenticated
+reverse proxy in front of it. All images are pinned to exact versions
+(no `:latest`), matching the rest of the project.
+
+**Docker mode:** when the cache server runs in a sidecar container
+(`KVP_LAUNCH_MODE=docker`), `start-cache.sh` automatically rewrites
+`localhost`/`127.0.0.1` in the OTLP endpoint to `host.docker.internal` — inside
+the container `localhost` is the container itself, so the metrics would
+otherwise never reach the collector.
 
 Point the cache server at the collector and enable telemetry (off by default,
 the cache works fine without it):

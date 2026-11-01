@@ -19,6 +19,16 @@ cd observability && docker compose up -d
 | Tempo | 3200 | 跟踪存储 + TraceQL 指标 |
 | Grafana | **3000** | 仪表盘界面（匿名 Admin，无登录表单） |
 
+**所有端口仅绑定到 `127.0.0.1`**（`docs/security.md` 的回环契约）。Grafana
+以匿名 Admin 运行且登录表单被禁用 —— 暴露到 `0.0.0.0` 等于向整个网络发放
+管理员权限。若需从其他主机访问，请在栈前放置带认证的反向代理；请勿放宽
+端口绑定。
+
+**镜像已固定**到确切版本（`otel/opentelemetry-collector-contrib:0.164.0`、
+`grafana/tempo:2.7.2`、`prom/prometheus:v3.15.1`、`grafana/grafana:13.2.5`），
+符合项目“无 `:latest`”的规则。升级是刻意为之：修改 `docker-compose.yml`
+中的标签，重新执行 `docker compose up -d`，并复查仪表盘。
+
 ## Grafana
 
 打开 <http://localhost:3000> → **Dashboards**。两个仪表盘已从

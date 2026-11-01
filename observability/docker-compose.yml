@@ -8,21 +8,28 @@
 # Prometheus -> http://localhost:9091
 # Tempo    -> http://localhost:3200
 #
-# Copied and adapted from the official LMCache example
-# (LMCache/LMCache examples/observability, Apache-2.0) so that
-# `docker compose up -d` in this folder is the SINGLE command required.
+# SECURITY (docs/security.md loopback contract): EVERY published port is bound
+# to 127.0.0.1 only. Grafana runs with anonymous Admin access and the login
+# form disabled -- exposing it on 0.0.0.0 would hand out admin on the whole
+# network. Same for the collector's OTLP endpoint and the Prometheus/Tempo
+# UIs. To reach the stack from another host, put an authenticated reverse
+# proxy in front of it; do NOT widen these bindings.
+#
+# Images are PINNED to exact versions (the rest of the project never runs
+# :latest). Upgrading is a deliberate action: edit the tag, re-run
+# `docker compose up -d`, re-check the dashboards.
 services:
   # OTel Collector -- receives OTLP from the lmcache server, fans out to
   # Tempo (traces) and Prometheus (metrics).
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.164.0
     container_name: obs_otel_collector
     volumes:
       - ./otel-collector.yml:/etc/otel-collector.yml:ro
     command: ["--config=/etc/otel-collector.yml"]
     ports:
-      - "4320:4317"   # OTLP gRPC (LMCache --otlp-endpoint points here)
-      - "8889:8889"   # Prometheus scrape endpoint
+      - "127.0.0.1:4320:4317"   # OTLP gRPC (LMCache --otlp-endpoint points here)
+      - "127.0.0.1:8889:8889"   # Prometheus scrape endpoint
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -38,18 +45,18 @@ services:
       - tempo_data:/var/tempo
     command: ["-config.file=/etc/tempo.yml"]
     ports:
-      - "3200:3200"
+      - "127.0.0.1:3200:3200"
     restart: unless-stopped
 
   # Prometheus -- metrics storage (7 days retention).
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.15.1
     container_name: obs_prometheus
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
@@ -61,13 +68,13 @@ services:
 
   # Grafana -- UI with the official LMCache dashboards auto-imported.
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2.5
     container_name: obs_grafana
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin

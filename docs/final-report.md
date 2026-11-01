@@ -297,7 +297,10 @@ runtime (same launcher pattern as the salt filename patch, now unified in
   uncompressed upstream path. Nothing is transformed.
 * `LMCACHE_L2_SERDE=zstd|lz4` (or the `USE_LOSSLESS_SERDE` operator switch) --
   lossless compression. A block that does not shrink is stored raw, so a chunk
-  never grows. Expected reduction is modest, roughly 1.1-1.4x on real KV.
+  never grows by more than one 4 KiB page (28-byte frame header + page
+  padding). The commonly cited 1.1-1.4x reduction is a PLANNING ESTIMATE from
+  the LMCache ecosystem, NOT a measurement from this repository -- no
+  compression-ratio benchmark has been run here yet.
 * Lossy codecs (fp8 / turboquant / lbq / cachegen / kivi) are REFUSED loudly at
   startup -- lossless is the contract, not a default that can drift.
 * The codec is folded into the cache-identity namespace (`l2_serde`) by BOTH
@@ -305,6 +308,20 @@ runtime (same launcher pattern as the salt filename patch, now unified in
   loader (`kvpersist.identity`), and unit tests assert the two agree
   (`tests/unit/test_lossless_serde_switch.py`). Switching codecs is a safe
   cache miss, never a wrong read.
+* Frame format `KVCZ` v2 carries a CRC32 of the uncompressed payload: a
+  truncated DMA read, bit flip, or a frame from another codec is detected at
+  deserialize time and reported as a cache MISS.
+* The padding after the payload is explicitly zeroed -- a recycled L1 slab
+  block must never leak another tenant's bytes into our cache file
+  (`tests/unit/test_compress_serde.py::test_padding_is_zeroed`).
+* Fail-fast: `register()` and `start-cache.sh` verify the codec's Python
+  bindings BEFORE the server starts (host venv probe, or a probe INSIDE the
+  container in docker mode). Missing bindings abort the launch instead of
+  reaching READY and failing later inside the serde thread pool.
+* The L2 file-size patch installs ONLY when a kvp-* serde is actually built;
+  with `LMCACHE_L2_SERDE=none` the adapter class is untouched (byte-for-byte
+  upstream load/store), so a short DMA read can never be masked by our
+  wrapper on the raw path.
 
 **Honest status:** the serde frame logic is unit-tested (round-trip, framing,
 malformed-frame rejection, incompressible-data passthrough) WITHOUT torch/lz4/

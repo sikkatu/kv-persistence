@@ -58,6 +58,19 @@ case "${USE_OBSERVABILITY:-}" in
   1|yes|true) LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-http://localhost:4320}" ;;
 esac
 LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-${KVP_OTLP_ENDPOINT:-}}"
+if [ -n "$LMCACHE_OTLP_ENDPOINT" ] && [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+  # Review fix: inside the sidecar container `localhost` is the CONTAINER
+  # itself, so the default endpoint would silently point nowhere. The
+  # collector runs on the HOST (observability/docker-compose.yml binds
+  # 127.0.0.1), so the container must use the docker bridge gateway.
+  case "$LMCACHE_OTLP_ENDPOINT" in
+    *localhost*|*127.0.0.1*)
+      LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT/localhost/host.docker.internal}"
+      LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT/127.0.0.1/host.docker.internal}"
+      echo "docker mode: rewriting OTLP endpoint to $LMCACHE_OTLP_ENDPOINT (localhost inside the container would be the container itself)"
+      ;;
+  esac
+fi
 if [ -n "$LMCACHE_OTLP_ENDPOINT" ]; then
   case "$LMCACHE_HELP" in
     *--otlp-endpoint*) : ;;
@@ -95,6 +108,26 @@ The L2 tier is lossless-only: decoded KV must be bit-identical to the engine
 cache. Use none (byte-exact raw), zstd or lz4." ;;
   *) die "LMCACHE_L2_SERDE=$LMCACHE_L2_SERDE not understood (use none / zstd / lz4)" ;;
 esac
+# Fail-fast: when a codec is selected, verify its Python bindings BEFORE the
+# server starts. Otherwise the server reaches READY and every store silently
+# fails later inside the serde thread pool (log-only). In docker mode the
+# probe runs INSIDE the container -- the host has no lmcache/python stack.
+if [ "$LMCACHE_L2_SERDE" = "zstd" ] || [ "$LMCACHE_L2_SERDE" = "lz4" ]; then
+  if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+    CODEC_PROBE="$(docker run --rm -v "$ROOT/implementation:/kvp-impl:ro" \
+      -e PYTHONPATH=/kvp-impl --entrypoint python3 "$DOCKER_IMAGE" \
+      -c "from kvpersist.compress_serde import check_codec_available; check_codec_available('$LMCACHE_L2_SERDE')" 2>&1)" \
+      || die "lossless codec '$LMCACHE_L2_SERDE' is not available inside the docker image.
+$CODEC_PROBE
+Either install the codec into the image, or fall back to LMCACHE_L2_SERDE=none."
+  else
+    PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 -c "from kvpersist.compress_serde import check_codec_available; check_codec_available('$LMCACHE_L2_SERDE')" 2>&1 \
+      || die "lossless codec '$LMCACHE_L2_SERDE' is not available in this python.
+Install it (pip install ${LMCACHE_L2_SERDE/zstd/zstandard}) or fall back to LMCACHE_L2_SERDE=none."
+  fi
+  echo "codec check: $LMCACHE_L2_SERDE bindings present"
+fi
 
 # Render the L2 adapter spec from the single source of truth.
 ADAPTER_JSON="$ROOT_PATH/l2-adapter.rendered.json"

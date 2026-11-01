@@ -19,6 +19,18 @@ cd observability && docker compose up -d
 | Tempo | 3200 | trace storage + TraceQL metrics |
 | Grafana | **3000** | dashboards UI (anonymous Admin, no login form) |
 
+**All ports are bound to `127.0.0.1` only** (the `docs/security.md` loopback
+contract). Grafana runs with anonymous Admin access and the login form
+disabled — exposing it on `0.0.0.0` would hand out admin on the whole network.
+To reach the stack from another host, put an authenticated reverse proxy in
+front of it; do NOT widen the port bindings.
+
+**Images are pinned** to exact versions (`otel/opentelemetry-collector-contrib:0.164.0`,
+`grafana/tempo:2.7.2`, `prom/prometheus:v3.15.1`, `grafana/grafana:13.2.5`), matching
+the project's "no `:latest`" rule. Upgrading is a deliberate action: edit the
+tag in `docker-compose.yml`, re-run `docker compose up -d`, re-check the
+dashboards.
+
 ## Grafana
 
 Open <http://localhost:3000> → **Dashboards**. Two dashboards are

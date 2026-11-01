@@ -119,7 +119,16 @@ explicit cleanup, never automatic.
   Re-store them (or switch back) — never a wrong read.
 * Compressed chunks not smaller on disk — the codec only shrinks what actually
   compresses; incompressible blocks are stored raw and padded to the 4 KiB page
-  size. On tiny chunks the per-chunk header (24 B) can dominate.
+  size. On tiny chunks the per-chunk header (28 B) can dominate.
+
+## Disk usage higher than expected, no cache files to explain it
+After a hard kill (SIGKILL, OOM, power loss) the adapter can leave crash
+leftovers: `<final>.bin.tmp.<uuid>` files it never got to atomically rename.
+Upstream sweeps them only on a CLEAN shutdown, so they linger and consume disk
+while staying invisible to the cache index (they are never returned as KV).
+Check with `bash scripts/budget-report.sh status` (fields `tmp_files` and
+`tmp_files_bytes`) and remove them with `bash scripts/budget-report.sh purge
+--tmp --yes` (keeps every real cache file) or `purge --all --yes`.
 
 ## Grafana shows no data
 The stack is passive until the cache service pushes telemetry. Start the cache

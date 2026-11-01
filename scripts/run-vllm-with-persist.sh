@@ -38,6 +38,20 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"; GPU_UTIL="${GPU_UTIL:-0.85}"
 MOE_BACKEND="${MOE_BACKEND:-humming}"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"; SITE="${SITE:-}"
+# Review fix: reasoning/tool-call parsers are MODEL-specific, not a project
+# constant. The reference MiMo deployment needs the mimo parsers; other models
+# set VLLM_EXTRA_ARGS to their own (or to nothing).
+# VLLM_EXTRA_ARGS is a SPACE-SEPARATED string of extra vLLM flags (an env var
+# cannot carry an array), e.g.
+#   export VLLM_EXTRA_ARGS="--reasoning-parser my-model --tool-call-parser my-model"
+# It is split into a real array here so flags with spaces survive.
+if [ "${KVP_MODEL_CONFIG:-mimo-v2.6-pro}" = "mimo-v2.6-pro" ] && [ -z "${VLLM_EXTRA_ARGS:-}" ]; then
+  VLLM_EXTRA_ARGS="--reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice"
+fi
+VLLM_EXTRA_ARGS_ARR=()
+if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
+  read -r -a VLLM_EXTRA_ARGS_ARR <<< "$VLLM_EXTRA_ARGS"
+fi
 PIDF="$KVP_CACHE_ROOT/lmcache-server.pid"
 [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null \
   || die "lmcache server not running -- start it first: bash scripts/start-cache.sh"
@@ -125,10 +139,22 @@ locs=list(s.submodule_search_locations or [])
 pkg = locs[0] if locs else os.path.dirname(s.origin)
 print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
   case "$SITE" in */site-packages|*/dist-packages) : ;; *) die "SITE detection failed: '$SITE'" ;; esac
-  MOUNTS+=(
-    -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
-    -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
-  )
+  # Review fix: the MiMo model patches are model-specific, not a project
+  # constant. Mount them only when the configured model config is the
+  # reference MiMo one; other models bring their own loader patches (if any)
+  # via RECIPE_DIR. Mounting mimo_v2*.py over a different model would corrupt
+  # its loader.
+  case "${KVP_MODEL_CONFIG:-mimo-v2.6-pro}" in
+    mimo-v2.6-pro*)
+      MOUNTS+=(
+        -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
+        -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
+      )
+      ;;
+    *)
+      echo "KVP_MODEL_CONFIG=${KVP_MODEL_CONFIG} is not the reference MiMo config -- skipping MiMo model patches (provide your own via RECIPE_DIR if needed)"
+      ;;
+  esac
 fi
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 echo "starting $CONTAINER with persistent KV connector (lmcache $LMCACHE_HOST:$LMCACHE_PORT)"
@@ -141,9 +167,9 @@ docker run -d --name "$CONTAINER" --restart no \
   -e "VLLM_API_KEY=$API_KEY" \
   "${MOUNTS[@]}" "$IMAGE" \
   --model "$MODEL_MOUNT" \
-  --served-model-name mimo-pro \
+  --served-model-name "${SERVED_MODEL_NAME:-mimo-pro}" \
   --trust-remote-code \
-  --tensor-parallel-size 4 \
+  --tensor-parallel-size "${KVP_TP_SIZE:-4}" \
   --block-size "${KVP_BLOCK_SIZE:-16}" \
   --disable-custom-all-reduce \
   --offload-backend uva \
@@ -158,9 +184,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --gpu-memory-utilization "$GPU_UTIL" \
   ${KV_TRANSFER_ARGS[@]+"${KV_TRANSFER_ARGS[@]}"} \
   --generation-config vllm \
-  --reasoning-parser mimo \
-  --tool-call-parser mimo \
-  --enable-auto-tool-choice \
+  ${VLLM_EXTRA_ARGS_ARR[@]+"${VLLM_EXTRA_ARGS_ARR[@]}"} \
   --host "$BIND" --port "$PORT"
 # Post-launch identity gate (review round 13): now the container EXISTS and
 # carries the args we just passed -- verify them against the identity pins

@@ -22,7 +22,19 @@
 //   eviction_ratio. Это автоматический путь обслуживания; более точная value-based
 //   политика — implementation/kvpersist/retention.py (ранжирует записи, когда
 //   доступна статистика по ним).
-
+//
+// serde — LOSSLESS-кодек хранения, подставляется из __KVP_L2_SERDE_JSON__.
+//   Дефолт — НИЧЕГО (нет ключа "serde"): чанки пишутся байт-в-байт, идентично
+//   несжатому upstream-пути. Кодек выбирается через
+//   LMCACHE_L2_SERDE=zstd|lz4 (канонический ключ, его читают все лаунчеры) или
+//   короткую запись USE_LOSSLESS_SERDE=1; KVP_L2_SERDE принимается как алиас.
+//   Фрагмент рендерит блок "serde" с lossless-кодеками, которые регистрирует
+//   kvpersist.compress_serde (kvp-zstd / kvp-lz4).
+//   Lossy-квантизации в этом шаблоне НЕТ: fp8 и turboquant сознательно
+//   отсутствуют и должны отсутствовать (требование задачи:
+//   «никакого fp8 / turboquant / lbq по умолчанию»).
+//   Отрендеренный фрагмент — "" для lossless-raw режима (нет ключа serde) и
+//   `"serde": { ... },` при выбранном кодеке.
 {
   "type": "nixl_store_dynamic",
   "backend": "POSIX",
@@ -32,6 +44,7 @@
     "max_capacity_gb": "__KVP_CACHE_BUDGET_GB__"
   },
   "persist_enabled": true,
+  __KVP_L2_SERDE_JSON__
   "eviction": {
     "eviction_policy": "LRU",
     "trigger_watermark": __KVP_EVICT_TRIGGER_WATERMARK__,

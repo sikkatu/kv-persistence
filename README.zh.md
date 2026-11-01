@@ -91,8 +91,15 @@ L2 层**只支持无损**。NVMe 上的 KV 块始终被解码为引擎产生的�
 * **无损压缩（可选）** —— `LMCACHE_L2_SERDE=zstd` 或 `lz4`
   （或 `USE_LOSSLESS_SERDE` 开关，见下）。块由 `implementation/kvpersist/
   compress_serde.py` 注册的无损 `kvp-zstd` / `kvp-lz4` serde 压缩。
-  未能压缩变小的块按原样存储，因此块永不膨胀。预期缩减幅度温和 ——
-  真实 KV 负载约 **1.1–1.4x**（zstd 压缩率更高，lz4 速度更快）。
+  未能压缩变小的块按原样存储，因此块永远不会膨胀超过一个 4 KiB 页
+  （28 字节帧头加上填充到页边界）。真实 KV 负载上的预期缩减幅度温和 ——
+  常被引用的范围约 **1.1–1.4x**，但该数字是*估算值*，不是本仓库的实测结果：
+  这里尚未运行压缩率基准测试（见 `docs/final-report.md`）。请将其视为粗略的
+  规划参考，而非保证。
+
+每个帧携带**未压缩负载的 CRC32**（`KVCZ` 格式 v2）：被截断的 DMA 读取、
+位翻转或用不同编解码写入的帧会在反序列化时被检测，并报告为缓存 **miss**
+—— 绝不会作为静默损坏的 KV 返回。
 为单次运行启用无损压缩：
 ```bash
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
@@ -120,6 +127,16 @@ cd observability && docker compose up -d
 * **Prometheus** → <http://localhost:9091>
 * **Tempo** → <http://localhost:3200>（跟踪）
 * **OTLP gRPC** → `localhost:4320` —— 缓存服务向此推送指标。
+
+**安全：** 每个发布端口仅绑定到 `127.0.0.1`（`docs/security.md` 的回环契约）。
+Grafana 以匿名 Admin 运行且登录表单被禁用 —— 暴露到 `0.0.0.0` 等于向整个
+网络发放管理员权限。若需从其他主机访问，请在栈前放置带认证的反向代理。
+所有镜像均固定到确切版本（无 `:latest`），与项目其余部分一致。
+
+**Docker 模式：** 当缓存服务运行在 sidecar 容器中（`KVP_LAUNCH_MODE=docker`）时，
+`start-cache.sh` 会自动把 OTLP 端点中的 `localhost`/`127.0.0.1` 改写为
+`host.docker.internal` —— 容器内的 `localhost` 是容器自身，否则指标永远
+无法到达收集器。
 把缓存服务指向收集器并启用遥测（默认关闭，缓存不依赖它也能完整工作）：
 ```bash
 USE_OBSERVABILITY=1 bash scripts/start-cache.sh

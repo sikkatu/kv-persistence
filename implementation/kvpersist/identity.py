@@ -90,12 +90,13 @@ class CacheIdentity:
     multimodal_components: str = ""  # vision/audio encoder ids + revisions if served
     rope_config_digest: str = "" # sha256 of RoPE scaling/theta/section config (64 hex)
     speculative_config: str = "" # MTP / draft-model / speculative settings if active
-    # L2 serializer/deserializer (LMCACHE_L2_SERDE: none|fp8|...). Part of the
+    # L2 serializer/deserializer (LMCACHE_L2_SERDE: none|zstd|lz4). Part of the
     # identity on purpose (review round 13): the L2 file name does NOT depend on
     # the serde, so two deployments sharing a cache root with DIFFERENT serde
     # would read each other's files with the wrong deserializer. Changing the
     # serde must therefore change the namespace (-> cache miss, never a corrupt
-    # read). "" is treated as "none".
+    # read). "" is treated as "none". Lossless codecs only (kv-persistence is
+    # lossless-by-contract; lossy codecs are refused at startup).
     l2_serde: str = ""
 
     def validate(self) -> None:
@@ -224,9 +225,9 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
 
     Precedence (review round 14): the process environment WINS over the files,
     matching `scripts/env.sh` (`_kvp_load_env`) and `kvpersist.config.load_config`.
-    Without this, `LMCACHE_L2_SERDE=fp8` in the env with `none` in the file gave
+    Without this, `LMCACHE_L2_SERDE=zstd` in the env with `none` in the file gave
     the file's namespace while `start-cache.sh` actually started the server
-    with fp8 -- data written under one serde read back with the other.
+    with zstd -- data written under one serde read back with the other.
     """
     vals: Dict[str, str] = {}
     for p in paths:
@@ -251,17 +252,35 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
     # just the config file. A `USE_LOSSLESS_SERDE=1` launch stores zstd
     # chunks -- if the namespace were still hashed as "none" here, two
     # deployments sharing a cache root would cross-read each other's data.
-    serde = (get("LMCACHE_L2_SERDE") or get("KVP_L2_SERDE") or "none").strip().lower()
+    #
+    # Precedence (the documented "env wins" contract, matching env.sh):
+    #   1. LMCACHE_L2_SERDE / KVP_L2_SERDE from the ENVIRONMENT (always wins)
+    #   2. USE_LOSSLESS_SERDE (operator shorthand, only when (1) is empty)
+    #   3. LMCACHE_L2_SERDE from the config files
+    #   4. "none"
+    import os as _os2
+
+    env_serde = (
+        _os2.environ.get("LMCACHE_L2_SERDE") or _os2.environ.get("KVP_L2_SERDE") or ""
+    ).strip()
     use_lossless = get("USE_LOSSLESS_SERDE").strip().lower()
     if use_lossless in ("1", "yes", "true", "zstd"):
-        serde = "zstd"
+        switch_serde = "zstd"
     elif use_lossless == "lz4":
-        serde = "lz4"
-    elif use_lossless not in ("", "0", "no", "false", "none"):
+        switch_serde = "lz4"
+    elif use_lossless in ("", "0", "no", "false", "none"):
+        switch_serde = ""
+    else:
         raise IdentityError(
             f"USE_LOSSLESS_SERDE={use_lossless!r} not understood "
             "(use 1 / zstd / lz4 / 0)"
         )
+    if env_serde:
+        serde = env_serde.strip().lower()
+    elif switch_serde:
+        serde = switch_serde
+    else:
+        serde = (get("LMCACHE_L2_SERDE") or get("KVP_L2_SERDE") or "none").strip().lower()
     return CacheIdentity(
         model_id=get("KVP_MODEL_ID"),
         model_revision=get("KVP_MODEL_REVISION"),

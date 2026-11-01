@@ -29,8 +29,16 @@ _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
   [ -z "$_name" ] && return 1
   _val="${line#*=}"
   _val="${_val%% #*}"
-  _val="${_val%\"${_val##*[![:space:]]}\"}"
-  _val="${_val//\"/}"
+  # Review fix: strip ONE matching outer quote pair (single or double), exactly
+  # like `kvpersist/config.py::_parse_env_file`. The old code only removed
+  # double quotes, so `KVP_X='abc'` came out as `'abc'` here but `abc` in
+  # Python -- the two loaders disagreed despite the "MUST match" contract.
+  if [ "${#_val}" -ge 2 ]; then
+    case "$_val" in
+      \"*\") _val="${_val#\"}"; _val="${_val%\"}" ;;
+      \'*\') _val="${_val#\'}"; _val="${_val%\'}" ;;
+    esac
+  fi
   case "$_val" in *'$HOME'*|*'${HOME}'*) _val="${_val//\$HOME/$HOME}"; _val="${_val//\$\{HOME\}/$HOME}" ;; esac
   return 0
 }
@@ -58,25 +66,47 @@ _kvp_resolve_l2_serde(){
   # gate still hashed the namespace as "none" -- two deployments sharing a
   # cache root would then silently cross-read each other's data.
   #
+  # Precedence (the documented "env wins" contract):
+  #   1. LMCACHE_L2_SERDE / KVP_L2_SERDE exported in the ENVIRONMENT
+  #      (snapshot taken at the top of _kvp_load_env) -- always wins.
+  #   2. USE_LOSSLESS_SERDE (operator shorthand) -- only when (1) is empty.
+  #   3. LMCACHE_L2_SERDE from the config files.
+  #   4. "none".
+  #
   # Accepted USE_LOSSLESS_SERDE values:
   #   1 / yes / true / zstd -> zstd
   #   lz4                   -> lz4
   #   0 / no / false / none / "" -> keep the configured LMCACHE_L2_SERDE
   case "${USE_LOSSLESS_SERDE:-}" in
-    1|yes|true|zstd) LMCACHE_L2_SERDE=zstd ;;
-    lz4)             LMCACHE_L2_SERDE=lz4 ;;
-    0|no|false|none|"") : ;;
+    1|yes|true|zstd) _kvp_switch_serde=zstd ;;
+    lz4)             _kvp_switch_serde=lz4 ;;
+    0|no|false|none|"") _kvp_switch_serde="" ;;
     *)
       echo "ERROR: USE_LOSSLESS_SERDE=${USE_LOSSLESS_SERDE} not understood (use 1 / zstd / lz4 / 0)" >&2
       return 1 ;;
   esac
-  LMCACHE_L2_SERDE="$(printf '%s' "${LMCACHE_L2_SERDE:-none}" | tr '[:upper:]' '[:lower:]')"
+  if [ -n "${_kvp_env_serde:-}" ]; then
+    # Rule 1: explicit env export beats the shorthand switch.
+    LMCACHE_L2_SERDE="$_kvp_env_serde"
+  elif [ -n "$_kvp_switch_serde" ]; then
+    LMCACHE_L2_SERDE="$_kvp_switch_serde"
+  else
+    LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-none}"
+  fi
+  LMCACHE_L2_SERDE="$(printf '%s' "$LMCACHE_L2_SERDE" | tr '[:upper:]' '[:lower:]')"
   export LMCACHE_L2_SERDE
   return 0
 }
 
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
+  # Remember whether LMCACHE_L2_SERDE / KVP_L2_SERDE were pre-exported in the
+  # ENVIRONMENT (precedence rule 1: env wins over files AND over the
+  # USE_LOSSLESS_SERDE shorthand). Without this snapshot a
+  # `LMCACHE_L2_SERDE=lz4` export would be silently overridden by
+  # `USE_LOSSLESS_SERDE=1`, breaking the documented "env wins" contract.
+  _kvp_env_serde="${LMCACHE_L2_SERDE-}"
+  [ -z "$_kvp_env_serde" ] && _kvp_env_serde="${KVP_L2_SERDE-}"
   # Universal model-config selector (review: no hardcoded model dir).
   # KVP_MODEL_CONFIG=<dirname> picks configs/<dirname>/ identity files.
   # If unset and exactly ONE non-generic config dir has identity.env, that one

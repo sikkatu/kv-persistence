@@ -97,3 +97,54 @@ def test_switch_changes_the_namespace():
     n_lz4 = CacheIdentity(**base, l2_serde="lz4").namespace()
     assert n_none != n_zstd != n_lz4
     assert n_none != n_lz4
+
+
+def test_env_export_beats_switch_shell():
+    """Review fix: LMCACHE_L2_SERDE exported in the ENV must win over
+    USE_LOSSLESS_SERDE (the documented "env wins" contract). Before the fix
+    `USE_LOSSLESS_SERDE=1` silently overrode an explicit `LMCACHE_L2_SERDE=lz4`.
+    """
+    env = dict(os.environ)
+    env.pop("USE_LOSSLESS_SERDE", None)
+    env["LMCACHE_L2_SERDE"] = "lz4"
+    env["USE_LOSSLESS_SERDE"] = "1"
+    out = subprocess.run(
+        ["bash", "-c",
+         f'. "{ROOT}/scripts/env.sh"; _kvp_load_env "{ROOT}"; '
+         'printf %s "$LMCACHE_L2_SERDE"'],
+        capture_output=True, text=True, env=env,
+    )
+    assert out.stdout.strip() == "lz4", (
+        f"env export LMCACHE_L2_SERDE=lz4 must beat USE_LOSSLESS_SERDE=1, "
+        f"got {out.stdout.strip()!r}"
+    )
+
+
+def test_env_export_beats_switch_python():
+    os.environ["LMCACHE_L2_SERDE"] = "lz4"
+    os.environ["USE_LOSSLESS_SERDE"] = "1"
+    try:
+        ident = identity_from_env_files(
+            str(ROOT / "configs/generic/lmcache-server.env")
+        )
+        assert ident.l2_serde == "lz4", (
+            f"env export LMCACHE_L2_SERDE=lz4 must beat USE_LOSSLESS_SERDE=1, "
+            f"got {ident.l2_serde!r}"
+        )
+    finally:
+        os.environ.pop("LMCACHE_L2_SERDE", None)
+        os.environ.pop("USE_LOSSLESS_SERDE", None)
+
+
+def test_switch_wins_when_env_is_empty():
+    """Without an env export the shorthand switch decides."""
+    for k in ("LMCACHE_L2_SERDE", "KVP_L2_SERDE", "USE_LOSSLESS_SERDE"):
+        os.environ.pop(k, None)
+    os.environ["USE_LOSSLESS_SERDE"] = "lz4"
+    try:
+        ident = identity_from_env_files(
+            str(ROOT / "configs/generic/lmcache-server.env")
+        )
+        assert ident.l2_serde == "lz4"
+    finally:
+        os.environ.pop("USE_LOSSLESS_SERDE", None)

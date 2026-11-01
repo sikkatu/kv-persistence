@@ -18,7 +18,17 @@
 //   get_usage()，超过 trigger_watermark 后按 eviction_ratio 回收。这是自动
 //   维护路径；更细的 value-based 策略见
 //   implementation/kvpersist/retention.py（有逐条统计时用于排序）。
-
+//
+// serde —— 无损存储编解码，由 __KVP_L2_SERDE_JSON__ 展开。
+//   默认是“无”（没有 "serde" 键）：块逐字节精确写入，与未压缩的 upstream
+//   路径完全一致。编解码通过 LMCACHE_L2_SERDE=zstd|lz4（规范开关，所有
+//   启动器都读它）或简写 USE_LOSSLESS_SERDE=1 选择；KVP_L2_SERDE 作为别名
+//   也被接受。该片段渲染 "serde" 块，使用 kvpersist.compress_serde 注册的
+//   无损编解码（kvp-zstd / kvp-lz4）。
+//   本模板中不存在有损量化：fp8 与 turboquant 被有意排除且必须保持排除
+//   （任务要求：“никакого fp8 / turboquant / lbq по умолчанию”）。
+//   无损 raw 模式下渲染片段为 ""（无 serde 键），选择编解码时为
+//   `"serde": { ... },`。
 {
   "type": "nixl_store_dynamic",
   "backend": "POSIX",
@@ -28,6 +38,7 @@
     "max_capacity_gb": "__KVP_CACHE_BUDGET_GB__"
   },
   "persist_enabled": true,
+  __KVP_L2_SERDE_JSON__
   "eviction": {
     "eviction_policy": "LRU",
     "trigger_watermark": __KVP_EVICT_TRIGGER_WATERMARK__,

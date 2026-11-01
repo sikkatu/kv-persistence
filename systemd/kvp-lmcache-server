@@ -57,10 +57,38 @@ render_adapter() {
   # Lossless L2 codec (same rules as scripts/start-cache.sh): none|raw = no
   # "serde" key (byte-exact), zstd|lz4 = the lossless kvp-* serde. Anything
   # lossy is refused -- kv-persistence is lossless by contract.
-  codec="$(printf '%s' "${LMCACHE_L2_SERDE:-$(repo_cfg LMCACHE_L2_SERDE none)}" | tr '[:upper:]' '[:lower:]')"
+  # Review fix: the operator switch USE_LOSSLESS_SERDE must be honoured here
+  # too, otherwise a systemd-started server could store under a DIFFERENT
+  # codec than the one the identity namespace was hashed from (the switch is
+  # folded into LMCACHE_L2_SERDE by scripts/env.sh, which systemd does not
+  # source). Precedence matches env.sh: explicit LMCACHE_L2_SERDE env wins,
+  # then USE_LOSSLESS_SERDE, then the config file.
+  _env_serde="${LMCACHE_L2_SERDE:-${KVP_L2_SERDE:-}}"
+  _switch_serde=""
+  case "${USE_LOSSLESS_SERDE:-}" in
+    1|yes|true|zstd) _switch_serde=zstd ;;
+    lz4)             _switch_serde=lz4 ;;
+    0|no|false|none|"") : ;;
+    *) echo "USE_LOSSLESS_SERDE=${USE_LOSSLESS_SERDE} not understood (use 1 / zstd / lz4 / 0)" >&2; exit 1 ;;
+  esac
+  if [ -n "$_env_serde" ]; then
+    codec="$(printf '%s' "$_env_serde" | tr '[:upper:]' '[:lower:]')"
+  elif [ -n "$_switch_serde" ]; then
+    codec="$_switch_serde"
+  else
+    codec="$(printf '%s' "$(repo_cfg LMCACHE_L2_SERDE none)" | tr '[:upper:]' '[:lower:]')"
+  fi
   case "$codec" in
     none|raw) serde_json="" ;;
-    zstd|lz4) serde_json="\"serde\": {\"type\": \"kvp-$codec\", \"level\": \"${KVP_L2_COMPRESS_LEVEL:-3}\", \"align_bytes\": \"4096\"}," ;;
+    zstd|lz4)
+      serde_json="\"serde\": {\"type\": \"kvp-$codec\", \"level\": \"${KVP_L2_COMPRESS_LEVEL:-3}\", \"align_bytes\": \"4096\"},"
+      # Fail-fast (review fix): verify the codec's Python bindings BEFORE the
+      # server starts, otherwise it reaches READY and every store fails later
+      # inside the serde thread pool (log-only).
+      PYTHONPATH="${REPO_ROOT:+$REPO_ROOT/implementation}${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -c "from kvpersist.compress_serde import check_codec_available; check_codec_available('$codec')" \
+        || { echo "lossless codec '$codec' is not available in this python -- install it (pip install $([ "$codec" = zstd ] && echo zstandard || echo lz4)) or fall back to LMCACHE_L2_SERDE=none" >&2; exit 1; }
+      ;;
     fp8|turboquant|lbq|cachegen|kivi|asym*)
       echo "LMCACHE_L2_SERDE=$codec is LOSSY -- kv-persistence is lossless-only (none / zstd / lz4)" >&2; exit 1 ;;
     *) echo "LMCACHE_L2_SERDE=$codec not understood (use none / zstd / lz4)" >&2; exit 1 ;;

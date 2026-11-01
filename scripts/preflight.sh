@@ -101,7 +101,16 @@ hex40 "${KVP_TOKENIZER_REVISION:-}" || warn "KVP_TOKENIZER_REVISION must be a fu
 hex64 "${KVP_CHAT_TEMPLATE_DIGEST:-}" || warn "KVP_CHAT_TEMPLATE_DIGEST must be 64 hex (run with KVP_MODEL_DIR set to compute it)"
 [ -n "${KVP_KV_CACHE_DTYPE:-}" ] && [ "$KVP_KV_CACHE_DTYPE" != auto ] \
   && note "kv dtype: $KVP_KV_CACHE_DTYPE" || warn "KVP_KV_CACHE_DTYPE must be the RESOLVED dtype (fp16/bf16/fp8...), not 'auto'"
-[ "${KVP_TP_SIZE:-0}" = 4 ] && note "tp_size=4" || warn "KVP_TP_SIZE=${KVP_TP_SIZE:-?} (expected 4 for this deployment)"
+# Review fix: TP size is a MODEL property, not a project constant. It comes
+# from the identity config (KVP_TP_SIZE in configs/<model>/identity.env) and
+# preflight only checks it is a sane positive integer -- a 2-GPU or 8-GPU
+# deployment is legitimate for other models. The reference MiMo deployment
+# pins 4; that value is verified by the identity gate, not hardcoded here.
+case "${KVP_TP_SIZE:-}" in
+  ''|*[!0-9]*) warn "KVP_TP_SIZE=${KVP_TP_SIZE:-<unset>} must be a positive integer (set it in configs/${KVP_MODEL_CONFIG}/identity.env)" ;;
+  0) warn "KVP_TP_SIZE=0 is invalid (must be >= 1)" ;;
+  *) note "tp_size=$KVP_TP_SIZE (from the identity config; the engine launcher must use the same value)" ;;
+esac
 
 echo "-- chat-template digest (single algorithm: kvpersist.chat_template) --"
 if [ -n "${KVP_MODEL_DIR:-}" ] && [ -d "${KVP_MODEL_DIR:-}" ]; then

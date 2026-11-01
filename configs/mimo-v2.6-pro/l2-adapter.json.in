@@ -24,9 +24,11 @@
 //
 // serde — LOSSLESS storage codec, expanded from __KVP_L2_SERDE_JSON__.
 //   Default is NOTHING (no "serde" key at all): chunks are written byte-exact,
-//   exactly like the uncompressed upstream path. `KVP_L2_SERDE=zstd|lz4`
-//   (or `USE_LOSSLESS_SERDE=1`) renders a `"serde"` block using the lossless
-//   codecs registered by kvpersist.compress_serde (kvp-zstd / kvp-lz4).
+//   exactly like the uncompressed upstream path. The codec is selected with
+//   LMCACHE_L2_SERDE=zstd|lz4 (the canonical knob, read by every launcher) or
+//   the USE_LOSSLESS_SERDE=1 shorthand; KVP_L2_SERDE is accepted as an alias.
+//   The fragment renders a "serde" block using the lossless codecs registered
+//   by kvpersist.compress_serde (kvp-zstd / kvp-lz4).
 //   There is NO lossy quantization anywhere in this template: fp8 and
 //   turboquant are deliberately absent and must stay absent (task requirement:
 //   "никакого fp8 / turboquant / lbq по умолчанию").

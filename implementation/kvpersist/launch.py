@@ -45,31 +45,26 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    reg_ok = compress_serde.register()
-    patch_ok = compress_serde._install_size_patch()
+    # Fail-fast: if a lossless codec is requested but its Python bindings are
+    # missing, abort here instead of reaching READY and failing later inside
+    # the serde thread pool (log-only, invisible to the readiness check).
+    try:
+        reg_ok = compress_serde.register()
+    except compress_serde.CodecError as e:
+        print(f"[kvp] FATAL: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
     if reg_ok:
         print(
             "[kvp] lossless compress serde registered "
-            "(kvp-lz4 / kvp-zstd / kvp-raw)",
+            "(kvp-lz4 / kvp-zstd / kvp-raw); the L2 file-size patch installs "
+            "when a kvp-* serde is configured in the L2 adapter JSON",
             file=sys.stderr,
         )
     else:
         print(
             "[kvp] WARNING: lossless serde NOT registered (LMCache serde "
-            "factory unavailable) -- a 'kvp-lz4'/'kvp-zstd' L2 adapter config "
+            "factory unavailable) -- a 'kvp-lz4'/'kvp-zstd' adapter config "
             "will fail to load",
-            file=sys.stderr,
-        )
-    if patch_ok:
-        print(
-            "[kvp] L2 file-size patch active (compressed frames are written "
-            "padded to the page size, not the full allocation)",
-            file=sys.stderr,
-        )
-    else:
-        print(
-            "[kvp] WARNING: L2 file-size patch NOT applied (adapter module "
-            "unavailable) -- compression may not reduce on-disk size",
             file=sys.stderr,
         )
 

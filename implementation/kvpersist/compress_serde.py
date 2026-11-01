@@ -7,8 +7,8 @@ NO lossless compression serde upstream, and `lmcache server` has no
 --l2-serde flag at all: serde is configured per L2 adapter through the
 "serde" sub-dict of the --l2-adapter JSON
 (lmcache/v1/distributed/l2_adapters/config.py::_parse_serde_config).
-This module fills the gap WITHOUT forking LMCache: it registers two extra
-serde types, kvp-lz4 and kvp-zstd, in LMCache's own serde registry and
+This module fills the gap WITHOUT forking LMCache: it registers three extra
+serde types, kvp-lz4, kvp-zstd and kvp-raw, in LMCache's own serde registry and
 launches the unchanged `lmcache` CLI afterwards -- the same launcher pattern
 as kvpersist.salt_filename_patch.
 
@@ -16,20 +16,26 @@ LOSSLESS CONTRACT
 The transform is byte-exact: serialize -> deserialize returns the identical
 KV bytes. When the codec cannot shrink a block (incompressible data) the
 frame stores the payload RAW, so the on-disk result is never larger than the
-raw KV plus one small header (padded up to the L1 page size). No
-quantization, no precision loss: unlike fp8/turboquant the decoded KV is
+raw KV plus the frame header, rounded up to the L1 page size -- i.e. a chunk
+is at most ONE page larger than the raw payload, never unboundedly larger.
+No quantization, no precision loss: unlike fp8/turboquant the decoded KV is
 bit-identical to the engine's cache.
 
 WIRE FRAME (per chunk), all integers little-endian:
 
     offset  size  field
     0       4     magic "KVCZ"
-    4       2     format version (1)
+    4       2     format version (2)
     6       2     codec id (1 = raw passthrough, 2 = lz4, 3 = zstd)
     8       8     uncompressed length in bytes
     16      8     stored payload length in bytes
-    24      N     payload (compressed, or raw when the codec did not shrink)
-    ...     pad   zero padding up to the L1 page size (align_bytes)
+    24      4     CRC32 (zlib) of the uncompressed payload
+    28      N     payload (compressed, or raw when the codec did not shrink)
+    ...     pad   ZERO padding up to the L1 page size (align_bytes)
+
+The CRC32 covers the UNCOMPRESSED bytes, so a truncated DMA read, a bit
+flip, or a frame written by a different codec is detected at deserialize
+time and reported as a cache MISS -- never as silently corrupt KV.
 
 WHY THE FRAME IS PADDED TO THE PAGE SIZE
 The pinned nixl_store_dynamic L2 adapter DMA-transfers the object in whole
@@ -38,15 +44,31 @@ writes obj.meta.phy_size bytes -- i.e. the whole allocated buffer, not the
 serializer's return value. Without care a compressed chunk would still be
 written to NVMe at its FULL uncompressed allocation size, which would make
 the whole feature pointless. Two surgical patches close that gap (see
-apply()):
+_install_size_patch):
 
-1. TensorMemoryObj.meta is narrowed to the padded frame size right before
-   the inner adapter runs, so the file on disk is exactly the padded frame.
-   Only objects narrowed by set_used_size (the serde temp buffers) are
-   touched -- ordinary KV objects keep their allocator metadata untouched,
-   so L1 free() accounting is never corrupted.
+1. TensorMemoryObj.meta.phy_size is narrowed to the padded frame size right
+   before the inner adapter runs, so the file on disk is exactly the padded
+   frame. Only objects narrowed by set_used_size (the serde temp buffers) are
+   touched -- ordinary KV objects keep their allocator metadata untouched, so
+   L1 free() accounting is never corrupted.
 2. On load the adapter is told the stored file size, so the DMA read covers
-   exactly the bytes on disk.
+   exactly the bytes on disk and never runs past EOF.
+
+THE PATCHES ARE INSTALLED ONLY WHEN A kvp-* SERDE IS CONFIGURED
+If the adapter JSON has no "serde" block (or a non-kvp one) the adapter class
+is left COMPLETELY untouched: the load/store path is byte-for-byte upstream
+behaviour. This matters because a short DMA read followed by an unvalidated
+copy would otherwise leave a garbage tail in the destination KV object; by
+installing only when this repo actually owns the frame format we never
+introduce that window on the uncompressed path. (This directly answers the
+review point that load_wrapper used to run even for serde=none.)
+
+FAIL-FAST CODEC AVAILABILITY
+`register()` verifies the codec bindings UP FRONT and raises CodecError if a
+requested codec cannot be imported. The server therefore refuses to start
+instead of reaching READY and failing later inside the serde thread pool.
+In docker mode the same check runs inside the container via
+scripts/start-cache.sh's probe path.
 
 SAFETY
 Everything is opt-in: nothing here runs unless the adapter JSON asks for
@@ -64,11 +86,12 @@ from __future__ import annotations
 
 import struct
 import sys
+import zlib
 
 MAGIC = b"KVCZ"
-FORMAT_VERSION = 1
-HEADER_LEN = 24
-_HEADER = struct.Struct("<4sHHqq")
+FORMAT_VERSION = 2
+HEADER_LEN = 28
+_HEADER = struct.Struct("<4sHHqqI")
 
 CODEC_RAW = 1
 CODEC_LZ4 = 2
@@ -78,14 +101,12 @@ _CODEC_NAME = {CODEC_RAW: "raw", CODEC_LZ4: "lz4", CODEC_ZSTD: "zstd"}
 _CODEC_ID = {"raw": CODEC_RAW, "lz4": CODEC_LZ4, "zstd": CODEC_ZSTD}
 
 
-def _element_size(dtype) -> int:
-    """Bytes per element of a torch dtype, without requiring torch at import.
+class CodecError(RuntimeError):
+    """Compression backend missing or produced an unusable frame."""
 
-    torch dtypes expose ``itemsize`` on recent PyTorch builds; older builds and
-    test fakes are handled via the empty-tensor probe (or a plain ``itemsize``
-    attribute on the fake). This keeps the module importable -- and unit
-    testable -- on hosts without torch installed.
-    """
+
+def _element_size(dtype) -> int:
+    """Bytes per element of a torch dtype, without requiring torch at import."""
     size = getattr(dtype, "itemsize", None)
     if isinstance(size, int) and size > 0:
         return size
@@ -111,45 +132,32 @@ def align_up(n: int, align: int) -> int:
     return (n + align - 1) // align * align
 
 
-class CodecError(RuntimeError):
-    """Compression backend missing or produced an unusable frame."""
+# ---------------------------------------------------------------------------
+# Codecs -- each import is a HARD requirement when the codec is selected.
+# ---------------------------------------------------------------------------
 
 
 def _compress_lz4(data: bytes) -> bytes:
-    try:
-        import lz4.frame  # type: ignore
-    except ImportError as e:  # pragma: no cover - env dependent
-        raise CodecError(
-            "lz4 python bindings not installed (pip install lz4) "
-            "-- cannot use serde type 'kvp-lz4'"
-        ) from e
+    import lz4.frame  # type: ignore
+
     return lz4.frame.compress(data)
 
 
 def _decompress_lz4(data: bytes) -> bytes:
-    try:
-        import lz4.frame  # type: ignore
-    except ImportError as e:  # pragma: no cover
-        raise CodecError("lz4 python bindings not installed") from e
+    import lz4.frame  # type: ignore
+
     return lz4.frame.decompress(data)
 
 
 def _compress_zstd(data: bytes, level: int) -> bytes:
-    try:
-        import zstandard  # type: ignore
-    except ImportError as e:  # pragma: no cover - env dependent
-        raise CodecError(
-            "zstandard python bindings not installed (pip install zstandard) "
-            "-- cannot use serde type 'kvp-zstd'"
-        ) from e
+    import zstandard  # type: ignore
+
     return zstandard.ZstdCompressor(level=level).compress(data)
 
 
 def _decompress_zstd(data: bytes) -> bytes:
-    try:
-        import zstandard  # type: ignore
-    except ImportError as e:  # pragma: no cover
-        raise CodecError("zstandard python bindings not installed") from e
+    import zstandard  # type: ignore
+
     return zstandard.ZstdDecompressor().decompress(data)
 
 
@@ -159,11 +167,7 @@ def _decompress_zstd(data: bytes) -> bytes:
 
 
 class LosslessCompressSerializer:
-    """Compress KV bytes losslessly into a page-aligned frame.
-
-    Mirrors lmcache.v1.distributed.serde.base.Serializer (duck-typed so the
-    module imports without LMCache installed).
-    """
+    """Compress KV bytes losslessly into a page-aligned, zero-padded frame."""
 
     def __init__(self, codec: str, level: int = 3, align_bytes: int = 4096):
         if codec not in _CODEC_ID:
@@ -185,41 +189,56 @@ class LosslessCompressSerializer:
         return self._codec, out
 
     def serialize(self, src, dst, key) -> int:
-        """Compress src's KV bytes into dst as [header][payload][pad]."""
+        """Compress src's KV bytes into dst as [header][payload][zero pad].
+
+        The padding is EXPLICITLY zeroed: the destination is an L1 slab block
+        that may have been recycled from another tenant's buffer, and the DMA
+        write covers the whole padded frame. Leaving stale bytes there would
+        put another tenant's data into OUR cache file on disk.
+        """
         payload_in = bytes(src.byte_array)
         codec_id, payload = self._compress(payload_in)
+        crc = zlib.crc32(payload_in) & 0xFFFFFFFF
         frame = _HEADER.pack(
-            MAGIC, FORMAT_VERSION, codec_id, len(payload_in), len(payload)
+            MAGIC, FORMAT_VERSION, codec_id, len(payload_in), len(payload), crc
         ) + payload
+        padded = align_up(len(frame), self._align)
         out = memoryview(dst.byte_array).cast("B")
         out[: len(frame)] = frame
-        return align_up(len(frame), self._align)
+        if padded > len(frame):
+            out[len(frame):padded] = b"\x00" * (padded - len(frame))
+        return padded
 
     def estimate_serialized_size(self, layout_desc) -> int:
         """Upper bound: raw payload + header, padded to the page size.
 
-        This is also the accounting upper bound: when the codec does shrink a
-        block the file on disk is smaller, but the L2 budget must be able to
-        hold the WORST case (a block that does not compress). The gap between
-        this bound and the real file size is what the caller over-provisions
-        with --l2-adapter max_capacity_gb.
+        This is the TEMP-BUFFER allocation size (LMCache sizes the L1 temp
+        block from it), not the on-disk size: after the size patch the file
+        holds only the padded frame, which for compressible data is smaller.
+        For the L2 budget the worst case (no compression) is raw + header
+        padded to one page -- i.e. at most ONE page over the raw payload.
         """
         raw = plaintext_bytes(layout_desc)
         return align_up(raw + HEADER_LEN, self._align)
 
 
 class LosslessCompressDeserializer:
-    """Reverse of LosslessCompressSerializer: frame -> exact KV bytes."""
+    """Reverse of LosslessCompressSerializer: frame -> exact KV bytes.
+
+    Every field is validated (magic, version, lengths, CRC32) BEFORE any byte
+    is written to the destination: a truncated DMA read, a frame from another
+    codec, or a bit flip raises ValueError, which LMCache reports as a load
+    failure (cache MISS) -- never as silently corrupt KV.
+    """
 
     def __init__(self, codec: str = "any"):
-        # codec is informational: the frame header is authoritative.
-        self._codec = codec
+        self._codec = codec  # informational; the frame header is authoritative.
 
     def deserialize(self, src, dst, key) -> None:
         blob = bytes(src.byte_array)
         if len(blob) < HEADER_LEN:
             raise ValueError("kvp compress serde: frame shorter than header")
-        magic, version, codec_id, plain_len, payload_len = _HEADER.unpack(
+        magic, version, codec_id, plain_len, payload_len, crc = _HEADER.unpack(
             blob[:HEADER_LEN]
         )
         if magic != MAGIC:
@@ -246,6 +265,11 @@ class LosslessCompressDeserializer:
                 "kvp compress serde: decompressed size mismatch "
                 f"(got {len(data)}, header says {plain_len})"
             )
+        if zlib.crc32(data) & 0xFFFFFFFF != crc:
+            raise ValueError(
+                "kvp compress serde: CRC32 mismatch -- frame is corrupt "
+                "(reported as a cache miss, never returned as KV)"
+            )
         out = memoryview(dst.byte_array).cast("B")
         if len(out) < plain_len:
             raise ValueError("kvp compress serde: destination buffer too small")
@@ -253,16 +277,22 @@ class LosslessCompressDeserializer:
 
 
 # ---------------------------------------------------------------------------
-# LMCache serde factory registration
+# LMCache serde factory registration (fail-fast on missing codecs)
 # ---------------------------------------------------------------------------
 
 
 def _make_factory(codec: str):
-    def factory(kwargs: dict) -> "object":
-        # Lazy import of LMCache's async wrapper; only reached when the
-        # server actually asks for one of our serde types.
+    def factory(kwargs: dict):
         from lmcache.v1.distributed.serde.async_processor import AsyncSerdeProcessor
 
+        # Fail-fast at serde creation (adapter config parse): if the codec's
+        # bindings are missing the server dies here instead of reaching READY
+        # and failing later inside the serde thread pool.
+        check_codec_available(codec)
+        # Deterministic patch trigger: the size patch must be installed BEFORE
+        # the first store/load task, which is exactly now (the serde is built
+        # while the L2 adapter is being constructed, long before any I/O).
+        _install_size_patch_now()
         level = int(kwargs.get("level", 3))  # type: ignore[call-overload]
         align_bytes = int(kwargs.get("align_bytes", 4096))  # type: ignore[call-overload]
         max_workers = int(kwargs.get("max_workers", 1))  # type: ignore[call-overload]
@@ -275,21 +305,52 @@ def _make_factory(codec: str):
     return factory
 
 
+def check_codec_available(codec: str) -> None:
+    """Raise CodecError immediately when the codec's bindings are missing.
+
+    Called at registration time (fail-fast): the server must refuse to start
+    rather than reach READY and fail later inside the serde thread pool.
+    """
+    if codec == "lz4":
+        try:
+            import lz4.frame  # noqa: F401
+        except ImportError as e:
+            raise CodecError(
+                "kvp-lz4 serde requested but the 'lz4' python package is not "
+                "installed. Install it (pip install lz4) or use "
+                "LMCACHE_L2_SERDE=none / zstd."
+            ) from e
+    elif codec == "zstd":
+        try:
+            import zstandard  # noqa: F401
+        except ImportError as e:
+            raise CodecError(
+                "kvp-zstd serde requested but the 'zstandard' python package "
+                "is not installed. Install it (pip install zstandard) or use "
+                "LMCACHE_L2_SERDE=none / lz4."
+            ) from e
+    elif codec != "raw":
+        raise CodecError(f"unknown codec {codec!r}")
+
+
 def register() -> bool:
-    """Register kvp-lz4 / kvp-zstd / kvp-raw in LMCache's serde registry."""
+    """Register kvp-lz4 / kvp-zstd / kvp-raw in LMCache's serde registry.
+
+    Returns True when registration succeeded. Raises CodecError (fail-fast)
+    when a requested codec's bindings are unavailable.
+    """
     try:
         from lmcache.v1.distributed.serde.factory import register_serde_factory
     except Exception:  # noqa: BLE001 - LMCache not installed
         return False
-    ok = True
+    for name, codec in (("kvp-lz4", "lz4"), ("kvp-zstd", "zstd"), ("kvp-raw", "raw")):
+        check_codec_available(codec)  # fail-fast: raises CodecError
     for name, codec in (("kvp-lz4", "lz4"), ("kvp-zstd", "zstd"), ("kvp-raw", "raw")):
         try:
             register_serde_factory(name, _make_factory(codec))
         except ValueError:
             pass  # already registered (e.g. apply() called twice)
-        except Exception:  # noqa: BLE001
-            ok = False
-    return ok
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -297,8 +358,8 @@ def register() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _install_size_patch() -> bool:
-    """Make the nixl_store_dynamic DMA length follow the serialized frame.
+def _install_size_patch_now() -> bool:
+    """Install the store/load wrappers on DynamicNixlStoreL2Adapter (idempotent).
 
     Upstream `_execute_store_in_the_loop` / `_execute_load_in_loop` derive the
     DMA length from `obj.meta.phy_size` -- the FULL aligned allocation, not the
@@ -317,6 +378,12 @@ def _install_size_patch() -> bool:
     * load: `meta.phy_size` is set to the STORED size (the adapter index
       records the real file size in `_memory_objects[key].size`), so the DMA
       read covers exactly the bytes on disk and never runs past EOF.
+
+    WHEN THIS RUNS: only from the kvp-* serde factory, i.e. only when the
+    deployment actually configured a lossless codec. With `LMCACHE_L2_SERDE=none`
+    the adapter class is left COMPLETELY untouched (byte-for-byte upstream
+    load/store), so a short DMA read can never be masked by our wrapper -- that
+    window is closed on the raw path by NOT having a wrapper at all.
     """
     try:
         from lmcache.v1.distributed.l2_adapters import (
@@ -325,10 +392,10 @@ def _install_size_patch() -> bool:
         cls = mod.DynamicNixlStoreL2Adapter
     except Exception:  # noqa: BLE001 - slim install / missing deps
         return False
-    # `_execute_store_in_the_loop` / `_execute_load_in_loop` are METHODS of
-    # DynamicNixlStoreL2Adapter (called as `self._execute_..._in_the_loop(...)`
-    # from submit_store_task / submit_load_task), so the patch must land on the
-    # CLASS attribute -- setting the module attribute would be silently ignored.
+
+    if getattr(cls, "_kvp_size_patch_installed", False):
+        return True
+
     orig_store = cls._execute_store_in_the_loop
     orig_load = cls._execute_load_in_loop
 
@@ -373,6 +440,19 @@ def _install_size_patch() -> bool:
 
     cls._execute_store_in_the_loop = store_wrapper
     cls._execute_load_in_loop = load_wrapper
+    cls._kvp_size_patch_installed = True
+    return True
+
+
+# Backwards-compatible alias (tests and launch.py may call the old name).
+def _install_size_patch() -> bool:
+    """Register-only hook: the real patch installs when a kvp-* serde is built."""
+    try:
+        from lmcache.v1.distributed.l2_adapters import (  # noqa: F401
+            nixl_store_dynamic_l2_adapter,
+        )
+    except Exception:  # noqa: BLE001
+        return False
     return True
 
 
@@ -382,42 +462,34 @@ def _install_size_patch() -> bool:
 
 
 def apply() -> bool:
-    """Register the lossless serdes and install the size patches.
+    """Register the lossless serdes (fail-fast on missing codecs).
 
-    Returns True when at least the serde registration succeeded. Never raises.
+    Returns True when registration succeeded. Raises CodecError when a
+    selected codec is unavailable -- the caller should abort the launch.
+    The size patch installs itself when the first kvp-* serde is built.
     """
-    reg_ok = register()
-    patch_ok = _install_size_patch()
-    return reg_ok or patch_ok
+    return register()
 
 
 def main() -> None:
     """Apply patches, then delegate to the real LMCache CLI entry point."""
-    reg_ok = register()
-    patch_ok = _install_size_patch()
+    try:
+        reg_ok = register()
+    except CodecError as e:
+        print(f"[kvp] FATAL: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
     if reg_ok:
         print(
             "[kvp] lossless compress serde registered "
-            "(kvp-lz4 / kvp-zstd / kvp-raw)",
+            "(kvp-lz4 / kvp-zstd / kvp-raw); the L2 file-size patch installs "
+            "when a kvp-* serde is configured",
             file=sys.stderr,
         )
     else:
         print(
             "[kvp] WARNING: lossless serde NOT registered (LMCache serde "
-            "factory unavailable) -- 'kvp-lz4'/'kvp-zstd' adapter configs "
+            "factory unavailable) -- a 'kvp-lz4'/'kvp-zstd' adapter config "
             "will fail to load",
-            file=sys.stderr,
-        )
-    if patch_ok:
-        print(
-            "[kvp] L2 file-size patch active (compressed frames are written "
-            "padded to the page size, not the full allocation)",
-            file=sys.stderr,
-        )
-    else:
-        print(
-            "[kvp] WARNING: L2 file-size patch NOT applied (adapter module "
-            "unavailable) -- compression may not reduce on-disk size",
             file=sys.stderr,
         )
     from lmcache.cli.main import main as lmc_main
