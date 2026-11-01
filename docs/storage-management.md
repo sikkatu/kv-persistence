@@ -71,10 +71,11 @@ Automatic eviction is mandatory and always on:
 
 * Background thread watches `get_usage()` per adapter; above `trigger_watermark`
   the policy evicts until usage drops by `eviction_ratio`.
-* Policy: LRU over stored chunk keys (adapter-native). For finer value-based
-  ordering when per-entry statistics are available (hits, last access, prefix
-  length, bytes), `implementation/kvpersist/retention.py` ranks entries:
-  stale/rarely-reused/huge-useless first, frequently reused long prefixes last.
+* Policy: LRU over stored chunk keys (adapter-native) — this is what actually
+  deletes chunks in production. `implementation/kvpersist/retention.py` is a
+  separate value-based ranking planner (recency, reuse, prefix length, bytes)
+  that is offline-tested but **NOT integrated into the production eviction
+  path** — do not rely on it yet to protect valuable prefixes.
 * Shared blocks: LMCache stores each chunk as its own content-derived object;
   different keys never alias to the same object file across accounts. There is
   NO caller-side refcount -- concurrent readers that lose an LRU victim simply

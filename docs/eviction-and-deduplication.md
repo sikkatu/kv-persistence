@@ -42,12 +42,17 @@ the documented limitation is in docs/final-report.md ("PARTIAL: value-based
 retention is implemented and tested offline; in-service application depends on
 per-entry stats exposure").
 
-## Properties the policy guarantees
-
-* Frequently reused long prefixes are retained (they are the most expensive to
-  recompute and the most likely to be reused).
-* A huge never-reused entry cannot displace the useful cache indefinitely: its
-  value/bytes ratio is tiny so it ranks first for eviction.
+## What the policy guarantees (and what it does not)
+The bullets below describe the **retention.py ranking model**, which is offline-
+tested but **NOT integrated into the production eviction path**: the chunks that
+LMCache deletes today are chosen by its own adapter-native LRU. The long
+histories of a chat app are therefore protected only by LRU recency, not by the
+value ranking. These are model properties, not production guarantees until the
+planner is wired into the adapter:
+* Frequently reused long prefixes rank LAST in the planner (they are the most
+  expensive to recompute and the most likely to be reused).
+* A huge never-reused entry cannot displace the useful cache indefinitely in the
+  planner: its value/bytes ratio is tiny so it ranks first for eviction.
 * Ties are deterministic; reports show which keys were retained/evicted and why,
   without any prompt text (`eviction_report` → counts + keys only).
 * Deletion preserves shared blocks: only the minimal object set is deleted and

@@ -37,9 +37,9 @@ kv-persistence 的任何脚本都不会触碰它们。
 
 * `KVP_CACHE_ROOT` 下每个 KV 块对象一个文件（临时文件 + 原子重命名）。
 * 没有单独的磁盘索引 —— 确定性文件命名空间本身就是索引，启动时惰性重建。
-  索引/元数据开销已计入 `used_bytes`。
-* 并发写入安全：只要会超出硬上限，记账器就会拒绝写入。硬上限由 LMCache
-  `nixl_store_dynamic` 适配器本身执行（`max_capacity_gb`：超过即拒绝写入）。
+  `used_bytes` 是真实缓存文件大小之和；没有单独的“索引开销”条目。
+* 并发写入：准入在适配器内部串行化，硬上限由 LMCache `nixl_store_dynamic`
+  适配器本身执行（`max_capacity_gb`：超过即拒绝写入）。
   本仓库的 `BudgetLedger.admit()` 为调用方提供相同的准入检查
   （见 `test_concurrent_admits_cannot_exceed_budget`），但在生产写入路径上
   **并未被调用**（review round 13）：LMCache 写入分块时不会咨询它。因此
@@ -57,9 +57,10 @@ kv-persistence 的任何脚本都不会触碰它们。
 
 * 后台线程监视 `get_usage()`。超过 `trigger_watermark` 后，策略淘汰直至
   用量下降 `eviction_ratio`。
-* 服务内策略为 **LRU**（适配器原生），作用于已存块键。
-* 细粒度排序（`implementation/kvpersist/retention.py`）在有逐条统计的地方
-  按实测价值排序：新鲜度（24 小时衰减）、复用次数、前缀长度和存储成本。
+* 服务内策略为 **LRU**（适配器原生）—— 在生产环境中删除块的正是它。
+  `implementation/kvpersist/retention.py` 是独立的基于价值的排序规划器
+  （新鲜度、复用、前缀长度、字节数），经过离线测试，但**未接入生产淘汰路径**
+  —— 暂时不要依赖它来保护有价值的前缀。
 * 存储压力告警：状态报告中 `soft_pressure: true`；启动器在文件系统空闲
   空间低于预算时也会在启动时告警。
 ### 手动清理 —— 仅显式执行

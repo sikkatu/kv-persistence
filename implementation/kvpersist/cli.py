@@ -112,6 +112,12 @@ def _tmp_files(root: str) -> list:
 # renames it. Deleting it mid-write would corrupt a store in progress.
 # 15 minutes is deliberately generous -- a chunk store is milliseconds to a
 # few seconds even for the largest KV blocks.
+#
+# NOTE: this is a HEURISTIC guard (mtime window), NOT an absolute lock. A write
+# lasting longer than the window, or a race between the mtime check and the
+# delete, is theoretically possible. A full solution needs an active-write
+# registry or lock shared with the adapter -- not available without changing
+# upstream LMCache. Documented as heuristic in docs/troubleshooting.*.
 _TMP_ACTIVE_WINDOW_SEC = 15 * 60
 
 
@@ -386,8 +392,9 @@ def main(argv=None) -> int:
                    help="remove ONLY crash leftovers (*.bin.tmp.<uuid>), keep "
                         "every cache file. Useful after a hard kill: upstream "
                         "sweeps those files only on a clean shutdown. Files "
-                        "modified within the active-write window "
-                        "(15 min) are kept -- they may be an in-flight store.")
+                        "modified within the active-write window (15 min) are "
+                        "kept as a HEURISTIC guard (mtime-based) against "
+                        "deleting an in-flight write.")
     p.add_argument("--yes", action="store_true", help="required to actually delete")
     q = sub.add_parser("quota", help="show or set per-namespace quota")
     q.add_argument("--set-namespace")

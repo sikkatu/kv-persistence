@@ -20,6 +20,7 @@ round-trip assertions run against them as well.
 import os
 import struct
 import sys
+import types
 import zlib
 from pathlib import Path
 
@@ -40,6 +41,8 @@ from kvpersist.compress_serde import (  # noqa: E402
     align_up,
     check_codec_available,
     plaintext_bytes,
+    register,
+    require_codec,
 )
 
 
@@ -239,30 +242,49 @@ def test_check_codec_available_passes_for_raw():
     check_codec_available("raw")  # raw never needs a third-party binding
 
 
-def test_register_fails_fast_without_codec_bindings():
-    """register() must raise CodecError BEFORE the server reaches READY."""
-    try:
-        import zstandard  # noqa: F401
-
-        pytest.skip("zstandard installed; missing-codec path not reachable")
-    except ImportError:
-        pass
-    # Force a register() attempt with a codec whose binding is missing.
-    # register() only imports LMCache lazily; when LMCache is absent it
-    # returns False without raising. When it IS present the codec check
-    # runs first and raises.
-    try:
-        import lmcache  # noqa: F401
-
-        lmcache_present = True
-    except ImportError:
-        lmcache_present = False
-    if not lmcache_present:
-        pytest.skip("lmcache not installed; register() returns False silently")
+def test_register_succeeds_without_optional_codec_packages(monkeypatch):
+    """Review fix: register() must NOT fail when optional codec packages are
+    missing -- registration is unconditional; availability is checked per
+    SELECTED codec by require_codec(). (The old test expected register() to
+    raise, which contradicted the new logic: a `LMCACHE_L2_SERDE=none` cache
+    must start without lz4/zstandard at all.)"""
     from kvpersist.compress_serde import register
 
+    class FakeFactory:
+        @staticmethod
+        def register_serde_factory(name, factory):
+            pass
+
+    mods = {
+        "lmcache": types.ModuleType("lmcache"),
+        "lmcache.v1": types.ModuleType("lmcache.v1"),
+        "lmcache.v1.distributed": types.ModuleType("lmcache.v1.distributed"),
+        "lmcache.v1.distributed.serde": types.ModuleType("lmcache.v1.distributed.serde"),
+        "lmcache.v1.distributed.serde.factory": FakeFactory,
+    }
+    for k, v in mods.items():
+        monkeypatch.setitem(sys.modules, k, v)
+    # Optional package genuinely absent (zstandard).
+    monkeypatch.setitem(sys.modules, "zstandard", None)
+
+    assert register() is True, (
+        "register() must succeed even when zstandard is NOT installed"
+    )
+
+
+def test_require_codec_zstd_fails_without_zstandard_but_raw_needs_nothing(monkeypatch):
+    """The fail-fast check applies to the SELECTED codec only:
+    require_codec('zstd') raises without zstandard, while require_codec(None)
+    and require_codec('raw') require no compressor at all."""
+    monkeypatch.setitem(sys.modules, "zstandard", None)
+    monkeypatch.setitem(sys.modules, "lz4", None)
+    monkeypatch.setitem(sys.modules, "lz4.frame", None)
+
     with pytest.raises(CodecError):
-        register()
+        require_codec("zstd")
+
+    require_codec(None)    # raw mode: nothing required
+    require_codec("raw")   # raw mode: nothing required
 
 
 # --- real codecs (skipped when bindings are absent) ------------------------
