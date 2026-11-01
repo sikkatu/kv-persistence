@@ -1,14 +1,15 @@
 """Admin CLI for the persistent KV cache — status, budget, namespace and purge.
-
-Reads the runtime configuration (env + configs/), scans only the cache root
-namespace directories, and reports usage. Deletes happen ONLY inside the cache
-root and only on explicit user action (purge), never automatically.
-
+Reads the runtime configuration (env + configs/), scans the cache root and
+reports usage. The cache layout is FLAT: the L2 adapter writes `*.bin` files
+directly under `KVP_CACHE_ROOT`, and the identity namespace is the file-name
+prefix (the sanitized model name); legacy `kvp-*` namespace directories are
+also counted if present. Deletes happen ONLY inside the cache root and only on
+explicit user action (purge / emergency-evict), never automatically.
 Commands:
     status   JSON report: usage vs budget, per-namespace bytes, disk free
-    purge    [--namespace NS | --all] [--yes] explicit manual cleanup
+    purge    [--namespace NAME | --all | --tmp] [--yes] explicit manual cleanup
     quota    show/set per-namespace quota (set writes quotas.json in cache root)
-
+    emergency-evict  oldest cache files when physical free space < 5 GB
 Exit codes: 0 ok, 1 error, 2 refused (missing --yes / path safety).
 """
 
@@ -107,38 +108,53 @@ def _tmp_files(root: str) -> list:
     return out
 
 
-# A ``*.tmp.<uuid>`` file younger than this is treated as an ACTIVE write and
-# is never deleted: the adapter creates it, DMA-writes into it, then atomically
-# renames it. Deleting it mid-write would corrupt a store in progress.
-# 15 minutes is deliberately generous -- a chunk store is milliseconds to a
-# few seconds even for the largest KV blocks.
+# A ``*.tmp.<uuid>`` file is safe to delete only when no write is in flight.
+# TWO guards, strongest first:
 #
-# NOTE: this is a HEURISTIC guard (mtime window), NOT an absolute lock. A write
-# lasting longer than the window, or a race between the mtime check and the
-# delete, is theoretically possible. A full solution needs an active-write
-# registry or lock shared with the adapter -- not available without changing
-# upstream LMCache. Documented as heuristic in docs/troubleshooting.*.
+# 1. ACTIVE-WRITE REGISTRY (authoritative): ``kvpersist.tmp_guard`` keeps a
+#    marker per in-flight store (installed by kvpersist.launch around the
+#    adapter's tmp-write + atomic-rename). A tmp file whose final name is in
+#    the registry is NEVER deleted -- for however long the write runs.
+# 2. mtime STALE WINDOW (fallback for unpatched writers / crashed stores):
+#    tmp files modified within _TMP_ACTIVE_WINDOW_SEC are skipped. This is a
+#    HEURISTIC -- a write longer than the window can still be hit IF the
+#    writer does not use the registry. The registry removes that case; the
+#    window remains as a second net.
+#
+# The race between "check" and "delete" is closed by the registry for live
+# writes (the marker exists before the tmp file is created and is removed only
+# after the rename). For dead writers the window is the only filter.
 _TMP_ACTIVE_WINDOW_SEC = 15 * 60
 
 
 def _tmp_files_safe_to_delete(root: str) -> list:
-    """Crash leftovers that are definitely NOT an in-flight write.
+    """Crash leftovers that are NOT an in-flight write.
 
-    Splits ``_tmp_files()`` into (safe, active) by mtime: anything modified
-    within ``_TMP_ACTIVE_WINDOW_SEC`` is considered an active store and is
-    skipped. Review fix: ``purge --tmp`` on a production host must not delete
-    a file the adapter is still writing into.
+    Excludes any tmp file whose final name is registered by
+    ``kvpersist.tmp_guard`` (live write) or modified within the stale window
+    (unpatched writer / recent crash). The registry is authoritative; the
+    window is the fallback.
     """
     import time as _time
 
-    safe, active = [], []
-    now = _time.time()
+    try:
+        from . import tmp_guard
+
+        active = tmp_guard.active_final_names(root)
+    except Exception:  # noqa: BLE001 - never break the CLI over the guard
+        active = set()
+
+    safe, now = [], _time.time()
     for p, final in _tmp_files(root):
+        if os.path.basename(final) in active:
+            continue  # live write -- never delete
         try:
             age = now - os.path.getmtime(p)
         except OSError:
             continue
-        (safe if age >= _TMP_ACTIVE_WINDOW_SEC else active).append((p, final))
+        if age < _TMP_ACTIVE_WINDOW_SEC:
+            continue  # recent -- heuristic net for unpatched writers
+        safe.append((p, final))
     return safe
 
 
@@ -281,11 +297,24 @@ def cmd_purge(args) -> int:
                 targets.append(p)
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
+        try:
+            from . import tmp_guard
+
+            swept = tmp_guard.sweep_stale_markers(root)
+            if swept:
+                print(
+                    f"note: swept {swept} stale active-write marker(s) "
+                    f"(crash leftovers)",
+                    file=sys.stderr,
+                )
+        except Exception:  # noqa: BLE001 - never break purge over the guard
+            pass
         skipped_active = len(_tmp_files(root)) - len(_tmp_files_safe_to_delete(root))
         if skipped_active:
             print(
-                f"note: kept {skipped_active} *.tmp.* file(s) modified within "
-                f"{_TMP_ACTIVE_WINDOW_SEC}s -- treated as active writes",
+                f"note: kept {skipped_active} *.tmp.* file(s) -- in-flight "
+                f"(active-write registry) or modified within "
+                f"{_TMP_ACTIVE_WINDOW_SEC}s; rerun later to sweep them",
                 file=sys.stderr,
             )
         # Legacy per-namespace dirs.
@@ -308,8 +337,9 @@ def cmd_purge(args) -> int:
         skipped_active = len(_tmp_files(root)) - len(_tmp_files_safe_to_delete(root))
         if skipped_active:
             print(
-                f"note: kept {skipped_active} *.tmp.* file(s) modified within "
-                f"{_TMP_ACTIVE_WINDOW_SEC}s -- treated as active writes",
+                f"note: kept {skipped_active} *.tmp.* file(s) -- in-flight "
+                f"(active-write registry) or modified within "
+                f"{_TMP_ACTIVE_WINDOW_SEC}s; rerun later to sweep them",
                 file=sys.stderr,
             )
     elif ns:
@@ -438,15 +468,18 @@ def cmd_free(args):
 def cmd_emergency_evict(args):
     """Review 2B: forced LRU-ish eviction when PHYSICAL free space drops below
     the emergency threshold, regardless of the logical budget. Deletes the
-    oldest namespace directories inside KVP_CACHE_ROOT until physical free
-    space recovers above the threshold (or nothing left to delete).
-    Requires --yes: this is DESTRUCTIVE and wipes entire namespaces (coarser
-    than per-entry eviction)."""
+    oldest cache items inside KVP_CACHE_ROOT -- flat `*.bin` cache files first
+    (the current layout), then legacy `kvp-*` namespace directories -- until
+    physical free space recovers above the threshold (or nothing left to
+    delete). Crash leftovers (`*.tmp.*`) and in-flight writes are skipped by
+    the same guard as `purge --tmp`.
+    Requires --yes: this is DESTRUCTIVE and wipes cache data (coarser than
+    per-entry eviction)."""
     import shutil, os
     if not args.yes:
-        print("REFUSED: emergency-evict deletes whole namespaces (destructive)."
+        print("REFUSED: emergency-evict deletes cache data (destructive)."
               "\nRe-run with --yes after confirming you want to drop the oldest cache"
-              "\nnamespaces, or use 'purge --namespace <ns> --yes' for targeted cleanup.",
+              "\nentries, or use 'purge --namespace=NAME --yes' for targeted cleanup.",
               file=sys.stderr)
         return 2
     root = _config_value("KVP_CACHE_ROOT")

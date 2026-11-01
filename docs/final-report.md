@@ -137,8 +137,11 @@ before measuring).
   protected, shared-parameter determinism).
 * Automatic L2 eviction on hardware with a small budget (Test 8): NEEDS TESTING.
 * Dedup: **understood and documented** (content-derived chunk keys ⇒ single
-  stored object per identical chunk); integration measurement NEEDS TESTING
-  (`tests/integration/test_dedup.py`).
+  stored object per identical chunk). Model semantics tested offline
+  (`tests/unit/test_dedup_model.py`, simulation); real-backend measurement is
+  scripted as `tests/integration/test_l2_dedup_real.py` (live `lmcache server`,
+  real L2 files counted before/after a second shared-prefix request) and NEEDS
+  TESTING on the target host.
 
 ## Known limitations / untested scenarios
 

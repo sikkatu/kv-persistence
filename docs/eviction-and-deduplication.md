@@ -78,8 +78,11 @@ mechanism:
   alive; keys unused long enough become LRU victims).
 * Storage saved through dedup is measurable: the same object file is counted
   once. `budget-report.sh status` accounts actual on-disk bytes; the tests
-  measure "bytes stored per conversation with shared prefix" in
-  `tests/integration/test_dedup.py`.
+  measure "bytes stored per conversation with shared prefix":
+  `tests/unit/test_dedup_model.py` is the content-key MODEL (simulation, no
+  LMCache), and `tests/integration/test_l2_dedup_real.py` drives a REAL
+  `lmcache server` and counts the ACTUAL L2 files before/after a second
+  shared-prefix request.
 
 If a platform reaches a state where LMCache's key semantics cannot guarantee
 safe shared-block deletion (only plausible on hybrid/recurrent layouts, NOT on
@@ -94,9 +97,14 @@ one, and is spelled out in docs/final-report.md.
 
 * Offline (runs anywhere): `tests/unit/test_budget_and_retention.py` — full
   retention policy behavior including priority order and protected prefixes.
-* Integration (needs `lmcache` installed, CPU ok): `tests/integration/test_dedup.py`
-  — two shared-prefix requests exercise the same chunk keys; measured storage
-  for second conversation is smaller than naive double-size.
+* Integration (needs `lmcache` installed, CPU ok): `tests/integration/test_l2_dedup_real.py`
+  — REAL backend: two shared-prefix requests through the MP protocol client
+  against a live `lmcache server`; measures the ACTUAL L2 files (the shared
+  prefix chunks must be written once) and verifies both conversations still
+  LOOKUP their chunks afterwards. Needs `KVP_LIVE_LMCACHE=1`.
+* Simulation (runs anywhere, no LMCache): `tests/unit/test_dedup_model.py` —
+  the content-key MODEL (identical content ⇒ one stored object), not backend
+  behaviour.
 * Hardware eviction (Test 8 in the brief): run `test-recovery.sh` and
   `benchmark.sh` against a deliberately small `KVP_CACHE_BUDGET_GB` (e.g. 2 GB)
   in an isolated namespace directory to see the automatic eviction fire without

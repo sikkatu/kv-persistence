@@ -28,7 +28,7 @@ import sys
 
 def main() -> None:
     """Apply every patch, then delegate to the lmcache CLI entry point."""
-    from . import compress_serde, salt_filename_patch
+    from . import compress_serde, salt_filename_patch, tmp_guard
 
     salt_applied = salt_filename_patch.apply()
     if salt_applied:
@@ -42,6 +42,23 @@ def main() -> None:
             "[kvp] WARNING: filename patch NOT applied (adapter module "
             "unavailable) -- cache_salt isolation on L2 is the upstream "
             "behaviour (see docs/final-report.md)",
+            file=sys.stderr,
+        )
+
+    # Active-write registry: `purge --tmp` never deletes a tmp file whose
+    # store is still in flight (see kvpersist.tmp_guard). Inert without the
+    # adapter module.
+    if tmp_guard.install():
+        print(
+            "[kvp] active-write registry installed "
+            "(purge skips in-flight *.tmp.* stores)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "[kvp] WARNING: active-write registry NOT installed (adapter "
+            "module unavailable) -- purge --tmp falls back to the mtime "
+            "stale window only",
             file=sys.stderr,
         )
 

@@ -148,23 +148,24 @@ class CacheIdentity:
     def lmcache_model_name(self, base_model: str = "",
                            extra_discriminator: str = "") -> str:
         """The LMCache ``model_name`` that enforces this identity at STORAGE level.
-
         LMCache derives both the ObjectKey and the L2 file name from
         ``model_name`` (nixl_store_dynamic: ``<safe_model_name>_<kv_rank>_<group>
-        _<chunkhash>.bin``), so embedding the namespace here is what actually
-        separates incompatible configurations on disk and in the API -- unlike
-        ``cache_salt``, which is NOT part of that adapter's file name.
-
+        _<chunkhash>[_<salt>].bin`` -- the salt suffix comes from
+        ``kvpersist.salt_filename_patch``), so embedding the namespace here is
+        what actually separates incompatible configurations on disk and in the
+        API.
         Args:
             base_model: Human-readable model label (e.g. the served model name).
                 May be empty; the namespace alone is already unique.
             extra_discriminator: Optional per-tenant/per-user label to embed.
-                Use THIS (or a separate L2 cache root) for isolation between
-                tenants -- do not rely on ``cache_salt`` on the L2 tier (see
-                module docstring: the nixl_store_dynamic file name ignores it).
+                Prefer THIS (or a separate L2 cache root) for isolation between
+                tenants. ``cache_salt`` isolation works only when the server is
+                started through ``kvpersist.salt_filename_patch`` (all shipped
+                launchers do); a bare ``lmcache server`` ignores the salt in the
+                file name (see module docstring), so the discriminator in
+                ``model_name`` is the portable guarantee.
                 Must not contain ``/`` or ``@``: the L2 file name maps ``/`` to
                 ``--``, so ``tenant/a`` and ``tenant--a`` would collide.
-
         Returns:
             ``"<base>/<namespace>[/extra_discriminator]"`` with the namespace's
             ``kvp-`` prefix stripped for brevity. The result is ``@``-free and

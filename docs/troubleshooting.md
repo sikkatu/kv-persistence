@@ -129,12 +129,15 @@ while staying invisible to the cache index (they are never returned as KV).
 Check with `bash scripts/budget-report.sh status` (fields `tmp_files` and
 `tmp_files_bytes`) and remove them with `bash scripts/budget-report.sh purge
 --tmp --yes` (keeps every real cache file) or `purge --all --yes`.
-Both commands SKIP `*.tmp.*` files modified within the last 15 minutes: a
-recently-modified file may be an active DMA write in progress, and deleting it
-would corrupt that store. This is a **heuristic** guard (mtime window), not an
-absolute lock — a write lasting longer than the window, or a race between the
-check and the delete, is theoretically possible. Run the purge again later to
-sweep those once the write has finished (or the process has died).
+Both commands protect in-flight writes with TWO guards: an **active-write
+registry** (`kvpersist.tmp_guard`) — every store registers a marker before its
+tmp file is created and clears it after the atomic rename, so a registered
+in-flight write is never deleted no matter how long it runs — plus a stale
+window: `*.tmp.*` files modified within the last 15 minutes are skipped for
+writers that do not use the registry (e.g. a bare `lmcache server`). The
+registry is authoritative; the window is a fallback net. Markers left behind
+by a crashed writer are ignored and swept after an hour. Run the purge again
+later to sweep leftovers once writes have finished.
 
 ## Grafana shows no data
 The stack is passive until the cache service pushes telemetry. Start the cache

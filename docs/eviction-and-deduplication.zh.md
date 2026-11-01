@@ -43,10 +43,16 @@ LMCache 按内容派生键存储块：相同内容 ⇒ 相同键 ⇒ 单个对�
 * 同一命名空间 ⇒ 共享键；不同命名空间绝不碰撞。
 * 淘汰一条只删其键；共享对象保留到无任何键指向。若共享对象终被清除
   （LRU 判键未用），并发正确性保持：缺失即重算——活性取舍，非正确性问题。
-* 去重节省可从 `used_bytes` 前后对比量化（`tests/integration/test_dedup.py`）。
-
+* 去重节省可从 `used_bytes` 前后对比量化：content-key 模型由
+  `tests/unit/test_dedup_model.py` 覆盖（模拟，无 LMCache），真实 L2 文件由
+  `tests/integration/test_l2_dedup_real.py` 计数（活跃 `lmcache server`，
+  共享前缀只写入一次）。
 ## 测试
-
 * 离线（任意环境）：`tests/unit/test_budget_and_retention.py`。
-* 集成（需 `lmcache`）：`tests/integration/test_dedup.py`。
+* 集成（需 `lmcache`）：`tests/integration/test_l2_dedup_real.py` ——
+  真实后端：两个共享前缀的请求经 MP 协议客户端打到活跃 `lmcache server`；
+  统计真实 L2 文件（共享前缀块必须只写一次），并验证两个会话随后仍能
+  LOOKUP 到各自分块。需要 `KVP_LIVE_LMCACHE=1`。
+* 模拟（任意环境，无 LMCache）：`tests/unit/test_dedup_model.py` ——
+  content-key 模型（相同内容 ⇒ 一个对象），不是后端行为。
 * 硬件淘汰（TЗ 测试 8）：小隔离预算（如 2 GB）验证自动淘汰。

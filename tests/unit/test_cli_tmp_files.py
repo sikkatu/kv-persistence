@@ -139,3 +139,65 @@ def test_purge_all_also_skips_active_writes(tmp_path, monkeypatch):
     assert rc == 0
     assert active.exists() is True, "purge --all must also skip active writes"
     assert real.exists() is False, "real cache files are removed by --all"
+
+
+def test_purge_tmp_skips_registered_inflight_writes(tmp_path, monkeypatch):
+    """The active-write REGISTRY is authoritative: a tmp file whose store is
+    registered is never deleted, even when it is OLD (beyond the mtime window).
+    This is the fix for the review point that the mtime window alone is only a
+    heuristic -- a write longer than the window must still be safe.
+    """
+    from kvpersist import tmp_guard
+
+    root = _make_root(tmp_path)
+    final_name = "m_00000000_0_" + "a" * 64 + ".bin"
+    inflight = _touch(root, final_name + ".tmp." + "f" * 32, size=100,
+                      age_sec=3600)  # OLD -- would pass the mtime heuristic
+    stale_leftover = _touch(root, "m_00000000_0_" + "b" * 64 + ".bin.tmp." +
+                           "e" * 32, size=100, age_sec=3600)
+
+    marker = tmp_guard.register_write(str(root), final_name)
+    assert marker is not None, "registry must accept the in-flight write"
+
+    try:
+        monkeypatch.setenv("KVP_CACHE_ROOT", str(root))
+        monkeypatch.setenv("KVP_CACHE_BUDGET_GB", "100")
+
+        rc = cmd_purge(_Args(tmp=True, yes=True))
+        assert rc == 0
+        assert inflight.exists() is True, (
+            "a REGISTERED in-flight tmp file must never be deleted, "
+            "regardless of its mtime"
+        )
+        assert stale_leftover.exists() is False, (
+            "an unregistered old leftover must still be swept"
+        )
+    finally:
+        tmp_guard.unregister_write(marker)
+
+
+def test_registry_unregister_frees_the_file(tmp_path):
+    from kvpersist import tmp_guard
+
+    root = _make_root(tmp_path)
+    final_name = "m_00000000_0_" + "a" * 64 + ".bin"
+    marker = tmp_guard.register_write(str(root), final_name)
+    assert tmp_guard.active_final_names(str(root)) == {final_name}
+    tmp_guard.unregister_write(marker)
+    assert tmp_guard.active_final_names(str(root)) == set()
+
+
+def test_stale_markers_are_ignored_and_swept(tmp_path):
+    from kvpersist import tmp_guard
+
+    root = _make_root(tmp_path)
+    marker = tmp_guard.register_write(str(root), "m_0.bin")
+    assert marker is not None
+    old = time.time() - tmp_guard.STALE_MARKER_SEC - 60
+    os.utime(marker, (old, old))
+
+    # Ignored: its writer is gone.
+    assert tmp_guard.active_final_names(str(root)) == set()
+    # And swept on demand.
+    assert tmp_guard.sweep_stale_markers(str(root)) == 1
+    assert Path(marker).exists() is False
