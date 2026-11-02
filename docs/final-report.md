@@ -9,9 +9,10 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(142 unit tests + 17 more offline integration/config tests = 159 passed,
-2 skipped; 176 collected total including the live-`lmcache` integration
-tests), architecture proven against the pinned vLLM build's source
+(143 unit tests + 34 more offline integration/config tests = 160 passed,
+2 skipped; 177 collected total including the live-`lmcache` integration
+tests; plus 302 passed of 307 collected in the companion `sikkatu/recipes`
+repo), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -594,8 +595,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 142 unit tests (`tests/unit`), 159 passed + 2 skipped in the
-offline suite, 176 collected total. Fixed in final-report (EN/RU/ZH) and wiki
+numbers, verified: 143 unit tests (`tests/unit`), 160 passed + 2 skipped in the
+offline suite, 177 collected total (plus 302 passed of 307 collected in the
+companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
 **Port naming across repos (review note)**: three variables name one endpoint
@@ -611,6 +613,69 @@ kv-persistence's `scripts/test-recovery.sh` + integration tests on a GPU host
 `test_identity_namespace_isolates_lmcache_storage`; in-flight purge safety =
 `test_launch_registry.py`). The hardware acceptance run remains NOT DONE —
 see the overall status at the top.
+
+## Review round 20 fixes (cross-repo namespace coherence + honest defaults)
+
+**P1 — namespace did not follow the engine's real arguments** (reviewer
+verified: `KV_CACHE_DTYPE=fp8` in tp4.env left the namespace at the shipped
+`bfloat16` pin — fp8 KV under a bf16 namespace, i.e. a WRONG-HIT risk, not a
+safe miss): the recipe's `KV_PERSIST=1` branch now passes the actual engine
+values to `kvpersist.cli model-name` as `KVP_KV_CACHE_DTYPE`,
+`KVP_MAX_MODEL_LEN`, `KVP_BLOCK_SIZE`, `KVP_TP_SIZE` overrides (env wins over
+the shipped identity files in `identity_from_env_files`), and `auto` is
+resolved to the model's effective dtype (config.json `torch_dtype`/`dtype`)
+before the namespace is derived — so `auto` and explicit `bfloat16` launches of
+the same model land in ONE namespace, while `fp8` lands in its own. The
+fallback hash (kv-persistence not installed) now also covers tokenizer files,
+the chat template and TP size — the old one missed all three. The phrase
+"never a wrong read" is replaced by the precise claim (namespace derived from
+actual engine args ⇒ safe miss) in README ×3, tp4.env.example ×3 and wiki.
+
+**P2 — CLI errors were swallowed** (`2>/dev/null || true` + a misleading
+"kv-persistence not found" fallback, exactly as the reviewer hit with the
+shipped empty pins): the CLI's stderr is now captured and printed verbatim,
+and an unusable identity ABORTS the launch (`die`) with a pointer to
+`setup-identity.sh` — a wrong namespace must never be guessed into service.
+
+**P3 — "two paths, one cache" was false by default**: the recipe passed
+`KVP_SERVED_MODEL_NAME=mimo-pro` while kv-persistence's launcher used
+`basename(MODEL_DIR)` (e.g. `MiMo-V2.6-Pro-MOPD`) — same hash, different
+prefix, never-shared cache (the reviewer measured `mimo-pro/d2089a2f…` vs
+`MiMo-V2.6-Pro-MOPD/d2089a2f…`). The specialized launcher's default now
+follows `SERVED_MODEL_NAME` (the string the engine is called with), so both
+paths produce the same `model_name`. Covered by
+`tests/unit/test_launcher_namespace_coherence.py` (executes the real
+default-expression line) and `test_served_model_name_prefix_is_stable`.
+
+**P4 — `block_size=16` substituted as fact by the gate**: `DEFAULT_BLOCK_SIZE`
+is 16 in the pinned build, but `platforms/interface.py` can pick another value
+via `get_preferred_block_size` and the engine logs
+"Setting kv cache block size to N". The gate no longer substitutes 16: it
+reads `config.json` (`block_size`/`hybrid_block_size`) first, then the
+container's engine log line, and reports INCONCLUSIVE when neither is
+available (a fact we cannot observe must not be claimed). The `KV_PERSIST=1`
+branch still pins `--block-size` (now via the namespaced knob
+`KV_PERSIST_BLOCK_SIZE`, fixing the `BLOCK_SIZE` env-collision concern), so
+the gate has a verifiable argument on that path.
+
+**P5 — recipe defaults changed for all runs** (the "byte-identically to
+before" claim was false): `MAX_NUM_SEQS` 1→2 and `KV_CACHE_DTYPE` restored to
+`auto` (the VERIFIED benchmarks ran on auto). Per the operator's decision
+`MAX_NUM_SEQS=2` STAYS as the default (no speed loss without a parallel
+request, more convenient), so the old claim is replaced by an explicit NOTE in
+README ×3 / tp4.env.example ×3: two defaults changed for all runs and how to
+reproduce the old benchmark conditions exactly.
+
+**Tests now EXECUTE the block** (the reviewer's point that string-search
+tests caught none of the above): `tests/test_kv_persist_behaviour.py` runs both
+launchers against stub `docker`/`nvidia-smi`/`curl`/`python3` binaries and
+asserts: the namespace follows real engine args (fp8 vs bfloat16 differ), a
+CLI failure aborts with the real error, `KV_PERSIST_NAMESPACE` override is
+honoured, the plain run derives nothing, `KV_PERSIST_BLOCK_SIZE` reaches the
+engine, the model-name prefix is stable, and `auto` resolves to the model's
+dtype. It caught two real bugs during development (an unbound `ROOT` variable
+in the CLI call path and the namespace-prefix desync).
+
 * Commit hash of this report: run `git log -1 --format=%H` in the repository.
 * Push credentials are NOT stored in this repository (verified: zero
   `github_pat_` occurrences in tree and in git history). Credentials used by

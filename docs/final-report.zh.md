@@ -6,7 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（59 个单元测试，含 3 个 P0 权重哈希回归、配置一致性、预算和保留策略）。
+实现已完成，离线测试全绿（143 个单元测试 + 34 个离线集成/配置测试 = 160 通过，2 跳过；
+共收集 177 个，含依赖真实 `lmcache` 的集成测试；另有伴生仓库 `sikkatu/recipes` 302 通过 / 307 收集）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
 上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
@@ -359,8 +360,9 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：文档中的「157 unit tests」已过时。实际：142 个单元测试，159 通过 +
-2 跳过，共收集 176 个。已在 final-report 与 Home 中修正。
+**测试计数**：文档中的「157 unit tests」已过时。实际：143 个单元测试，160 通过 +
+2 跳过，共收集 177 个（另有伴生仓库 `sikkatu/recipes` 302 通过 / 307 收集）。已在
+final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
 **端口命名**：三个变量指向同一端点 —— 已在 *配方集成*（EN/RU/ZH）与配方 README
 中明确记录并附「两侧同步修改」警告。
@@ -368,3 +370,49 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 **仍未证明的部分（诚实声明）**：配方的契约测试只验证启动器包含该机制 —— 它们不能
 证明真实的 NVMe 恢复、跨重启复用或跨配置隔离。这些证据来自 kv-persistence 的
 `scripts/test-recovery.sh` + GPU 主机上的集成测试。硬件验收仍未完成。
+
+## 第 20 轮评审修正（跨仓库命名空间一致性 + 诚实的默认值）
+
+**P1 —— 命名空间不跟随引擎的实际参数**（评审者验证：tp4.env 中 `KV_CACHE_DTYPE=fp8`
+仍沿用固定的 `bfloat16` 管脚 —— fp8 KV 挂在 bf16 命名空间下，即**错误命中**风险，
+而非安全未命中）：配方的 `KV_PERSIST=1` 分支现在把实际引擎值作为
+`KVP_KV_CACHE_DTYPE`、`KVP_MAX_MODEL_LEN`、`KVP_BLOCK_SIZE`、`KVP_TP_SIZE` 覆盖
+传给 `kvpersist.cli model-name`（env 在 `identity_from_env_files` 中优先于文件），
+且 `auto` 先解析为模型的有效 dtype（config.json `torch_dtype`/`dtype`）再计算命名
+空间 —— 因此同一模型的 `auto` 与显式 `bfloat16` 启动落入同一命名空间，而 `fp8` 落入
+自己的。备用哈希（未安装 kv-persistence 时）也补充了 tokenizer 文件、chat template
+和 TP size —— 旧版三者皆缺。「never a wrong read」替换为精确表述（命名空间来自实际
+引擎参数 ⇒ 安全未命中），同步更新 README ×3、tp4.env.example ×3 与 wiki。
+
+**P2 —— CLI 错误被吞掉**（`2>/dev/null || true` + 误导性的
+「kv-persistence not found」fallback —— 正是评审者在默认空 pin 上遇到的）：
+CLI 的 stderr 现被捕获并原样打印，不可用的身份会**中止启动**（`die`）并指向
+`setup-identity.sh` —— 错误的命名空间绝不允许猜测进入生产。
+
+**P3 —— 「两条路径，一个缓存」默认为假**：配方传 `KVP_SERVED_MODEL_NAME=mimo-pro`，
+而 kv-persistence 启动器用 `basename(MODEL_DIR)`（如 `MiMo-V2.6-Pro-MOPD`）——
+相同哈希、不同前缀、缓存永不共享（评审者实测 `mimo-pro/d2089a2f…` vs
+`MiMo-V2.6-Pro-MOPD/d2089a2f…`）。专用启动器的默认值现跟随 `SERVED_MODEL_NAME`
+（引擎实际调用名），两条路径得到相同 `model_name`。由
+`tests/unit/test_launcher_namespace_coherence.py`（执行真实默认值表达式）与
+`test_served_model_name_prefix_is_stable` 覆盖。
+
+**P4 —— 门禁把 `block_size=16` 当事实代入**：固定版本的 `DEFAULT_BLOCK_SIZE` 是 16，
+但 `platforms/interface.py` 可经 `get_preferred_block_size` 选择其他值，引擎会记录
+「Setting kv cache block size to N」。门禁不再代入 16：先读 `config.json`
+（`block_size`/`hybrid_block_size`），再读容器引擎日志行，两者皆无则报 INCONCLUSIVE
+（无法观察的事实不得宣称）。`KV_PERSIST=1` 分支仍固定 `--block-size`（现经命名空间化
+旋钮 `KV_PERSIST_BLOCK_SIZE`，顺带解决 `BLOCK_SIZE` 环境冲突）。
+
+**P5 —— 配方默认值对所有运行生效**（「byte-identically to before」为假）：
+`MAX_NUM_SEQS` 1→2，`KV_CACHE_DTYPE` 恢复为 `auto`（已验证的基准测试跑在 auto）。
+按操作员决定 `MAX_NUM_SEQS=2` **保留**为默认（无并行请求时速度不受影响，更方便），
+故旧表述替换为 README ×3 / tp4.env.example ×3 中的显式提示：两个默认值对所有运行
+生效，以及如何精确复现旧基准条件。
+
+**测试现在执行该块**（评审者指出文本搜索测试什么都没抓到）：
+`tests/test_kv_persist_behaviour.py` 用 `docker`/`nvidia-smi`/`curl`/`python3` 桩
+实际运行两个启动器，断言：命名空间跟随真实引擎参数（fp8 与 bfloat16 不同）、CLI 失败
+以真实原因中止、`KV_PERSIST_NAMESPACE` 覆盖被尊重、普通启动不派生任何命名空间、
+`KV_PERSIST_BLOCK_SIZE` 到达引擎、model_name 前缀稳定、`auto` 解析为模型 dtype。
+开发中它抓到两个真实 bug（CLI 调用路径里未声明的 `ROOT` 变量、命名空间前缀失配）。

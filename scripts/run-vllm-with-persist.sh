@@ -141,7 +141,14 @@ MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
 export KVP_REPO_ROOT="$ROOT"
 export PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}"
 if [ "$PERSIST" = "true" ]; then
-  export KVP_SERVED_MODEL_NAME="${KVP_SERVED_MODEL_NAME:-$(basename "$MODEL_DIR")}"
+  # Review fix (round 20): the served-model-name prefix of the namespace MUST
+  # match the recipe's KV_PERSIST=1 path, which passes
+  # KVP_SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}". The old default
+  # here was `basename "$MODEL_DIR"` (e.g. "MiMo-V2.6-Pro-MOPD"), so the two
+  # launchers produced DIFFERENT model_names for the SAME identity and never
+  # shared cached blocks. Default now follows SERVED_MODEL_NAME (what the
+  # engine is actually called via --served-model-name) exactly.
+  export KVP_SERVED_MODEL_NAME="${KVP_SERVED_MODEL_NAME:-${SERVED_MODEL_NAME:-mimo-pro}}"
   KVP_MODEL_NAME="$(python3 -m kvpersist.cli model-name ${KVP_TENANT_DISCRIMINATOR:+--discriminator "$KVP_TENANT_DISCRIMINATOR"})" \
     || die "cannot derive LMCache model_name from the identity config"
   [ -n "$KVP_MODEL_NAME" ] || die "empty LMCache model_name -- identity config incomplete"

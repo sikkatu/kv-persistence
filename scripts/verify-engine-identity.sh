@@ -165,12 +165,16 @@ else:
 engine_checks.append(("kv_cache_dtype", vals.get("KVP_KV_CACHE_DTYPE"), kvd_seen))
 bs = arg(cmd, "--block-size") if cmd is not None else "UNAVAILABLE"
 if bs in ("UNAVAILABLE", "MISSING") and model_dir:
-    # Review fix (round 19): an engine WITHOUT an explicit --block-size uses
-    # the platform/model default, NOT a missing value. Read the model config
-    # (block_size / hybrid_block_size); when neither is set the pinned build
-    # falls back to its own default (16 for this model family) -- report that
-    # as "auto(default)" instead of MISSING, so the gate does not turn a
-    # working recipe run into INCONCLUSIVE.
+    # Review fix (round 20): do NOT guess the resolved block size. When the
+    # engine is started without --block-size, the pinned build picks a value at
+    # runtime (DEFAULT_BLOCK_SIZE=16, but platforms/interface.py
+    # get_preferred_block_size can override it and the engine logs
+    # "Setting kv cache block size to N"). Two sources, in order:
+    #   1. the model config (`block_size` / `hybrid_block_size`), then
+    #   2. the container's engine log line "Setting kv cache block size to N".
+    # If neither is available we report INCONCLUSIVE -- the old behaviour of
+    # substituting "16" claimed a fact we did not observe.
+    bs = "MISSING"
     try:
         cfg = json.load(open(model_dir + "/config.json"))
         b = cfg.get("block_size")
@@ -178,17 +182,23 @@ if bs in ("UNAVAILABLE", "MISSING") and model_dir:
             b = cfg.get("hybrid_block_size")
         if b is not None:
             bs = str(b)
-        else:
-            # Neither key set: the pinned vLLM build resolves block_size to
-            # its platform default -- 16 for the CUDA backend (vllm/config/
-            # cache.py CacheConfig.block_size -> the default selected at
-            # engine setup). Report the RESOLVED number so it compares equal
-            # to the KVP_BLOCK_SIZE pin instead of failing as MISSING.
-            bs = "16"
-            print("  [info] block_size not in config.json -- resolved to the "
-                  "pinned vLLM default (16)")
     except Exception:
-        bs = "UNAVAILABLE"
+        pass
+    if bs == "MISSING" and container:
+        try:
+            log = subprocess.run(
+                ["docker", "logs", "--tail", "500", container],
+                capture_output=True, text=True, timeout=20,
+            )
+            m = re.search(r"[Ss]etting kv cache block size to (\d+)", log.stdout)
+            if m:
+                bs = m.group(1)
+                print("  [info] block_size read from the engine log: %s" % bs)
+        except Exception:
+            pass
+    if bs == "MISSING":
+        print("  [info] block_size could not be determined (no --block-size arg, "
+              "no config.json value, no engine log line) -- reporting INCONCLUSIVE")
 engine_checks.append(("block_size", vals.get("KVP_BLOCK_SIZE"), bs))
 nh = model_cfg("num_key_value_heads")
 hd = model_cfg("head_dim")
