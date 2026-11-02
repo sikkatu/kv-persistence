@@ -105,8 +105,12 @@ render_adapter() {
 # Review round 14: the cache root must exist and be writable by the service
 # user (the systemd unit runs as `kvp`, the directory is usually root-owned).
 # StateDirectory= in the unit handles the default path; for a custom
-# KVP_CACHE_ROOT we create and chown it here (best effort -- chown needs
-# root, which systemd does not give us, so document `install -d` as well).
+# KVP_CACHE_ROOT we create it here (best effort).
+# Review fix (round 17): the directory must also be 0700, not just writable.
+# docs/security.md promises chmod 700 -- KV data is chat text in disguise --
+# but systemd's StateDirectory= creates /var/lib/kv-persistence with 0755 and
+# the old mkdir -p never tightened it: a world-readable cache root. Enforce
+# 0700 here and refuse to start without it.
 ensure_cache_root() {
   local root budget
   root="$(repo_cfg KVP_CACHE_ROOT /var/lib/kv-persistence/l2)"
@@ -118,6 +122,17 @@ ensure_cache_root() {
     echo "cache root $root is not writable by $(id -un) -- run:" >&2
     echo "  sudo install -d -o kvp -g kvp -m 0700 $root" >&2
     exit 1
+  fi
+  # 0700 is a SECURITY contract (docs/security.md). Failure is fatal: starting
+  # with a group/world-readable cache root would silently weaken the
+  # documented threat model.
+  chmod 700 "$root" 2>/dev/null \
+    || { echo "cannot chmod 700 $root -- KV data would be readable by other local users; refusing to start (see docs/security.md)" >&2; exit 1; }
+  # Also tighten the parent (StateDirectory default) if we own it.
+  local parent
+  parent="$(dirname "$root")"
+  if [ -d "$parent" ] && [ -w "$parent" ]; then
+    chmod 700 "$parent" 2>/dev/null || true
   fi
 }
 
@@ -144,4 +159,6 @@ exec python3 -m kvpersist.launch server \
   --chunk-size "${LMCACHE_CHUNK_SIZE:-256}" \
   --l2-adapter "$ADAPTER_JSON" \
   ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
-  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"}
+  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
+  ${LMCACHE_OTLP_ENDPOINT:+--otlp-endpoint "$LMCACHE_OTLP_ENDPOINT"} \
+  ${LMCACHE_OTLP_ENDPOINT:+--enable-tracing}

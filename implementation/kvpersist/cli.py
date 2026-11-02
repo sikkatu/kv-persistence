@@ -466,13 +466,22 @@ def cmd_free(args):
 
 
 def cmd_emergency_evict(args):
-    """Review 2B: forced LRU-ish eviction when PHYSICAL free space drops below
+    """Review 2B: forced eviction when PHYSICAL free space drops below
     the emergency threshold, regardless of the logical budget. Deletes the
-    oldest cache items inside KVP_CACHE_ROOT -- flat `*.bin` cache files first
+    OLDEST cache items inside KVP_CACHE_ROOT -- flat `*.bin` cache files first
     (the current layout), then legacy `kvp-*` namespace directories -- until
     physical free space recovers above the threshold (or nothing left to
     delete). Crash leftovers (`*.tmp.*`) and in-flight writes are skipped by
     the same guard as `purge --tmp`.
+
+    Ordering note (review fix): items are ordered by FILE MTIME (oldest
+    first) -- that is FIFO, NOT true LRU. Real LRU needs last-ACCESS time,
+    which is not tracked on disk; mtime is the creation time of the file and
+    never changes on read. So "evict the oldest" here means "evict what was
+    stored longest ago", not "evict what was used longest ago". Callers must
+    not assume this matches the value-based retention policy either --
+    retention.py (see docs/eviction-and-deduplication.md) is a separate
+    planner, not wired into this path.
     Requires --yes: this is DESTRUCTIVE and wipes cache data (coarser than
     per-entry eviction)."""
     import shutil, os

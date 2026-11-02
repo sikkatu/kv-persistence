@@ -100,7 +100,15 @@ hex40 "${KVP_MODEL_REVISION:-}" || warn "KVP_MODEL_REVISION must be a full 40-he
 hex40 "${KVP_TOKENIZER_REVISION:-}" || warn "KVP_TOKENIZER_REVISION must be a full 40-hex SHA"
 hex64 "${KVP_CHAT_TEMPLATE_DIGEST:-}" || warn "KVP_CHAT_TEMPLATE_DIGEST must be 64 hex (run with KVP_MODEL_DIR set to compute it)"
 [ -n "${KVP_KV_CACHE_DTYPE:-}" ] && [ "$KVP_KV_CACHE_DTYPE" != auto ] \
-  && note "kv dtype: $KVP_KV_CACHE_DTYPE" || warn "KVP_KV_CACHE_DTYPE must be the RESOLVED dtype (fp16/bf16/fp8...), not 'auto'"
+  && note "kv dtype: $KVP_KV_CACHE_DTYPE" || warn "KVP_KV_CACHE_DTYPE must be the RESOLVED dtype (float16/bfloat16/fp8...), not 'auto'"
+# Review fix: the value must be a vLLM CacheDType spelling. `bf16` is NOT one
+# (the pinned build's Literal has "bfloat16") and the engine refuses to start.
+case "${KVP_KV_CACHE_DTYPE:-}" in
+  bf16|fp16)
+    warn "KVP_KV_CACHE_DTYPE=$KVP_KV_CACHE_DTYPE is not a vLLM CacheDType spelling -- use 'bfloat16' / 'float16' (the engine rejects 'bf16'/'fp16')" ;;
+  bfloat16|float16|fp8*|auto) : ;;
+  *) warn "KVP_KV_CACHE_DTYPE=${KVP_KV_CACHE_DTYPE:-?} is not in the pinned build's CacheDType list (float16/bfloat16/fp8...)" ;;
+esac
 # Review fix: TP size is a MODEL property, not a project constant. It comes
 # from the identity config (KVP_TP_SIZE in configs/<model>/identity.env) and
 # preflight only checks it is a sane positive integer -- a 2-GPU or 8-GPU

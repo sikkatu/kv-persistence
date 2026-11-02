@@ -90,7 +90,7 @@ def test_incompatible_entries_rejected():
                 connector="LMCacheMPConnector", connector_version="v1",
                 max_model_len=1048576, chat_template_digest="c" * 64)
     n1 = CacheIdentity(**base).namespace()
-    base["kv_cache_dtype"] = "bf16"
+    base["kv_cache_dtype"] = "bfloat16"
     n2 = CacheIdentity(**base).namespace()
     assert n1 != n2
     bad = dict(base, model_revision="main")

@@ -98,7 +98,7 @@ def test_namespace_from_config_roundtrip():
 def test_incompatible_entries_rejected():
     """Changed identity => different namespace, never a wrong hit."""
     base = make_identity().namespace()
-    assert make_identity(kv_cache_dtype="bf16").namespace() != base
+    assert make_identity(kv_cache_dtype="bfloat16").namespace() != base
     assert make_identity(tp_size=2).namespace() != base
     assert make_identity(chat_template_digest="d" * 64).namespace() != base
 
@@ -119,7 +119,7 @@ def test_lmcache_model_name_embeds_namespace():
 def test_lmcache_model_name_changes_with_identity():
     """Changing ANY identity field must change the LMCache model_name."""
     base = make_identity().lmcache_model_name("mimo-pro")
-    for over in ({"model_revision": "d" * 40}, {"kv_cache_dtype": "bf16"},
+    for over in ({"model_revision": "d" * 40}, {"kv_cache_dtype": "bfloat16"},
                  {"tp_size": 2}, {"block_size": 32}, {"num_kv_heads": 16},
                  {"head_dim": 64}, {"max_model_len": 65536},
                  {"chat_template_digest": "f" * 64},
@@ -242,7 +242,7 @@ def test_advanced_identity_fields_loaded_from_config(tmp_path, monkeypatch):
         "KVP_MODEL_REVISION=" + "a" * 40 + "\n"
         "KVP_TOKENIZER_NAME=t\n"
         "KVP_TOKENIZER_REVISION=" + "b" * 40 + "\n"
-        "KVP_KV_CACHE_DTYPE=bf16\n"
+        "KVP_KV_CACHE_DTYPE=bfloat16\n"
         "KVP_BLOCK_SIZE=16\n"
         "KVP_NUM_KV_HEADS=8\n"
         "KVP_HEAD_DIM=128\n"
@@ -278,7 +278,7 @@ def test_rope_digest_must_be_well_formed(tmp_path, monkeypatch):
         "KVP_MODEL_REVISION=" + "a" * 40 + "\n"
         "KVP_TOKENIZER_NAME=t\n"
         "KVP_TOKENIZER_REVISION=" + "b" * 40 + "\n"
-        "KVP_KV_CACHE_DTYPE=bf16\n"
+        "KVP_KV_CACHE_DTYPE=bfloat16\n"
         "KVP_BLOCK_SIZE=16\n"
         "KVP_NUM_KV_HEADS=8\n"
         "KVP_HEAD_DIM=128\n"

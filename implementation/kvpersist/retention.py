@@ -79,7 +79,7 @@ class EntryStats:
         bytes_on_disk if shared_refs == 1 else 0 (the object survives for
         other sharers).
         """
-        now = now or time.time()
+        now = time.time() if now is None else now
         age_h = max(0.0, (now - self.last_access_ts) / 3600.0)
         recency = math.exp(-age_h / half_life_h)          # 1.0 fresh -> 0 stale
         # (hits + 1) * tokens: every hit saves one full recompute of this
@@ -104,7 +104,7 @@ class EntryStats:
 
 def rank_for_eviction(entries: List[EntryStats], now: Optional[float] = None) -> List[EntryStats]:
     """Entries in eviction order: evict the LEAST valuable first. Stable tiebreak."""
-    now = now or time.time()
+    now = time.time() if now is None else now
     return sorted(entries, key=lambda e: (e.value_score(now), e.key))
 
 
@@ -119,7 +119,7 @@ def select_victims(
     Entries with tokens >= min_keep_tokens AND hits > 0 are considered 'valuable
     long prefixes' and are only picked when cheaper candidates are exhausted.
     """
-    now = now or time.time()
+    now = time.time() if now is None else now
     normal: List[EntryStats] = []
     protected: List[EntryStats] = []
     for e in entries:
@@ -145,7 +145,7 @@ def select_victims(
 def eviction_report(
     before: List[EntryStats], victims: List[EntryStats], now: Optional[float] = None
 ) -> Dict[str, object]:
-    now = now or time.time()
+    now = time.time() if now is None else now
     vkeys = {v.key for v in victims}
     kept_kept_long = [
         e.key for e in before

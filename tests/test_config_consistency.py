@@ -30,7 +30,7 @@ def test_env_sh_and_config_py_agree_on_local_overlay(tmp_path):
     _write_layout(
         tmp_path, "testmodel",
         base={"KVP_MODEL_REVISION": "aaaabbbbccccddddeeeeffff0000111122223333",
-              "KVP_KV_CACHE_DTYPE": "bf16"},
+              "KVP_KV_CACHE_DTYPE": "bfloat16"},
         local={"KVP_MODEL_REVISION": "1111222233334444555566667777888899990000"},
     )
 
@@ -57,7 +57,7 @@ def test_env_sh_and_config_py_agree_on_local_overlay(tmp_path):
 def test_env_sh_and_config_py_agree_on_env_wins(tmp_path, monkeypatch):
     _write_layout(
         tmp_path, "testmodel",
-        base={"KVP_KV_CACHE_DTYPE": "bf16"},
+        base={"KVP_KV_CACHE_DTYPE": "bfloat16"},
         local={},
     )
     monkeypatch.setenv("KVP_KV_CACHE_DTYPE", "fp16")

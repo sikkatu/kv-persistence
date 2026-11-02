@@ -145,20 +145,25 @@ class BudgetLedger:
 
         Preference order is the caller's (value-based policy); the ledger only
         computes the quantities. Largest over-quota namespaces shrink first.
+
+        Review fix: the whole computation runs under the ledger lock. The
+        previous version read `self._usage` AFTER releasing it, so a concurrent
+        `sync_from_sizes` could mutate the dict mid-iteration (RuntimeError:
+        dict changed size during iteration) or hand out stale numbers.
         """
         with self._lock:
             total = sum(self._usage.values())
             over = max(0, total - int(self.target_fraction * self.budget_bytes))
             result: Dict[str, int] = {}
-        if over == 0:
+            if over == 0:
+                return result
+            # shrink namespaces in descending usage order until 'over' is covered
+            items = sorted(self._usage.items(), key=lambda kv: kv[1], reverse=True)
+            remaining = over
+            for ns, used in items:
+                if remaining <= 0:
+                    break
+                take = min(used, remaining)
+                result[ns] = take
+                remaining -= take
             return result
-        # shrink namespaces in descending usage order until 'over' is covered
-        items = sorted(self._usage.items(), key=lambda kv: kv[1], reverse=True)
-        remaining = over
-        for ns, used in items:
-            if remaining <= 0:
-                break
-            take = min(used, remaining)
-            result[ns] = take
-            remaining -= take
-        return result

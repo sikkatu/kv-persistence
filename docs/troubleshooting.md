@@ -35,7 +35,8 @@ A branch name is never accepted (40-hex only).
 
 `[!!] KVP_CHAT_TEMPLATE_DIGEST must be 64 hex` — run preflight with
 `KVP_MODEL_DIR="$HOME/models/<your-model-dir>" bash scripts/preflight.sh`; it
-prints the digest to copy into `identity.env`.
+prints the digest to copy into `identity.env.local` (site override; the
+tracked `identity.env` is not edited).
 
 ## lmcache CLI missing / ABI mismatch
 

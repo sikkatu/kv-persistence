@@ -18,11 +18,11 @@ TOKENS="${2:-3000}"   # approx prompt scale in tokens; content is generated fact
 OUT="$ROOT/benchmarks/results/$(date -u +%Y%m%dT%H%M%SZ)-bench"
 mkdir -p "$OUT"; OUT="$OUT/bench.jsonl"
 PROMPT="$(python3 -c "fact='The Sumerian sikkatu was a clay cone used to mark the boundary of a building plot.\n'; n=max(1,$TOKENS//10); print(fact*n)")"
-PROMPT="$PROMPT" python3 - "$API" "$KEY" "$SCENARIO" "$OUT" <<'PYEOF'
+PROMPT="$PROMPT" SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" python3 - "$API" "$KEY" "$SCENARIO" "$OUT" <<'PYEOF'
 import json,sys,time,urllib.request
 api,key,scenario,out=sys.argv[1:5]
 prompt=open('/dev/stdin','r').read() if False else None
-body=json.dumps({"model":"mimo-pro","messages":[
+body=json.dumps({"model":__import__('os').environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
   {"role":"system","content":"You are a careful assistant."},
   {"role":"user","content":__import__('os').environ.get('PROMPT','sikkatu')+
    "\nQ: one short sentence defining a sikkatu."}],

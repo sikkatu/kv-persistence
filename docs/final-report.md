@@ -48,7 +48,7 @@ index rebuild on startup (documented upstream behavior of this adapter).
 
 | Claim (from brief) | Effective reality | Status |
 |---|---|---|
-| KV_CACHE_DTYPE=fp16 | production runs `auto` (=bf16); brief's serving settings say fp16 | **NEEDS TESTING / CONFIG CHOICE** — the launcher defaults to the *effective* dtype (bf16) and the cache identity requires a resolved dtype; switching to fp16 changes KV memory and must be re-measured on hardware. Set `KV_CACHE_DTYPE=fp16` + `KVP_KV_CACHE_DTYPE=fp16` to enforce the brief's setting and re-run all benchmarks. |
+| KV_CACHE_DTYPE=fp16 | production runs `auto` (=bfloat16); brief's serving settings say fp16 | **NEEDS TESTING / CONFIG CHOICE** — the launcher defaults to the *effective* dtype (`bfloat16`, the vLLM CacheDType spelling — `bf16` is not accepted by the pinned build) and the cache identity requires a resolved dtype; switching to `float16` changes KV memory and must be re-measured on hardware. Set `KV_CACHE_DTYPE=float16` + `KVP_KV_CACHE_DTYPE=float16` to enforce the brief's setting and re-run all benchmarks. |
 | MAX_NUM_SEQS=2 | `run-vllm-with-persist.sh` sets `--max-num-seqs 2` explicitly (production file default is 1) | VERIFIED (flag); engine log confirmation when run |
 
 ## Commands
@@ -118,7 +118,7 @@ live store/lookup run (integration test
 
 Pending measurement on hardware (formula: `used_bytes ÷ persisted tokens`,
 reported by `benchmark.sh` + `budget-report.sh status` per run). Theoretical
-footprint for the current dtype (bf16) is
+footprint for the current dtype (bfloat16) is
 `2 x num_kv_heads x head_dim x 2(K,V) x layers` bytes/token of TOTAL KV (per-token across all TP ranks; NVMe stores the whole tensor, NOT per-rank divided). For hybrid-attention models per-group geometry differs —
 layer/head counts for MiMo-V2.6-Pro are recorded from the model config during
 the hardware run, before any capacity promises are made.
@@ -166,10 +166,13 @@ before measuring).
    as a pure liveness trade-off (that query misses and recomputes), never as a
    correctness issue. See docs/eviction-and-deduplication.md.
 5. 1M-token prompts: only run if the hardware window allows meaningful execution.
-6. `{KV_CACHE_DTYPE, KVP_KV_CACHE_DTYPE}` must switch to `fp16` if the brief's
-   serving setting is to be the effective one; all numbers must then be
-   re-measured. KV-geometry values (block size, heads, dim, TP, max-model-len)
-   are now cross-checked against the RUNNING engine by
+6. `{KV_CACHE_DTYPE, KVP_KV_CACHE_DTYPE}` must switch to `float16` if the brief's
+   serving setting is to be the effective one (the vLLM CacheDType spelling is
+   `float16`/`bfloat16` — `fp16`/`bf16` are rejected by the pinned build); all
+   numbers must then be re-measured. KV-geometry values (block size, heads,
+   dim, TP, max-model-len) are now cross-checked against the CONTAINER'S
+   STARTUP ARGUMENTS (`docker inspect .Config.Cmd`) and the served model's
+   config.json — NOT live engine introspection — by
    `scripts/verify-engine-identity.sh` before any cached data is trusted.
 7. The wording of two external working documents ("the brief" of the original
    internal project request and "the review's protocol" cited in the fix history)
@@ -276,7 +279,7 @@ before measuring).
   reach them. All three README locales now state this (matching
   docs/security.*).
 * **KV dtype BF16 confirmed everywhere** (review instruction): the launcher
-  default, `identity.env` pin and the identity gate all use bf16; the
+  default, `identity.env` pin and the identity gate all use bfloat16; the
   comments claiming "target is fp16" are corrected (EN/RU/ZH in
   identity.env.* and run-vllm-with-persist.sh; compatibility.* table).
   KV dtype remains part of the cache identity -- a dtype change is a MISS,
@@ -387,6 +390,79 @@ target host in this session** (no GPU host / Docker daemon reachable).
   `purge --tmp` keeps a LIVE-marker tmp file and sweeps unregistered leftovers,
   and that completed stores clear their markers.
 
+## Review round 17 fixes
+
+**Critical (launch-breaking / acceptance-breaking):**
+* **`--kv-cache-dtype bf16` was invalid** (verified against the pinned build's
+  `CacheDType` Literal, `vllm/config/cache.py` at 8e2beaa3: accepted spellings
+  are `float16`/`bfloat16`, NOT `fp16`/`bf16`). The default launch would have
+  died on argument parsing. Fixed everywhere: launcher default, `identity.env`
+  (EN/RU/ZH), preflight now WARNS on `bf16`/`fp16` spellings, tests and docs use
+  `bfloat16`. The identity namespace changes with it (KV dtype is part of the
+  hash) — a safe cache miss.
+* **`test-recovery.sh` could never PASS**: the launcher did not pass
+  `--enable-prompt-tokens-details`, so `usage.prompt_tokens_details` was always
+  `None` and `cached_of` read `MISSING`/0. The flag is now passed for every
+  model (it only affects response verbosity).
+* **L2 log regexes matched nothing real**: verified against the pinned 0.5.3
+  source (AST scan of every logger call). The real evidence lines are
+  `"L2 store completed: adapter %d, %d succeeded, %d failed"`,
+  `"L2 prefetch load completed: request %d, %d loaded, %d failed"` (both DEBUG
+  level, `lmcache/v1/mp_observability/subscribers/logging/l2.py`) and
+  `"Prefetch request completed (L1+L2): ... (%d L1, %d L2)"` (INFO,
+  `storage_manager.py`). The old patterns matched only ERROR lines ("Failed to
+  read from file..."). New regexes match the real strings, and `LMCACHE_LOG_LEVEL`
+  (new knob, default `DEBUG`) makes those DEBUG lines actually reach the log —
+  without it the acceptance evidence does not exist.
+
+**Serious (documentation lied / protection weaker than claimed):**
+* **Restart accounting**: the hard cap does NOT hold across a restart — the
+  upstream index is rebuilt lazily and the disk is not scanned at startup, so
+  accounted usage starts from zero. README and storage-management docs now say
+  so explicitly (NEEDS TESTING block + required hardware test).
+* **systemd path never set 0700**: `StateDirectory=` creates 0755 and the
+  wrapper only did `mkdir -p`. The wrapper now enforces `chmod 700` and REFUSES
+  to start without it (and tightens the parent dir when it owns it) — a real
+  hole in the documented threat model (KV == chat text).
+* **verify-engine-identity wording**: the gate compares CONTAINER STARTUP ARGS
+  (`docker inspect .Config.Cmd`) and `config.json` — not live engine
+  introspection; the environment is ignored; the connector check promised in a
+  comment was unimplemented. The message now states exactly what is verified,
+  and the connector check exists (compares `--kv-transfer-config` against the
+  pinned `KVP_CONNECTOR`).
+* **`"model":"mimo-pro"` hardcoded** in test-recovery/benchmark: replaced by
+  `SERVED_MODEL_NAME` (default `mimo-pro`, matching the reference launcher).
+
+**Minor:** `identity.env` write-target contradiction fixed in
+deployment/troubleshooting (EN/RU/ZH) — the tracked file is NEVER edited,
+values go to `identity.env.local`; OTLP flags are now forwarded by the systemd
+wrapper (the observability advice works for systemd too); `KVP_CACHE_BYPASS`
+marked DEPRECATED/unused; `KVP_PERSIST_ENABLED` semantics clarified (only
+`false` is meaningful — `start-cache.sh` refuses values that contradict
+persistence); `emergency-evict` documented honestly as **FIFO by mtime**, not
+LRU; `budget.evict_candidates` now computes under the ledger lock (was
+iterating `_usage` outside it — a race); `budget-report.sh` printed a literal
+`\n` (echo does not interpret escapes); `retention.py` `now or time.time()`
+treated `now=0` as "unset" (now `is None` check); fingerprint comment in
+`identity.env` (EN/RU/ZH) updated to the real implementation (content SHA-256
+of every shard + index, cached in `.kvpersist-shard-cache.json`,
+`KVP_FINGERPRINT_MODE=fast` downgrade).
+
+**Wording:** "lmcache does not depend on nixl" corrected (the `lmcache[nixl]`
+extra exists upstream — the explicit pin is for visibility and
+reproducibility); benchmarks.md criteria now list the SAME evidence strings the
+script actually matches; the "+0-500 ms urllib buffering" TTFT claim removed as
+unproven (iterating an SSE stream with `urllib.request` yields each complete
+line as it arrives — line-buffered, not whole-body buffering; relative
+comparisons with the same reader stay valid).
+
+**Heuristic guard documented as such:** the `purge --tmp` active-write
+protection is the `kvpersist.tmp_guard` registry (liveness-by-process, previous
+round) PLUS the mtime window as a fallback for unpatched writers. The window is
+explicitly documented as a HEURISTIC (not an absolute lock) in code and in
+troubleshooting ×3.
+
+## Provenance
 * Commit hash of this report: run `git log -1 --format=%H` in the repository.
 * Push credentials are NOT stored in this repository (verified: zero
   `github_pat_` occurrences in tree and in git history). Credentials used by

@@ -126,7 +126,7 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
   验证；同一主机的其他本地用户仍可访问。三个 README 语言版本均已改写
   （与 docs/security.* 一致）。
 * **KV dtype BF16 全面确认**（按审阅指示）：启动器默认值、`identity.env`
-  固定值与身份门禁均使用 bf16；声称「目标是 fp16」的注释已更正
+  固定值与身份门禁均使用 bfloat16；声称「目标是 fp16」的注释已更正
   （identity.env.* 与 run-vllm-with-persist.sh 的 EN/RU/ZH；compatibility.* 表）。
   KV dtype 仍是缓存身份的一部分——dtype 变更即未命中，绝不会按错误格式读取。
 
@@ -224,3 +224,47 @@ bash scripts/start-observability.sh     # 一条命令，Grafana 位于 :3000
 缓存服务不依赖该栈也能完整工作。
 **状态：compose 文件与仪表盘为逐字官方资源，脚本已通过语法检查；本次会话
 未在目标主机上启动实际栈**（GPU 主机 / Docker 守护进程不可达）。
+
+## 第 17 轮评审修正
+
+**关键（破坏启动/验收）：**
+* **`--kv-cache-dtype bf16` 无效**：固定版本 vLLM 8e2beaa3 的 `CacheDType`
+  只接受 `float16`/`bfloat16`，而非 `fp16`/`bf16` —— 启动会在参数解析处崩溃。
+  已在各处修正（启动器、`identity.env` ×3、preflight 现在会对 `bf16`/`fp16`
+  发出警告，测试与文档使用 `bfloat16`）。身份命名空间随之改变 —— 安全的缓存
+  未命中。
+* **`test-recovery.sh` 不可能 PASS**：启动器未传 `--enable-prompt-tokens-details`，
+  因此 `usage.prompt_tokens_details` 恒为 `None`，`cached_of` 读到 0/MISSING。
+  该标志现在对任何模型都传递。
+* **日志正则与 LMCache 0.5.3 真实日志不符**：真实证据行是
+  `L2 store completed: adapter N, N succeeded`、
+  `L2 prefetch load completed: request N, N loaded`（均 DEBUG 级别）和
+  `Prefetch request completed (L1+L2)`（INFO）。旧模式只能匹配错误行。新正则
+  匹配真实字符串，并新增 `LMCACHE_LOG_LEVEL`（默认 `DEBUG`）—— 否则 DEBUG 行
+  根本进不了日志。
+
+**严重（文档撒谎 / 保护弱于声称）：**
+* **重启后硬上限失效** —— 索引惰性重建、磁盘不被扫描、用量从零开始。已在
+  README 与 storage-management 中明确标注（NEEDS TESTING + 必需的硬件测试）。
+* **systemd 路径未设 0700** —— `StateDirectory=` 创建的是 0755。包装脚本现在
+  强制 `chmod 700`，否则拒绝启动。
+* **verify-engine-identity 被高估**：比较的是容器启动参数与 `config.json`，
+  不是活的引擎；环境被忽略；注释承诺的 connector 检查未实现 —— 现已实现，
+  消息也如实描述检查范围。
+* **`"model":"mimo-pro"` 硬编码** —— 替换为 `SERVED_MODEL_NAME`。
+
+**次要：** `identity.env` 写入目标矛盾已修正（追踪文件从不编辑，值写入
+`identity.env.local`）；OTLP 标志现在由 systemd 包装脚本转发；
+`KVP_CACHE_BYPASS` 标记为 DEPRECATED；`KVP_PERSIST_ENABLED` 语义已澄清；
+`emergency-evict` 如实描述为 **FIFO（按 mtime）**，而非 LRU；
+`budget.evict_candidates` 竞态修复（迭代移入锁内）；`budget-report.sh` 的
+字面 `\n` 修正；`retention.py` 的 `now or time.time()`（改为 `is None`）；
+`identity.env` 中 shard 指纹注释已与真实实现同步。
+
+**措辞：** 「lmcache 不依赖 nixl」已修正（上游存在 `lmcache[nixl]` extra）；
+benchmarks.md 的验收标准改为脚本实际匹配的字符串；未经证实的
+「urllib 缓冲导致 +0–500 ms TTFT」声明已删除（SSE 迭代是逐行到达的）。
+
+**启发式保护已如实标注：** `purge --tmp` 的写入保护是 `kvpersist.tmp_guard`
+注册表（按进程存活判定）加上 mtime 窗口作为兜底；窗口在代码与
+troubleshooting ×3 中明确标为启发式，而非绝对锁。

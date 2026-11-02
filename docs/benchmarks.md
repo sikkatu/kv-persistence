@@ -130,19 +130,26 @@ only if the hardware window allows meaningful execution.
 
 ## Metrics collected per run
 
-`prompt_tokens`, `cached_tokens` (response `usage.prompt_tokens_details`),
+`prompt_tokens`, `cached_tokens` (response `usage.prompt_tokens_details` —
+requires the `--enable-prompt-tokens-details` engine flag, which
+`scripts/run-vllm-with-persist.sh` passes for every model),
 `ttft_s`, `total_s`, cache bytes before/after (`budget-report.sh status`),
-LMCache log counts (`Stored`/`Retrieved` lines), VRAM/host RAM peaks
+LMCache log counts (the L2 store/load evidence lines -- `l2_stored` /
+`l2_retrievals` in `scripts/test-recovery.sh` match the pinned 0.5.3 wording:
+`L2 store completed: adapter N, N succeeded, N failed`,
+`L2 prefetch load completed: request N, N loaded, N failed`,
+`Prefetch request completed (L1+L2): N/N retained keys (N L1, N L2)` -- DEBUG
+level, so `LMCACHE_LOG_LEVEL=DEBUG` is required for them to appear),
+VRAM/host RAM peaks
 (`nvidia-smi`, `/proc/meminfo` during run), errors/fallbacks.
-
-**TTFT precision caveat (review 3B):** `benchmark.sh`'s inline Python reads the
-SSE stream via `urllib.request`, which buffers at the TCP level — the first
-token may sit in the socket buffer until the next packet/flush arrives. Expect
-a systematic +0–500 ms bias vs a raw-socket measurement. If absolute TTFT
-accuracy matters (regression tracking across versions), re-measure with an
-unbuffered reader (`aiohttp` + no buffering, or `socket.recv(1)` byte loop).
-For cache-hit vs cache-miss comparisons the bias cancels out — relative
-TTFT differences remain valid.
+**TTFT measurement caveat:** `benchmark.sh`'s inline Python iterates the SSE
+stream with `urllib.request`, which yields each complete line as soon as it
+arrives (line-buffered iteration, not whole-body buffering) -- so there is NO
+documented systematic offset from this reader alone. If absolute TTFT accuracy
+matters (regression tracking across versions), cross-check against a raw-socket
+or `aiohttp` reader and record the delta instead of assuming one. For
+cache-hit vs cache-miss comparisons measured with the SAME reader, any
+instrumentation bias cancels out -- relative TTFT differences remain valid.
 
 ## How to run
 
@@ -195,7 +202,7 @@ its checks and its final verdict:
 
 | Outcome | Evidence required | Counts as success? |
 |---|---|---|
-| **PERSIST hit** | After a restart, log events matching the L2-read pattern (`retriev\|loaded\|restore` x `L2\|disk\|secondary\|file` -- see test-recovery.sh) + `cached_tokens > 0` (if reported) + no L2 rewrite of same data | YES — the project's purpose |
+| **PERSIST hit** | After a restart, log events matching the L2 read/store patterns (`l2_retrievals` / `l2_stored` in test-recovery.sh: `L2 prefetch load completed: request N, N loaded`, `Prefetch request completed (L1+L2): ... (N L1, N L2)`, `L2 store completed: adapter N, N succeeded` -- DEBUG level, `LMCACHE_LOG_LEVEL=DEBUG`) + `cached_tokens > 0` (if reported) + no L2 rewrite of same data | YES — the project's purpose |
 | Memory (L1/RAM) hit | `cached_tokens > 0`, no post-restart L2 evidence | NO (not persistence proof) |
 | Plain prefix-cache hit | engine `cached_tokens > 0` without LMCache events | NO |
 | Cache miss (recompute) | no reuse, fresh prefill | expected on cold runs |
@@ -209,7 +216,8 @@ disk-backed recovery.
 
 ## Physical evidence of NVMe-sourced reads (not just log text)
 
-Log parsing alone (words like `Retrieved`/`L2`) is inherently version-dependent
+Log parsing alone (words like `L2 store completed` / `L2 prefetch load
+completed`) is inherently version-dependent
 and was flagged in review as a risk of false PASS. `test-recovery.sh` therefore
 CORROBORATES log evidence with an independent physical signal: the read-sector
 counter of the shared VM disk (same volume holds Docker, the model and the OS) device (`KVP_CACHE_DEVICE`, read from
@@ -228,9 +236,10 @@ rerunning — not by lowering the bar.
 PASS for the primary milestone requires ALL of:
 
 1. `cached_tokens > 0` on the request following each restart (tests 4 and 5);
-2. LMCache log shows L2/disk-sourced read events (matches the retrieval pattern: 
-   `retriev|loaded|restore` with `L2|disk|secondary|file`) after
-   restart (not only L1);
+2. LMCache log shows L2/disk-sourced read events (the retrieval pattern:
+   `L2 prefetch load completed: request N, N loaded` / `Prefetch request completed
+   (L1+L2): ... (N L1, N L2)` -- DEBUG level) after
+restart (not only L1);
 3. TTFT/prefill measurably lower than the comparable cold baseline;
 4. output text remains correct (manual spot-check; KV reuse must not corrupt
    generation);

@@ -27,11 +27,12 @@ API_KEY="${API_KEY:-}"
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # NOTE on REQUESTED settings from the task brief vs the VERIFIED recipe:
-#  KV_CACHE_DTYPE: BF16 is the effective dtype of this project (review round
-#  15: an earlier note claimed fp16 -- the launcher, identity.env and the
-#  identity gate all use bf16; KV dtype is part of the cache identity, so a
-#  dtype change is a cache MISS). Set what is ACTUALLY in effect (identity too).
-KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bf16}"
+#  KV_CACHE_DTYPE: BLOAT16 is the effective dtype of this project. The value
+#  MUST be the vLLM CacheDType spelling `bfloat16` (review fix): `bf16` is NOT
+#  in the pinned build's CacheDType Literal (vllm 8e2beaa3, vllm/config/cache.py)
+#  and the engine refuses to start ("invalid choice"). KV dtype is part of the
+#  cache identity, so a dtype change is a cache MISS.
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
@@ -48,6 +49,14 @@ HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"; SITE="${SITE:-}"
 if [ "${KVP_MODEL_CONFIG:-mimo-v2.6-pro}" = "mimo-v2.6-pro" ] && [ -z "${VLLM_EXTRA_ARGS:-}" ]; then
   VLLM_EXTRA_ARGS="--reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice"
 fi
+# Review fix (critical): without --enable-prompt-tokens-details the engine
+# returns usage.prompt_tokens_details = None, so `cached_tokens` -- the ONLY
+# machine-readable reuse counter -- is unavailable and scripts/test-recovery.sh
+# can never PASS (it reads cached_tokens there). This flag is model-independent
+# (it only controls response verbosity), so it is added for every model, not
+# just MiMo. The pinned build (vllm 8e2beaa3) accepts it; if a future build
+# renames it, drop it here and in benchmark.sh's metric extraction.
+PROMPT_TOKENS_DETAILS_FLAG="--enable-prompt-tokens-details"
 VLLM_EXTRA_ARGS_ARR=()
 if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   read -r -a VLLM_EXTRA_ARGS_ARR <<< "$VLLM_EXTRA_ARGS"
@@ -184,6 +193,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --gpu-memory-utilization "$GPU_UTIL" \
   ${KV_TRANSFER_ARGS[@]+"${KV_TRANSFER_ARGS[@]}"} \
   --generation-config vllm \
+  "$PROMPT_TOKENS_DETAILS_FLAG" \
   ${VLLM_EXTRA_ARGS_ARR[@]+"${VLLM_EXTRA_ARGS_ARR[@]}"} \
   --host "$BIND" --port "$PORT"
 # Post-launch identity gate (review round 13): now the container EXISTS and

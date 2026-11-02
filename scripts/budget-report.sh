@@ -18,7 +18,10 @@ if command -v stat >/dev/null; then
     AVAIL_GB=$((AVAIL_KB * BLOCK_KB / 1024 / 1024 / 1024))
     echo "physical_free_gb: $AVAIL_GB"
     if [ "$AVAIL_GB" -lt 5 ]; then
-      echo "WARNING: physical free space on cache root is below 5 GB -- emergency eviction\nshould run (see docs/storage-management.md 'Physical free-space emergency eviction')." >&2
+      # Review fix: echo does not interpret \n -- the old one-liner printed a
+      # literal backslash-n. Two echos give the intended line break.
+      echo "WARNING: physical free space on cache root is below 5 GB -- emergency eviction" >&2
+      echo "should run (see docs/storage-management.md 'Physical free-space emergency eviction')." >&2
     fi
   fi
 fi

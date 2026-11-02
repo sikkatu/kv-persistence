@@ -21,9 +21,12 @@
 lmcache==0.5.3
 
 # The nixl_store_dynamic L2 adapter imports the top-level `nixl` module at
-# runtime (lmcache/v1/distributed/l2_adapters/nixl_store_dynamic_l2_adapter.py),
-# but `lmcache` does not depend on it. Without it the server refuses to start
-# with `ModuleNotFoundError: No module named 'nixl'`, so it is pinned here too.
+# runtime (lmcache/v1/distributed/l2_adapters/nixl_store_dynamic_l2_adapter.py).
+# Note: the pip extra `lmcache[nixl]` exists upstream and would satisfy this
+# dependency; installing nixl explicitly here keeps the pin visible and
+# reproducible regardless of how lmcache was installed. Without nixl at import
+# time the server refuses to start with `ModuleNotFoundError: No module named
+# 'nixl'`, so it is pinned here too.
 # PINNED to the exact version the integration tests ran against (1.5.2) for a
 # reproducible deploy: `nixl` ships its own C/transport backends whose ABI has
 # changed between minors. Verified-compatible range observed so far: 1.3.x

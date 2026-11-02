@@ -78,3 +78,12 @@ LMCACHE_L2_SERDE=none
 # Уровень сжатия lossless-кодеков (только zstd; lz4 его игнорирует).
 # Выше — лучше коэффициент, медленнее запись. Для zstd 1-19, дефолт 3.
 KVP_L2_COMPRESS_LEVEL=3
+
+# Уровень логирования сервиса кэша. "DEBUG" НЕОБХОДИМ для аппаратной приёмки
+# (scripts/test-recovery.sh): строки-доказательства L2 store/load
+# ("L2 store completed: adapter %d, %d succeeded, %d failed" и
+# "L2 prefetch load completed: request %d, %d loaded, %d failed") в
+# закреплённой сборке LMCache 0.5.3 пишутся на уровне DEBUG. Без DEBUG
+# регэкспы приёмки ничего не найдут, и прогон станет INCONCLUSIVE. "INFO"
+# уменьшает лог для продакшена, если приёмка не планируется.
+LMCACHE_LOG_LEVEL=DEBUG

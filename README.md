@@ -47,7 +47,12 @@ Chat client → vLLM (TP4) → KV connector (LMCacheMPConnector)
   restart (`persist_enabled=true`; on-disk index is rebuilt lazily from file names).
 * **Bounded storage** — hard cap (1.5 TB default, configurable to whatever the NVMe
   device holds), soft-threshold (90 %) automatic LRU eviction; the cache never wipes
-  itself on startup.
+  itself on startup. **Restart caveat (NEEDS TESTING):** LMCache's index is rebuilt
+  lazily from on-disk file sizes as they are touched, so the *accounted* usage starts
+  from zero at startup while the real files are still there. Until a hardware run
+  confirms the pinned build feeds restored sizes back into `get_usage()`, do NOT
+  assume pre-restart files count against the cap (see
+  [docs/storage-management.md](docs/storage-management.md) "Restart accounting").
 * **Compatibility namespaces** — model revision, tokenizer, KV dtype, block layout and
   chat template are part of the cache key: incompatible deployments never read each
   other's KV data; anything uncertain is a cache miss, never a wrong hit. The namespace

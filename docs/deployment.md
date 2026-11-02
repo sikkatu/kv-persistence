@@ -54,7 +54,9 @@ bash "$REPO/scripts/setup-identity.sh" "$HOME/models/<your-model-dir>"
 
 One command covers ALL mandatory fields (`KVP_MODEL_REVISION`,
 `KVP_TOKENIZER_REVISION`, `KVP_CHAT_TEMPLATE_DIGEST`), writes them into
-`configs/mimo-v2.6-pro/identity.env` and verifies the result (the cache
+`configs/mimo-v2.6-pro/identity.env.local` (site override, gitignored — the
+tracked `identity.env` is NEVER modified, keeping `git pull` conflict-free)
+and verifies the result (the cache
 namespace must compute). Tokenizer revision is derived from the tokenizer files
 themselves when no separate commit SHA is known — and the script refuses to
 guess anything uncertain. Setting `KVP_MODEL_REVISION` in the environment first
@@ -102,7 +104,8 @@ bash scripts/preflight.sh
 
 Expected output ends with `preflight PASSED`. Any `[!!]` must be fixed before
 going on. If `KVP_MODEL_DIR` is set, the script prints
-`KVP_CHAT_TEMPLATE_DIGEST=…` — copy that value into `identity.env`.
+`KVP_CHAT_TEMPLATE_DIGEST=…` — copy that value into `identity.env.local`
+(site override; the tracked `identity.env` is not edited).
 
 ## 5. Start the persistent cache service
 ```bash

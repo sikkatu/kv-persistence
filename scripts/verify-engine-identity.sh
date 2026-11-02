@@ -168,6 +168,25 @@ if hd == "MISSING":
     hd = hidden // nh_all if isinstance(hidden, int) and isinstance(nh_all, int) else "UNAVAILABLE"
 engine_checks.append(("num_kv_heads", vals.get("KVP_NUM_KV_HEADS"), nh))
 engine_checks.append(("head_dim", vals.get("KVP_HEAD_DIM"), hd))
+# Review fix: the connector check promised by the comment above ("engine arg
+# --kv-transfer-config must reference the pinned connector") was never
+# implemented -- only the config-side KVP_CONNECTOR/KVP_CONNECTOR_VERSION
+# strings were format-checked. Verify the ENGINE ARG actually references the
+# pinned connector class when persistence is attached.
+kvtc = arg(cmd, "--kv-transfer-config") if cmd is not None else "UNAVAILABLE"
+want_conn = vals.get("KVP_CONNECTOR", "")
+if kvtc == "UNAVAILABLE":
+    connector_seen = "UNAVAILABLE"
+elif kvtc == "MISSING":
+    # No connector attached at all: fine when persistence is disabled, a
+    # MISMATCH when the identity pins a connector.
+    connector_seen = "MISSING" if want_conn else "(none, and none pinned)"
+else:
+    connector_seen = (
+        kvtc if (want_conn and want_conn in kvtc)
+        else f"--kv-transfer-config does not reference {want_conn!r}"
+    )
+engine_checks.append(("connector", want_conn, connector_seen))
 
 bad, inconc = [], []
 for label, expect, found in format_checks:
@@ -209,5 +228,8 @@ if inconc:
 if check_config_only:
     print("\nidentity config complete and well-formed (engine-side check runs after launch)")
 else:
-    print("\nidentity verified against running engine -- cache reuse allowed")
+    print("\nidentity verified against the CONTAINER'S STARTUP ARGUMENTS and the model's config.json")
+    print("-- NOT against a live engine introspection. This gate compares what the engine")
+    print("WAS STARTED WITH (docker inspect .Config.Cmd) and the served model's config.json,")
+    print("not runtime state. Cache reuse allowed within that scope.")
 PYEOF

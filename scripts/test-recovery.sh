@@ -22,7 +22,16 @@ API="${API_BASE:-http://127.0.0.1:30007}"
 KEY="${API_KEY:-}"; [ -f "$PWD/live/api_key" ] && [ -z "$KEY" ] && KEY="$(head -n1 "$PWD/live/api_key" | tr -d '[:space:]')"
 [ -n "$KEY" ] || PA "API_KEY unavailable (live/api_key)"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
+# Review fix: the served model name is deployment-specific, not a project
+# constant. Default matches the reference MiMo launcher (SERVED_MODEL_NAME).
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}"
 L2="$KVP_CACHE_ROOT"; LOG="$KVP_CACHE_ROOT/lmcache-server.log"   # adapter writes file_path=KVP_CACHE_ROOT directly
+# Review fix (round 17): L2 store/load events are logged at DEBUG level in the
+# pinned LMCache 0.5.3 (see l2_retrievals/l2_stored comment above). The cache
+# service must therefore run with LMCACHE_LOG_LEVEL=DEBUG for the acceptance
+# evidence to exist in the log at all. Exported here so every start-cache.sh
+# invocation in this script inherits it.
+export LMCACHE_LOG_LEVEL="${LMCACHE_LOG_LEVEL:-DEBUG}"
 OUT="$ROOT/benchmarks/results/$(date -u +%Y%m%dT%H%M%SZ)-recovery-v2"
 mkdir -p "$OUT"; echo "results -> $OUT"
 V="0"   # hard failures (FAIL)
@@ -40,11 +49,23 @@ L2_bytes(){ # Sum bytes of cache data files EXCEPT the service's own log/pid,
 # merely containing one of these words (review: the old l2_stored() matched any
 # line with "l2", so it could never distinguish storage activity from a log
 # line that just happened to mention L2). Tightened to action-shaped phrases.
+# Review fix (round 17): the patterns must match the REAL strings of the pinned
+# LMCache 0.5.3 -- verified against the source (AST scan of every logger call):
+#   * "L2 store completed: adapter %d, %d succeeded, %d failed"
+#       (lmcache/v1/mp_observability/subscribers/logging/l2.py, DEBUG level)
+#   * "L2 prefetch load completed: request %d, %d loaded, %d failed"
+#       (same file, DEBUG level)
+#   * "Prefetch request completed (L1+L2): %d/%d retained keys (%d L1, %d L2)..."
+#       (lmcache/v1/distributed/storage_manager.py, INFO level)
+# The old patterns matched none of these (only error lines like "Failed to
+# read from file..."), so L2 evidence was unreachable. Additionally these
+# events are DEBUG level, so the cache service must run with
+# LMCACHE_LOG_LEVEL=DEBUG -- ensured below via KVP_LMCACHE_LOG_LEVEL.
 l2_retrievals(){ # read-from-L2 events appended after the scenario's log mark
-  new_log "$1" | grep -ciE '(retriev|loaded|restore|prefetch|read)[a-z]*[^a-z]{0,20}(from |to )?(l2|disk|secondary|file)' || true
+  new_log "$1" | grep -cE 'L2 prefetch load completed: request [0-9]+, [1-9][0-9]* loaded|Prefetch request completed \(L1\+L2\): .* \([1-9][0-9]* L1, [1-9][0-9]* L2\)' || true
 }
 l2_stored(){ # write-to-L2 events appended after the scenario's log mark
-  new_log "$1" | grep -ciE '(stored|storing|wrote|written|writing|save[a-z]*)[^a-z]{0,20}(to |into )?(l2|disk|secondary|file)' || true
+  new_log "$1" | grep -cE 'L2 store completed: adapter [0-9]+, [1-9][0-9]* succeeded' || true
 }
 api_ready(){ for i in $(seq 1 180); do
     curl -fsS --max-time 3 -H "Authorization: Bearer $KEY" "$API/v1/models" >/dev/null 2>&1 && return 0
@@ -82,10 +103,10 @@ disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume ho
 ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
   local label="$1" mark="$2" t0 t1
   t0=$(date +%s.%N)
-  python3 - "$API" "$KEY" "$OUT/prefix.txt" "$OUT/$label.json" <<'PYEOF' || PA "request $label failed"
-import json,sys,time,urllib.request
+  python3 - "$API" "$KEY" "$OUT/prefix.txt" "$OUT/$label.json" <<PYEOF || PA "request $label failed"
+import json,sys,time,urllib.request,os
 api,key,prefix_file,out=sys.argv[1:5]
-body=json.dumps({"model":"mimo-pro","messages":[
+body=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
   {"role":"system","content":"You are a careful assistant."},
   {"role":"user","content":open(prefix_file).read()+"\nQ: what is a sikkatu? one short sentence."}],
   "max_tokens":32,"temperature":0,"stream":True,
