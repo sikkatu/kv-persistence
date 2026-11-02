@@ -149,6 +149,14 @@ ensure_cache_root
 # Review round 15+: launch through the kv-persistence launcher (kvpersist.launch)
 # which applies BOTH runtime patches: the cache_salt filename fix AND the
 # lossless compression serde registration (see kvpersist/launch.py).
+# Review fix (round 18): LMCACHE_LOG_LEVEL must reach the service process.
+# The repo config files (lmcache-server.env) are read by scripts/env.sh for the
+# shell launchers, but this wrapper reads only via repo_cfg() -- export the
+# effective value here so the systemd launch matches the script launch. The
+# default is DEBUG (required for the acceptance evidence lines; see
+# configs/generic/lmcache-server.env).
+export LMCACHE_LOG_LEVEL
+LMCACHE_LOG_LEVEL="${LMCACHE_LOG_LEVEL:-$(repo_cfg LMCACHE_LOG_LEVEL DEBUG)}"
 exec python3 -m kvpersist.launch server \
   --host "${LMCACHE_HOST:-127.0.0.1}" \
   --port "${LMCACHE_PORT:-5555}" \

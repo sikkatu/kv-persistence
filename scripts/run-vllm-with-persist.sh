@@ -27,7 +27,7 @@ API_KEY="${API_KEY:-}"
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # NOTE on REQUESTED settings from the task brief vs the VERIFIED recipe:
-#  KV_CACHE_DTYPE: BLOAT16 is the effective dtype of this project. The value
+#  KV_CACHE_DTYPE: BFLOAT16 is the effective dtype of this project. The value
 #  MUST be the vLLM CacheDType spelling `bfloat16` (review fix): `bf16` is NOT
 #  in the pinned build's CacheDType Literal (vllm 8e2beaa3, vllm/config/cache.py)
 #  and the engine refuses to start ("invalid choice"). KV dtype is part of the

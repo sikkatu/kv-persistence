@@ -147,7 +147,6 @@ The codec is part of the cache-identity namespace: switching between `none`,
 the same effective value.
 
 ## Monitoring (Prometheus + Grafana)
-
 The full observability stack from the official LMCache example ships in
 `observability/` (OTel Collector + Tempo + Prometheus + Grafana) with the
 **official LMCache dashboards already provisioned**. One command brings it up:
@@ -157,12 +156,27 @@ bash scripts/start-observability.sh
 # or, equivalently:
 cd observability && docker compose up -d
 ```
-
 * **Grafana** → <http://localhost:3000> (anonymous Admin access, no login).
   Dashboards → *LMCache* and *LMCache Coordinator* are imported automatically.
 * **Prometheus** → <http://localhost:9091>
 * **Tempo** → <http://localhost:3200> (traces)
 * **OTLP gRPC** → `localhost:4320` — where the cache server pushes metrics.
+
+**Dashboard/version honesty note (review round 18):** the dashboards are the
+*official* LMCache assets, but they were authored against a NEWER LMCache than
+the pinned **0.5.3** this repo runs. Static comparison against the 0.5.3 source
+(`lmcache/v1/mp_observability/`) shows most panels map to real 0.5.3 metrics
+(L1/L2 usage gauges, store/prefetch pipelines, eviction loop, event-bus,
+throughput histograms), but **4 of 28 panels** referenced metrics 0.5.3 never
+emits (lookup prompt/request-hit token counters, L0↔L1 inflight store/retrieve
+counters, transfer-phase DMA counters). Those panels are now **remapped to the
+real 0.5.3 metrics** (`lookup_requested`/`lookup_hit` for the hit rate,
+`l1_read`/`l1_write` chunk counters for L0↔L1 activity, `l0_l1_store_throughput`
+for DMA throughput). The remap is a best-effort semantic match, not an upstream
+guarantee — labels/units may differ slightly from the original intent.
+The *LMCache Coordinator* dashboard expects coordinator telemetry that 0.5.3's
+`mp_coordinator` does not export (48 series with no 0.5.3 analogue); this repo
+does not run a coordinator, so that dashboard will legitimately stay empty.
 
 **Security:** every published port is bound to `127.0.0.1` only (the
 `docs/security.md` loopback contract). Grafana runs with anonymous Admin access

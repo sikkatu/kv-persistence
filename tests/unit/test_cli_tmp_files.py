@@ -178,7 +178,6 @@ def test_purge_tmp_skips_registered_inflight_writes(tmp_path, monkeypatch):
 
 def test_registry_unregister_frees_the_file(tmp_path):
     from kvpersist import tmp_guard
-
     root = _make_root(tmp_path)
     final_name = "m_00000000_0_" + "a" * 64 + ".bin"
     marker = tmp_guard.register_write(str(root), final_name)
@@ -264,3 +263,63 @@ def test_writer_alive_false_for_dead_process():
         assert tmp_guard.writer_alive(me, start) is True
         # Same PID but a DIFFERENT start-time = reused PID -> dead.
         assert tmp_guard.writer_alive(me, start + 1) is False
+
+
+# --- docker launch mode: writer in a DIFFERENT PID namespace (round 18) -----
+
+
+def test_writer_alive_falls_back_to_heartbeat_in_foreign_pid_ns(tmp_path, monkeypatch):
+    """Review fix (round 18): the docker launch mode starts the cache service
+    in a container WITHOUT --pid=host, so the marker's PID lives in the
+    container's namespace -- the host CLI cannot map it to /proc/<pid>.
+    The old code treated that as "provably dead" (the host PID may simply not
+    exist) and `purge --tmp` deleted a LIVE store's tmp file. Liveness must
+    fall back to the marker's heartbeat: fresh mtime = alive, stale = dead.
+    """
+    from kvpersist import tmp_guard
+
+    root = _make_root(tmp_path)
+    reg = tmp_guard.registry_dir(str(root))
+    Path(reg).mkdir(parents=True, exist_ok=True)
+    self_ns = tmp_guard._self_pid_ns()
+
+    # Simulate a marker written by a process in ANOTHER pid namespace.
+    foreign_ns = self_ns + "-fake" if self_ns else "pid:[4026539999]"
+    marker = Path(reg) / "7-4242-abcdef0123456789.active"
+    marker.write_text("m_0.bin\n0\n%s\n" % foreign_ns)
+
+    # Fresh heartbeat (just written) -> alive, regardless of the PID.
+    assert tmp_guard.active_final_names(str(root)) == {"m_0.bin"}, (
+        "a marker from a foreign PID namespace with a fresh heartbeat must "
+        "protect its tmp file -- the host cannot check its PID"
+    )
+
+    # Age the marker past the heartbeat window -> the writer is gone.
+    old = time.time() - tmp_guard.HEARTBEAT_ALIVE_SEC - 60
+    os.utime(marker, (old, old))
+    assert tmp_guard.active_final_names(str(root)) == set(), (
+        "a stale-heartbeat marker from a foreign PID namespace is a crash "
+        "leftover and must not protect anything"
+    )
+
+
+def test_marker_records_writer_pid_namespace(tmp_path):
+    """register_write() must record the writer's PID namespace so the CLI can
+    tell a foreign-namespace writer from a dead one."""
+    from kvpersist import tmp_guard
+
+    root = _make_root(tmp_path)
+    final_name = "m_00000000_0_" + "a" * 64 + ".bin"
+    marker = tmp_guard.register_write(str(root), final_name)
+    assert marker is not None
+    try:
+        lines = Path(marker).read_text().splitlines()
+        assert len(lines) >= 3, (
+            "marker must carry (final_name, timestamp, pid_namespace)"
+        )
+        assert lines[2] == tmp_guard._self_pid_ns() or lines[2] == "", (
+            "the third line must be the writer's /proc/self/ns/pid id "
+            "(empty when /proc is unavailable)"
+        )
+    finally:
+        tmp_guard.unregister_write(marker)

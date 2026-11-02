@@ -190,6 +190,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     -v "$ROOT_PATH:$ROOT_PATH" \
     -v "$ROOT/implementation:/kvp-impl:ro" \
     -e PYTHONPATH=/kvp-impl \
+    -e "LMCACHE_LOG_LEVEL=${LMCACHE_LOG_LEVEL:-DEBUG}" \
     "$DOCKER_IMAGE" python3 -m kvpersist.launch server \
     --host 0.0.0.0 --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \

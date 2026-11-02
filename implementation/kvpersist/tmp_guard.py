@@ -61,7 +61,24 @@ STALE_MARKER_SEC = 3600
 # How often an in-flight marker is refreshed. Informational for operators;
 # liveness is decided by the process check, not by this.
 HEARTBEAT_SEC = 30
+# Review fix (round 18): when the writer runs in a DIFFERENT PID namespace (a
+# docker container started without --pid=host), the host CLI cannot verify the
+# recorded PID against /proc at all -- the container's PID 7 may be some
+# unrelated host process, or nothing. In that case liveness falls back to the
+# marker's own heartbeat: a running store refreshes the marker every
+# HEARTBEAT_SEC, so a marker touched within HEARTBEAT_ALIVE_SEC proves the
+# writer is alive WITHOUT any PID mapping. A marker whose heartbeat has gone
+# stale AND whose PID cannot be verified is treated as dead (crash leftover).
+HEARTBEAT_ALIVE_SEC = 120
 _MARKER_RE = re.compile(r"^(?P<pid>\d+)-(?P<start>\d+)-(?P<uuid>[0-9a-f]+)\.active$")
+
+
+def _self_pid_ns() -> str:
+    """The calling process's PID-namespace id (``/proc/self/ns/pid`` target)."""
+    try:
+        return os.readlink("/proc/self/ns/pid")
+    except OSError:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -95,16 +112,40 @@ def _proc_start_time(pid: int):
         return "unknown"
 
 
-def writer_alive(pid: int, start_time) -> bool:
+def writer_alive(pid: int, start_time, marker_ns: str = "", marker_age_sec: float = 0.0) -> bool:
     """True when the (pid, start-time) writer must be treated as running.
 
-    Returns True (SAFETY FIRST) whenever liveness cannot be determined: an
-    unreadable probe must never justify deleting a live store's file. A
-    provably absent process (FileNotFoundError) is the ONLY case reported
-    as dead; PID reuse is excluded by comparing the recorded start-time.
+    Three outcomes, decided in order:
+
+    1. **PID namespace mismatch** (the marker was written from another PID
+       namespace -- e.g. a docker container without ``--pid=host``): the host
+       /proc cannot see the writer's PID, so the recorded PID is meaningless
+       here. Fall back to the marker's own HEARTBEAT: a marker touched within
+       ``HEARTBEAT_ALIVE_SEC`` proves the writer is alive (it keeps refreshing
+       the marker while the store runs). An older marker is treated as a crash
+       leftover.
+
+    2. **Provably dead** (``/proc/<pid>`` gone AND the marker is in our own
+       namespace): the writer exited. Only this is reported as dead.
+
+    3. **Cannot determine** (no /proc, unreadable stat): return True -- safety
+       first, an unreadable probe must never justify deleting a live store.
+
+    PID reuse is excluded by comparing the recorded start-time.
     """
     if pid <= 0:
         return True  # malformed marker -> keep
+    # --- 1. different PID namespace (docker launch mode) -------------------
+    # NOTE: when our OWN namespace id is unreadable ("" -- e.g. /proc/self/ns/pid
+    # is not available), a marker carrying a non-empty foreign id is still
+    # clearly not ours, so the heartbeat fallback applies exactly the same way.
+    # Only markers with an EMPTY id (old two-line markers, or writers that could
+    # not record their ns) fall through to the /proc check below.
+    if marker_ns and marker_ns != _self_pid_ns():
+        # The recorded PID belongs to another namespace; we cannot map it to
+        # our /proc. Liveness = the writer's heartbeat is fresh.
+        return marker_age_sec <= HEARTBEAT_ALIVE_SEC
+    # --- 2./3. same (or unknown) namespace: use /proc ----------------------
     current = _proc_start_time(pid)
     if current is None:
         return False  # provably dead: /proc/<pid> does not exist
@@ -128,7 +169,11 @@ def register_write(cache_root: str, final_name: str):
     """Create a marker for an in-flight store. Returns the marker path.
 
     The marker encodes (pid, process start-time) so liveness can be proven
-    later even after the process exits and the PID is reused.
+    later even after the process exits and the PID is reused. It also records
+    the writer's PID-NAMESPACE id (``/proc/self/ns/pid``) so a host-side CLI
+    can tell "this PID is not in my namespace" apart from "this process died"
+    -- essential for the docker launch mode, where the writer runs in a
+    container without ``--pid=host`` (see ``HEARTBEAT_ALIVE_SEC``).
     """
     reg = registry_dir(cache_root)
     try:
@@ -141,7 +186,7 @@ def register_write(cache_root: str, final_name: str):
         )
         path = os.path.join(reg, name)
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write("%s\n%d\n" % (final_name, int(time.time())))
+            fh.write("%s\n%d\n%s\n" % (final_name, int(time.time()), _self_pid_ns()))
         return path
     except OSError:
         return None  # never break a store because of the guard
@@ -182,22 +227,29 @@ def _iter_markers(cache_root: str):
             age = now - os.path.getmtime(p)
         except OSError:
             continue  # unreadable -> never yields an actionable entry
-        yield p, name, m, (lines[0].strip() if lines else ""), age
+        final = lines[0].strip() if lines else ""
+        # Third line (added round 18) records the writer's PID namespace id;
+        # old markers written before this fix have only two lines -> ns = "".
+        marker_ns = lines[2].strip() if len(lines) > 2 else ""
+        yield p, name, m, final, age, marker_ns
 
 
 def active_final_names(cache_root: str) -> set:
     """Final file names (basenames) with a LIVE in-flight write.
 
-    A marker counts as live unless the registry can PROVE its writer exited:
-    the recorded (pid, start-time) pair is gone. Anything the probe cannot
-    decide (no /proc, unreadable marker, malformed marker) is kept as live --
-    safer to retain a tmp file too long than to delete a live store's file.
+    A marker counts as live unless the registry can PROVE its writer exited.
+    Liveness is judged by ``writer_alive()``:
+    * same PID namespace as this process -> /proc check (pid + start-time);
+    * different PID namespace (docker writer) -> the marker's own heartbeat
+      (fresh mtime within ``HEARTBEAT_ALIVE_SEC``);
+    * anything the probe cannot decide is kept as live -- safer to retain a tmp
+      file too long than to delete a live store's file.
     """
     out: set = set()
-    for _p, _name, m, final, _age in _iter_markers(cache_root):
+    for _p, _name, m, final, age, ns in _iter_markers(cache_root):
         pid = int(m.group("pid"))
         start = int(m.group("start"))
-        if writer_alive(pid, start or None) and final:
+        if writer_alive(pid, start or None, ns, age) and final:
             out.add(os.path.basename(final))
     return out
 
@@ -205,18 +257,18 @@ def active_final_names(cache_root: str) -> set:
 def sweep_stale_markers(cache_root: str) -> int:
     """Remove crash-leftover markers. Returns how many were removed.
 
-    Only removes markers whose writer PROVABLY exited AND which are older
-    than STALE_MARKER_SEC. Live writers are never swept, however old the
-    marker gets.
+    Only removes markers whose writer PROVABLY exited (per ``writer_alive()``)
+    AND which are older than ``STALE_MARKER_SEC``. Live writers are never
+    swept, however old the marker gets.
     """
     reg = registry_dir(cache_root)
     if not os.path.isdir(reg):
         return 0
     removed = 0
-    for p, _name, m, _final, age in list(_iter_markers(cache_root)):
+    for p, _name, m, _final, age, ns in list(_iter_markers(cache_root)):
         pid = int(m.group("pid"))
         start = int(m.group("start"))
-        if writer_alive(pid, start or None):
+        if writer_alive(pid, start or None, ns, age):
             continue  # writer still running -- keep forever
         if age < STALE_MARKER_SEC:
             continue  # just exited, give the CLI a grace period

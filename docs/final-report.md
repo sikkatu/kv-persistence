@@ -462,6 +462,79 @@ round) PLUS the mtime window as a fallback for unpatched writers. The window is
 explicitly documented as a HEURISTIC (not an absolute lock) in code and in
 troubleshooting ×3.
 
+## Review round 18 fixes
+
+**Critical (false FAIL / false safety):**
+* **Scenario A could FAIL on a healthy system**: `test-recovery.sh` hard-FAILED
+  when scenario A (restart vLLM ONLY) produced zero L2 read events. But the cache
+  service and its L1 (host RAM) survive that restart, so a healthy system serves
+  the request from L1 and logs `(N L1, 0 L2)` — the documented "memory hit".
+  A now ACCEPTS a memory hit (PASS on `cached_tokens>0` alone), the disk signal is
+  informative only, and only scenario B (full restart, empty L1) must show L2 read
+  events. The final-verdict "reuse without L2 evidence" check was likewise moved
+  from A+B to B only. The regex requiring `(N L1, N L2)` with BOTH counters
+  non-zero is kept for B's corroborating signal but is not the sole gate.
+* **tmp_guard was useless in docker mode (P1)**: `start-cache.sh` docker mode
+  starts the service in a container WITHOUT `--pid=host`, so the marker's PID
+  lives in the container's namespace — the host CLI checked it against the HOST
+  `/proc`, found no such process and treated a LIVE store as dead; only the
+  15-minute mtime window remained. Fixed at the mechanism level: `register_write`
+  now records the writer's PID-namespace id (`/proc/self/ns/pid`) in the marker,
+  and `writer_alive` falls back to the marker's HEARTBEAT when the marker belongs
+  to a foreign namespace (fresh mtime ≤ `HEARTBEAT_ALIVE_SEC` = alive, older =
+  crash leftover). Same-namespace markers keep the exact /proc(pid, start-time)
+  check. Old two-line markers (empty ns) keep the old behaviour. Tests:
+  `test_writer_alive_falls_back_to_heartbeat_in_foreign_pid_ns`,
+  `test_marker_records_writer_pid_namespace`.
+
+**Serious (dashboards lied / scenarios raced):**
+* **Grafana "Cache Hit Rate" (and 3 more panels) were empty on 0.5.3**: the
+  vendored dashboards were copied from a NEWER LMCache than the pinned 0.5.3.
+  Verified against the 0.5.3 source (every `create_counter`/`register_gauge` in
+  `lmcache/v1/mp_observability/`): 4 of 28 panels referenced metrics 0.5.3 never
+  emits — `lookup_prompt_tokens_total` / `lookup_request_hit_tokens_total`
+  (Cache Hit Rate, Lookup & Engine), `num_submitted/finished_stores|retrieves`
+  (Inflight GPU Copies) and `transfer_phase_*` (MP Transfer DMA). Those panels
+  are remapped to the REAL 0.5.3 metrics (lookup_requested/hit, l1_read/l1_write,
+  l0_l1_store_throughput). CRITICAL correction during the fix: `l1_memory_usage_
+  bytes`, `l2_usage_bytes`, `num_inflight_l2_*`, `active_prefetch_jobs` and the
+  `event_bus_*` gauges DO exist in 0.5.3 (registered via `register_gauge` in
+  `l1_manager.py`/`storage_manager.py`/`lookup.py`) — the first patch wrongly
+  replaced those too; that over-replacement was reverted. The README now says
+  plainly that "official" dashboards target a newer LMCache, lists exactly which
+  4 panels were remapped, and states that the **Coordinator** dashboard
+  legitimately stays empty (this repo runs no coordinator; 48 of its series have
+  no 0.5.3 analogue).
+* **L2_bytes counted registry markers**: `.kvp-active-writes/` markers are
+  transient bookkeeping, not cache data — counting them could produce a false
+  "L2 shrank". Now excluded from `L2_bytes`/`find`.
+* **Async L2 store raced the byte delta**: `ask cold` → `L2_bytes` had no pause,
+  but stores complete asynchronously — a false "nothing was stored" was possible.
+  `wait_l2_quiet()` now samples `L2_bytes` until it stops changing before the
+  B0/B_WARM and B_BEFORE/B_AFTER comparisons.
+
+**Minor:**
+* **preflight only warned on `bf16`/`fp16`**: a wrong CacheDType spelling makes the
+  engine refuse to start, so preflight now `die`s instead of warning and
+  continuing into a doomed `docker run`.
+* **Comment typo "BLOAT16"** fixed in the launcher header (BFLOAT16).
+* **`ask()` heredoc became unquoted** (`<<PYEOF`): a future `$` or backtick in the
+  Python block would be expanded by the shell. Restored `<<'PYEOF'` (quoted) and
+  `SERVED_MODEL_NAME` is now EXPORTED so the Python block reads it from the
+  environment.
+* **`LMCACHE_LOG_LEVEL` default vs advice**: the config defaulted to DEBUG while
+  its comment suggested INFO for production. The default is now documented as
+  deliberate (DEBUG is required for the acceptance evidence lines), the value is
+  read consistently by `scripts/env.sh` AND `systemd/kvp-lmcache-server` (via
+  `repo_cfg`) AND forwarded into the docker container (`-e LMCACHE_LOG_LEVEL=…`)
+  — all three launch modes agree.
+* **Token leak check for DEBUG logs (asked by the review)**: verified by static
+  audit of every `logger.debug` call in the pinned 0.5.3 — DEBUG logs carry only
+  counts, sizes, session/request ids and chunk-key hashes, never token ids or
+  prompt text. The only raw-key-material path is the opt-in `--lookup-hash-log-dir`
+  JSONL file logger (OFF unless the operator sets it). Documented in
+  docs/security.md (EN) and in the config comments (EN/RU/ZH).
+
 ## Provenance
 * Commit hash of this report: run `git log -1 --format=%H` in the repository.
 * Push credentials are NOT stored in this repository (verified: zero

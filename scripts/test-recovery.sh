@@ -24,7 +24,10 @@ KEY="${API_KEY:-}"; [ -f "$PWD/live/api_key" ] && [ -z "$KEY" ] && KEY="$(head -
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # Review fix: the served model name is deployment-specific, not a project
 # constant. Default matches the reference MiMo launcher (SERVED_MODEL_NAME).
+# EXPORTED: the ask() heredoc is shell-quoted (no expansion), so the Python
+# block reads it from the environment via os.environ.
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}"
+export SERVED_MODEL_NAME
 L2="$KVP_CACHE_ROOT"; LOG="$KVP_CACHE_ROOT/lmcache-server.log"   # adapter writes file_path=KVP_CACHE_ROOT directly
 # Review fix (round 17): L2 store/load events are logged at DEBUG level in the
 # pinned LMCache 0.5.3 (see l2_retrievals/l2_stored comment above). The cache
@@ -39,11 +42,26 @@ VI="0"  # inconclusive findings (INCONCLUSIVE)
 # ---- evidence helpers --------------------------------------------------
 log_mark(){ wc -c < "$LOG" 2>/dev/null || echo 0; }
 new_log(){ tail -c +$(( $1 + 1 )) "$LOG" 2>/dev/null || true; }
-L2_bytes(){ # Sum bytes of cache data files EXCEPT the service's own log/pid,
-            # so growth (or absence of it) reflects store activity only.
+L2_bytes(){ # Sum bytes of cache data files EXCEPT the service's own log/pid and
+            # the tmp_guard registry dir, so growth (or absence of it) reflects
+            # store activity only. Review fix (round 18): the registry markers
+            # under .kvp-active-writes/ are transient bookkeeping, NOT cache
+            # data -- counting them could produce a false "L2 shrank" when a
+            # marker disappears between two samples.
   [ -d "$L2" ] || { echo 0; return; }
   find "$L2" -type f ! -name 'lmcache-server.log' ! -name 'lmcache-server.pid' \
+       ! -path "$L2/.kvp-active-writes/*" \
        -printf '%s\n' 2>/dev/null | awk '{s+=$1} END{print s+0}'
+}
+wait_l2_quiet(){ # wait until L2_bytes stops changing (async stores must finish)
+  local prev=-1 cur=0 i
+  for i in $(seq 1 30); do
+    cur=$(L2_bytes)
+    [ "$cur" = "$prev" ] && { echo "$cur"; return; }
+    prev=$cur
+    sleep 2
+  done
+  echo "$cur"
 }
 # BOTH helpers require an explicit STORE/READ-from-L2 EVENT, not any line
 # merely containing one of these words (review: the old l2_stored() matched any
@@ -103,7 +121,11 @@ disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume ho
 ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
   local label="$1" mark="$2" t0 t1
   t0=$(date +%s.%N)
-  python3 - "$API" "$KEY" "$OUT/prefix.txt" "$OUT/$label.json" <<PYEOF || PA "request $label failed"
+  # Review fix (round 18): QUOTED heredoc (<<'PYEOF') so the Python block is
+  # never expanded by the shell -- a stray $ or backtick inside it would
+  # otherwise be interpreted (and `stream_options` already contains braces
+  # that happen to be harmless, but any future edit with $ would break).
+  python3 - "$API" "$KEY" "$OUT/prefix.txt" "$OUT/$label.json" <<'PYEOF' || PA "request $label failed"
 import json,sys,time,urllib.request,os
 api,key,prefix_file,out=sys.argv[1:5]
 body=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
@@ -174,7 +196,10 @@ echo "== COLD baseline (no cache reuse expected) =="
 M0=$(log_mark); B0=$(L2_bytes)
 ask cold "$M0"
 T_COLD=$(python3 -c "import json;d=json.load(open('$OUT/cold.summary.json'));print(d['ttft_s'])")
-B_WARM=$(L2_bytes)
+# Review fix (round 18): L2 store is ASYNCHRONOUS -- measure B0/B_WARM only after
+# the directory goes quiet, otherwise the byte delta races the write and can
+# report a false "nothing was stored".
+B_WARM=$(wait_l2_quiet)
 if [ "$B_WARM" -le "$B0" ]; then
   fail "scenario pre: nothing was stored to L2 during the warm request (B0=$B0 B=$B_WARM) -- cannot prove later reads are disk-backed"
 else
@@ -192,16 +217,22 @@ ask afterA "$M_A0"
 A_RETR=$(l2_retrievals "$M_A0"); A_CACHED=$(cached_of "$OUT/afterA.json")
 T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['ttft_s'])")
 echo "  post-restart L2 read events: $A_RETR, cached_tokens: $A_CACHED, ttft: ${T_A}s (cold: ${T_COLD}s)"
-[ "${A_RETR:-0}" -gt 0 ] || fail "A: no L2/disk read log events AFTER the vLLM restart (got only: $(new_log "$M_A0" | grep -ci retriev || true) generic retrievals)"
-if [ "$A_CACHED" = "MISSING" ]; then
+# Review fix (round 18): scenario A restarts vLLM ONLY -- the cache service and
+# its L1 (host RAM) are STILL ALIVE, so a perfectly working system serves the
+# request from L1 and logs ZERO L2/disk reads. That is the documented "memory
+# hit" outcome of this taxonomy, NOT a failure. Only scenario B (full restart,
+# empty L1) proves disk-backed recovery. Therefore A accepts a memory hit and
+# must not hard-FAIL for missing L2 evidence.
+if [ "${A_CACHED}" = "MISSING" ]; then
   inconc "A: cached_tokens metric unavailable (prompt_tokens_details null/absent) -- cannot say reuse/no-reuse from usage counters alone"
 elif [ "${A_CACHED:-0}" -eq 0 ]; then
-  fail "A: cached_tokens==0 after restart (no reuse at all)"
-fi
-# Scenario A's re-question remains valid ONLY when hits can be tied to L2/disk
-# reads in the marked interval (not to surviving RAM/engine in-memory hits).
-if [ "${A_RETR:-0}" -eq 0 ] && [ "${A_CACHED:-0}" != "MISSING" ] && [ "${A_CACHED:-0}" -gt 0 ]; then
-  inconc "A: cached_tokens>0 but zero post-mark L2-read events -- reuse may be RAM-resident (L1/engine) and not disk-backed"
+  fail "A: cached_tokens==0 after restart (no reuse at all -- even L1/RAM reuse is missing)"
+elif [ "${A_RETR:-0}" -gt 0 ]; then
+  echo "  [ok] A: reuse with L2/disk read evidence (best case)"
+else
+  echo "  [ok] A: reuse WITHOUT L2 read events -- served from L1/RAM (memory hit)."
+  echo "        Expected: the cache service and its L1 survived the vLLM restart."
+  echo "        Disk-backed proof is scenario B's job; A is PASS on memory hit."
 fi
 A_DISK1=$(disk_read_bytes)
 if [ "$A_DISK0" = "-1" ] || [ "$A_DISK1" = "-1" ]; then
@@ -209,20 +240,22 @@ if [ "$A_DISK0" = "-1" ] || [ "$A_DISK1" = "-1" ]; then
 else
   A_DISK_DELTA=$((A_DISK1 - A_DISK0))
   echo "  physical NVMe bytes read during A: $A_DISK_DELTA"
-  # Shared-VM-disk caveat (review P2-4): the block-device counter includes
-  # unrelated I/O (OS/Docker/model loads). A positive delta WITHOUT matching
-  # L2-read log events in the same window is NOT proof of cache reads -- that
-  # combination is INCONCLUSIVE, not PASS and not a hard FAIL.
+  # Review fix (round 18): zero NVMe reads during A are EXPECTED when the request
+  # was served from L1/RAM (memory hit) -- the cache service survived, so nothing
+  # had to come from disk. A positive delta alone on a SHARED disk is not proof
+  # of cache reads either (unrelated I/O). So A's disk signal is INFORMATIVE,
+  # never a hard FAIL: only scenario B proves disk-backed recovery.
   if [ "$A_DISK_DELTA" -le 0 ]; then
-    fail "A: zero physical NVMe bytes read during scenario -- L2 cannot be credited as the source"
+    echo "  [info] A: no physical NVMe reads -- consistent with an L1/RAM memory hit"
   elif [ "${A_RETR:-0}" -eq 0 ]; then
-    inconc "A: physical bytes read from a SHARED disk without matching L2-read events -- cannot attribute these bytes to LMCache (unrelated I/O possible). Set an isolated test device or corroborate with per-process I/O to make this PASS."
+    echo "  [info] A: physical bytes read from a SHARED disk without L2-read events"
+    echo "         (unrelated I/O possible) -- not attributable to LMCache alone"
   fi
 fi
 
 echo "== SCENARIO B: restart BOTH services, NVMe kept =="
 B_DISK0=$(disk_read_bytes)
-B_BEFORE=$(L2_bytes)
+B_BEFORE=$(wait_l2_quiet)
 bash "$HERE/stop-cache.sh" >/dev/null 2>&1 || PA "stop-cache.sh failed"
 bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA "start-cache.sh failed (cache service did not restart)"
 LIVE_PID="$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null || echo 0)"
@@ -240,7 +273,7 @@ if [ "$B_CACHED" = "MISSING" ]; then
 elif [ "${B_CACHED:-0}" -eq 0 ]; then
   fail "B: cached_tokens==0 after full restart"
 fi
-B_AFTER=$(L2_bytes)
+B_AFTER=$(wait_l2_quiet)
 [ "$B_AFTER" -ge "$B_BEFORE" ] || fail "B: L2 shrank during restart -- data loss suspected ($B_BEFORE -> $B_AFTER)"
 B_DISK1=$(disk_read_bytes)
 if [ "$B_DISK0" = "-1" ] || [ "$B_DISK1" = "-1" ]; then
@@ -259,9 +292,12 @@ else
 fi
 
 # ---- exclude alternative explanations ----------------------------------
-A2=$(cached_of "$OUT/afterA.json"); B2=$(cached_of "$OUT/afterB.json")
-if [ "${A2:-0}" -gt 0 ] && [ "${B2:-0}" -gt 0 ] && [ "${A_RETR:-0}" -eq 0 ] && [ "${B_RETR:-0}" -eq 0 ]; then
-  fail "cached_tokens>0 but zero L2-read log events: reuse may come from RAM/prefix cache only -- NOT proof of NVMe recovery"
+# Review fix (round 18): scenario A is EXPECTED to have zero L2 read events
+# (memory hit from the surviving L1) -- only scenario B must show them. So the
+# "reuse without any L2 evidence" concern applies to B alone.
+B2=$(cached_of "$OUT/afterB.json")
+if [ "${B2:-0}" -gt 0 ] && [ "${B_RETR:-0}" -eq 0 ]; then
+  fail "B: cached_tokens>0 but zero L2-read log events: reuse may come from RAM/prefix cache only -- NOT proof of NVMe recovery"
 fi
 
 # ================= machine verdict =====================================
@@ -281,6 +317,6 @@ elif [ "$VI" -gt 0 ]; then
   cat "$OUT/failures.txt" 2>/dev/null || true
   exit 5
 else
-  echo "VERDICT: PASS -- disk-backed KV recovery proven (L2 read events + physical NVMe reads after each restart, data retained)"
+  echo "VERDICT: PASS -- cache reuse proven after restarts (A: memory/L1 hit as expected for a vLLM-only restart; B: disk-backed KV recovery with L2 read events + physical NVMe reads after full restart, data retained)"
   exit 0
 fi

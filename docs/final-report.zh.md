@@ -265,6 +265,63 @@ bash scripts/start-observability.sh     # 一条命令，Grafana 位于 :3000
 benchmarks.md 的验收标准改为脚本实际匹配的字符串；未经证实的
 「urllib 缓冲导致 +0–500 ms TTFT」声明已删除（SSE 迭代是逐行到达的）。
 
-**启发式保护已如实标注：** `purge --tmp` 的写入保护是 `kvpersist.tmp_guard`
-注册表（按进程存活判定）加上 mtime 窗口作为兜底；窗口在代码与
-troubleshooting ×3 中明确标为启发式，而非绝对锁。
+## 第 18 轮评审修正
+
+**关键（误报 FAIL / 虚假安全感）：**
+* **场景 A 在正常系统上会误报 FAIL**：`test-recovery.sh` 在场景 A（仅重启 vLLM）
+  没有 L2 读取事件时硬性判定 FAIL。但缓存服务及其 L1（主机内存）在该重启中存活，
+  健康系统会从 L1 提供请求并记录 `(N L1, 0 L2)` —— 即文档中定义的「memory hit」。
+  现在 A 接受 memory hit（仅凭 `cached_tokens>0` 即 PASS），磁盘信号仅供参考，
+  只有场景 B（完整重启、L1 为空）才必须出现 L2 读取事件。最终裁决中的
+  「有复用但无 L2 证据」检查也从 A+B 移至仅 B。要求 `(N L1, N L2)`（两个计数器
+  均非零）的正则保留为 B 的佐证信号，但不再是唯一关卡。
+* **tmp_guard 在 docker 模式下完全失效（P1）**：`start-cache.sh` 的 docker 模式在
+  **不带** `--pid=host` 的容器中启动服务，因此标记中的 PID 属于容器的 PID 命名空间
+  —— 主机 CLI 拿它去对照主机的 `/proc`，找不到该进程，于是把**正在写入**的存储
+  判定为已死；实际上只剩 15 分钟的 mtime 窗口在起作用。已在机制层面修复：
+  `register_write` 现在把写入进程的 PID 命名空间 id（`/proc/self/ns/pid`）写入
+  标记，`writer_alive` 在标记属于外来命名空间时回退到标记自身的 HEARTBEAT
+  （mtime 新鲜（≤ `HEARTBEAT_ALIVE_SEC`）= 存活，过旧 = 崩溃残留）。同一命名空间
+  的标记仍按原逻辑精确检查 /proc(pid, start-time)。旧的两行标记（空 ns）保持
+  原行为。测试：`test_writer_alive_falls_back_to_heartbeat_in_foreign_pid_ns`、
+  `test_marker_records_writer_pid_namespace`。
+
+**严重（仪表盘不实 / 场景竞态）：**
+* **Grafana「Cache Hit Rate」（及另外 3 个面板）在 0.5.3 上为空**：内置仪表盘是
+  从比固定的 0.5.3 更新的 LMCache 复制的。通过比对 0.5.3 源码中每个
+  `create_counter`/`register_gauge`（`lmcache/v1/mp_observability/`）确认：28 个
+  面板中有 **4 个**引用了 0.5.3 从不输出的指标 ——
+  `lookup_prompt_tokens_total` / `lookup_request_hit_tokens_total`（Cache Hit
+  Rate、Lookup & Engine）、`num_submitted/finished_stores|retrieves`
+  （Inflight GPU Copies）、`transfer_phase_*`（MP Transfer DMA）。这些面板已改用
+  **真实的 0.5.3 指标**（lookup_requested/hit、l1_read/l1_write、
+  l0_l1_store_throughput）。修复过程中的**重要更正**：`l1_memory_usage_bytes`、
+  `l2_usage_bytes`、`num_inflight_l2_*`、`active_prefetch_jobs` 以及
+  `event_bus_*` gauge 在 0.5.3 中**是存在的**（通过 `register_gauge` 在
+  `l1_manager.py`/`storage_manager.py`/`lookup.py` 中注册）—— 第一版补丁错误地
+  连它们一起替换了；该过度替换已回退。README 现在明确说明「官方」仪表盘是针对
+  更新版本的 LMCache 编写的，列出被替换的 4 个面板，并说明 **Coordinator** 仪表盘
+  合理地保持为空（本仓库不运行 coordinator；其 48 个指标在 0.5.3 中没有对应物）。
+* **L2_bytes 把注册表标记算进了总量**：`.kvp-active-writes/` 中的标记是临时簿记，
+  不是缓存数据 —— 把它们算进去可能导致误报「L2 shrank」。现在已从
+  `L2_bytes`/`find` 中排除。
+* **异步 L2 写入与字节测量竞态**：`ask cold` 之后立即 `L2_bytes` 没有等待，但写入
+  是异步完成的 —— 可能误报「nothing was stored」。`wait_l2_quiet()` 现在会反复
+  采样 `L2_bytes` 直到其稳定后，再进行 B0/B_WARM 和 B_BEFORE/B_AFTER 比较。
+
+**次要：**
+* **preflight 对 `bf16`/`fp16` 只警告**：CacheDType 拼写错误会让引擎拒绝启动，
+  因此 preflight 现在直接 `die`，而不是警告后继续注定失败的 `docker run`。
+* **注释中的拼写错误「BLOAT16»** 已修正（BFLOAT16）。
+* **`ask()` 的 heredoc 变成了未加引号**（`<<PYEOF`）：Python 块中任何 `$` 或反引号
+  会被 shell 展开。已恢复 `<<'PYEOF'`（加引号），且 `SERVED_MODEL_NAME` 现在
+  EXPORT —— Python 块通过 os.environ 读取它。
+* **`LMCACHE_LOG_LEVEL` 默认值与建议不一致**：配置文件默认 DEBUG，而注释建议生产
+  用 INFO。现在默认值被明确记录为有意为之（验收证据行需要 DEBUG），该值由
+  `scripts/env.sh`、`systemd/kvp-lmcache-server`（经 `repo_cfg`）以及
+  docker 容器（`-e LMCACHE_LOG_LEVEL=…`）一致读取 —— 三种启动模式统一。
+* **DEBUG 日志的 token 泄漏检查（评审要求）**：已对固定的 0.5.3 中每个
+  `logger.debug` 调用做静态审计 —— DEBUG 日志只包含计数、大小、session/request
+  id 和块键哈希，从不包含 token id 或提示词文本。唯一涉及原始键材料的路径是
+  可选的 `--lookup-hash-log-dir` JSONL 文件记录器（默认关闭，需操作员显式设置）。
+  已在 docs/security.md（EN）和配置注释（EN/RU/ZH）中记录。

@@ -79,11 +79,17 @@ LMCACHE_L2_SERDE=none
 # Выше — лучше коэффициент, медленнее запись. Для zstd 1-19, дефолт 3.
 KVP_L2_COMPRESS_LEVEL=3
 
-# Уровень логирования сервиса кэша. "DEBUG" НЕОБХОДИМ для аппаратной приёмки
-# (scripts/test-recovery.sh): строки-доказательства L2 store/load
+# Уровень логирования сервиса кэша. ПО УМОЛЧАНИЮ "DEBUG", а не "INFO" —
+# осознанно: аппаратная приёмка (scripts/test-recovery.sh) разбирает строки-
+# доказательства L2 store/load
 # ("L2 store completed: adapter %d, %d succeeded, %d failed" и
-# "L2 prefetch load completed: request %d, %d loaded, %d failed") в
-# закреплённой сборке LMCache 0.5.3 пишутся на уровне DEBUG. Без DEBUG
-# регэкспы приёмки ничего не найдут, и прогон станет INCONCLUSIVE. "INFO"
-# уменьшает лог для продакшена, если приёмка не планируется.
+# "L2 prefetch load completed: request %d, %d loaded, %d failed"), которые
+# закреплённая сборка LMCache 0.5.3 пишет на уровне DEBUG. Без DEBUG эти строки
+# не попадают в лог, и прогон приёмки станет INCONCLUSIVE. Значение читают
+# scripts/env.sh (все скрипты), systemd-обёртка (kvp-lmcache-server) и оно
+# пробрасывается в docker-контейнер — так все режимы запуска согласованы.
+# Для продакшена БЕЗ приёмочного прогона установите LMCACHE_LOG_LEVEL=INFO в
+# lmcache-server.env.local (или /etc/kv-persistence.env), чтобы уменьшить лог.
+# ПРОВЕРЕНО (раунд 18): DEBUG-логи LMCache 0.5.3 не печатают токены и текст
+# запросов — только счётчики, размеры и ключи/хэши чанков (см. docs/security.md).
 LMCACHE_LOG_LEVEL=DEBUG

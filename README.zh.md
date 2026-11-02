@@ -128,6 +128,19 @@ cd observability && docker compose up -d
 ```
 * **Grafana** → <http://localhost:3000>（匿名 Admin，无需登录）。
   *LMCache* 与 *LMCache Coordinator* 仪表盘会自动导入。
+
+**仪表盘版本说明（第 18 轮）：** 这些仪表盘是 LMCache 的*官方*资产，但它们针对的是
+比本仓库固定的 **0.5.3** 更新的 LMCache 版本编写的。与 0.5.3 源码
+（`lmcache/v1/mp_observability/`）静态对比表明：多数面板映射到真实的 0.5.3 指标
+（L1/L2 用量 gauge、store/prefetch 流水线、淘汰循环、事件总线、吞吐直方图），但
+**28 个面板中有 4 个**引用了 0.5.3 从不输出的指标（lookup 的 prompt/request-hit
+token 计数、L0↔L1 inflight store/retrieve 计数、transfer-phase DMA 计数）。这些
+面板现已**改用真实的 0.5.3 指标**（命中率用 `lookup_requested`/`lookup_hit`，
+L0↔L1 活动用 `l1_read`/`l1_write` 块计数，DMA 吞吐用 `l0_l1_store_throughput`）。
+改用是尽力而为的语义匹配，不是上游保证 —— 标签/单位可能与原始意图略有差异。
+*LMCache Coordinator* 仪表盘期望 0.5.3 的 `mp_coordinator` 并不导出的协调器遥测
+（48 个系列在 0.5.3 中没有对应物）；本仓库不运行协调器，因此该仪表盘会合理地保持
+空白。
 * **Prometheus** → <http://localhost:9091>
 * **Tempo** → <http://localhost:3200>（跟踪）
 * **OTLP gRPC** → `localhost:4320` —— 缓存服务向此推送指标。
