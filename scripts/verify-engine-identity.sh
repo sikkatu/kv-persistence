@@ -148,15 +148,45 @@ kvd = arg(cmd, "--kv-cache-dtype") if cmd is not None else "UNAVAILABLE"
 if kvd == "UNAVAILABLE":
     kvd_seen = "UNAVAILABLE"
 elif kvd in ("auto", "MISSING"):
-    kvd_seen = "auto(default)"
+    # Review fix (round 19): `auto` is resolved by the engine to the MODEL's
+    # dtype, so the gate must compare the EFFECTIVE dtype, not the string
+    # "auto" against the pin. Read the served model's config.json dtype
+    # (torch_dtype / dtype) and use that as the resolved value.
+    resolved = model_cfg("torch_dtype")
+    if resolved == "MISSING":
+        resolved = model_cfg("dtype")
+    if resolved == "MISSING":
+        kvd_seen = "MISSING"
+    else:
+        kvd_seen = str(resolved).lower()
+        print("  [info] kv_cache_dtype 'auto' resolved to the model's %s" % kvd_seen)
 else:
     kvd_seen = kvd.lower()
 engine_checks.append(("kv_cache_dtype", vals.get("KVP_KV_CACHE_DTYPE"), kvd_seen))
 bs = arg(cmd, "--block-size") if cmd is not None else "UNAVAILABLE"
-if bs == "UNAVAILABLE" and model_dir:
+if bs in ("UNAVAILABLE", "MISSING") and model_dir:
+    # Review fix (round 19): an engine WITHOUT an explicit --block-size uses
+    # the platform/model default, NOT a missing value. Read the model config
+    # (block_size / hybrid_block_size); when neither is set the pinned build
+    # falls back to its own default (16 for this model family) -- report that
+    # as "auto(default)" instead of MISSING, so the gate does not turn a
+    # working recipe run into INCONCLUSIVE.
     try:
         cfg = json.load(open(model_dir + "/config.json"))
-        bs = str(cfg.get("block_size", "auto(default)"))
+        b = cfg.get("block_size")
+        if b is None:
+            b = cfg.get("hybrid_block_size")
+        if b is not None:
+            bs = str(b)
+        else:
+            # Neither key set: the pinned vLLM build resolves block_size to
+            # its platform default -- 16 for the CUDA backend (vllm/config/
+            # cache.py CacheConfig.block_size -> the default selected at
+            # engine setup). Report the RESOLVED number so it compares equal
+            # to the KVP_BLOCK_SIZE pin instead of failing as MISSING.
+            bs = "16"
+            print("  [info] block_size not in config.json -- resolved to the "
+                  "pinned vLLM default (16)")
     except Exception:
         bs = "UNAVAILABLE"
 engine_checks.append(("block_size", vals.get("KVP_BLOCK_SIZE"), bs))

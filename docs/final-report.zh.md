@@ -325,3 +325,46 @@ benchmarks.md 的验收标准改为脚本实际匹配的字符串；未经证实
   id 和块键哈希，从不包含 token id 或提示词文本。唯一涉及原始键材料的路径是
   可选的 `--lookup-hash-log-dir` JSONL 文件记录器（默认关闭，需操作员显式设置）。
   已在 docs/security.md（EN）和配置注释（EN/RU/ZH）中记录。
+
+## 第 19 轮评审修正（与 sikkatu/recipes 的跨仓库一致性）
+
+**P1 —— 缓存身份命名空间在配方路径下不工作**：配方启动器把 `MODEL_DIR` 挂载到
+`/model`，LMCache 对每个部署都收到相同的 `model_name`（`model_config.model` =
+`--model` 值；已对照 0.5.3 的 `lmcache_mp_connector.py:680` 验证）。不同版本、
+KV dtype 和聊天模板共享一个命名空间 —— README 的说法只对 kv-persistence 自己的
+启动器成立（第 13 轮已修复）。现已在**两个**配方启动器中修复（`run-tp4-uva.sh`、
+`run-tp4-hotsplit.sh`，相同的块）：`KV_PERSIST=1` 时模型挂载到
+`/models/<缓存身份命名空间>`（取自 `kvpersist.cli model-name`，若找到
+kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_PERSIST=1` 现在
+**必须**设置 `MODEL_DIR`（远程下载无法按版本隔离 —— 启动器拒绝）。配方中的契约
+测试固定了该机制且不影响普通启动。
+
+**P1 —— wiki 的「Verify the engine geometry」步骤无法通过**：两处已修复 ——
+`KV_CACHE_DTYPE` 默认从 `auto` 改为 `bfloat16`（与 kv-persistence 启动器一致），
+`--block-size 16` 现由 `KV_PERSIST=1` 分支固定。独立地，`verify-engine-identity.sh`
+现在**解析**值而非拒绝：`auto` 解析为 `config.json` 中的 dtype（引擎实际计算的
+有效 dtype），缺失的 `--block-size` 通过 `config.json` 或固定 vLLM 默认值（16）
+解析，而不是报告 MISSING/INCONCLUSIVE。
+
+**P1 —— 配方路径缺少 `--enable-prompt-tokens-details`**：没有它 `cached_tokens`
+不会上报，`test-recovery.sh` 在配方启动的服务器上永远无法 PASS。
+`KV_PERSIST=1` 分支现在传递该标志。
+
+**P2 —— 「逐项镜像参数」不准确**：`MAX_NUM_SEQS` 现在两条路径都是 2，dtype 两条
+路径都是 `bfloat16`；`run-vllm-with-persist.sh` 的头部注释如实说明「基线 + 四个
+已记录的补充」。wiki *配方集成* 中的表格列出所有差异：值差异是**安全的缓存未命中**，
+绝不会错误读取。
+
+**CI**：kv-persistence 原本没有 workflow（评审者无法确认测试运行）。现已创建
+`.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
+的 bash 语法检查、所有模块的 py_compile。
+
+**测试计数**：文档中的「157 unit tests」已过时。实际：142 个单元测试，159 通过 +
+2 跳过，共收集 176 个。已在 final-report 与 Home 中修正。
+
+**端口命名**：三个变量指向同一端点 —— 已在 *配方集成*（EN/RU/ZH）与配方 README
+中明确记录并附「两侧同步修改」警告。
+
+**仍未证明的部分（诚实声明）**：配方的契约测试只验证启动器包含该机制 —— 它们不能
+证明真实的 NVMe 恢复、跨重启复用或跨配置隔离。这些证据来自 kv-persistence 的
+`scripts/test-recovery.sh` + GPU 主机上的集成测试。硬件验收仍未完成。

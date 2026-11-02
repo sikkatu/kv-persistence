@@ -2,8 +2,25 @@
 # run-vllm-with-persist.sh -- vLLM TP4 for MiMo-V2.6-Pro WITH the persistent KV connector.
 # Separate launcher of kv-persistence: NEVER edits the production recipe.
 # Recipe patch files are mounted READ-ONLY; all state lives under KVP_CACHE_ROOT.
-# docker args mirror run-tp4-uva.sh one-to-one + --kv-transfer-config to the
-# running lmcache server. ROLLBACK: run the recipe launcher; NVMe data is kept.
+#
+# Relationship to the recipe launchers (run-tp4-uva.sh / run-tp4-hotsplit.sh,
+# review fix round 19): the docker args are based on the same recipe baseline,
+# but NOT a byte-for-byte mirror. This launcher:
+#   * mounts the model at /models/<cache-identity namespace> (not /model) --
+#     the recipe's KV_PERSIST=1 branch now does the same, but the plain
+#     recipe run does NOT (it intentionally has no cache identity);
+#   * passes --kv-transfer-config (same JSON shape as the recipe) and
+#     --enable-prompt-tokens-details + --block-size (also in the recipe's
+#     KV_PERSIST=1 branch);
+#   * verifies engine identity BEFORE and AFTER launch (verify-engine-identity.sh)
+#     and REFUSES to attach the cache on mismatch -- the recipe's branch only
+#     reminds the operator to run the gate manually;
+#   * keeps the recipe's pinned defaults (MAX_NUM_SEQS=2, KV_CACHE_DTYPE=bfloat16
+#     spelling, MAX_MODEL_LEN=1048576, block-size 16) so BOTH paths derive
+#     compatible KV. If you override any of these in one path, override them in
+#     the other too -- a different value is a SAFE cache miss (the namespace
+#     changes), never a wrong read, but it silently stops reuse between paths.
+# ROLLBACK: run the recipe launcher; NVMe data is kept.
 #
 # MANDATORY identity gate (review): verify-engine-identity.sh must pass BEFORE
 # persistent cache is attached to vLLM. If it returns exit 4 (MISMATCH) or 5

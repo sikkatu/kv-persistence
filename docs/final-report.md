@@ -9,7 +9,9 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(157 unit tests), architecture proven against the pinned vLLM build's source
+(142 unit tests + 17 more offline integration/config tests = 159 passed,
+2 skipped; 176 collected total including the live-`lmcache` integration
+tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -535,7 +537,80 @@ troubleshooting ×3.
   JSONL file logger (OFF unless the operator sets it). Documented in
   docs/security.md (EN) and in the config comments (EN/RU/ZH).
 
-## Provenance
+## Review round 19 fixes (cross-repo coherence with sikkatu/recipes)
+
+**P1 — cache-identity namespace did NOT work through the recipe**: the recipe
+launchers mounted `MODEL_DIR` at `/model`, so LMCache received one and the same
+`model_name` for every deployment (`model_config.model` = `--model` value;
+verified against `lmcache_mp_connector.py:680` of 0.5.3). Different revisions,
+KV dtypes and chat templates shared ONE namespace — the README claim
+"incompatible deployments never read each other's KV" held only for
+kv-persistence's own launcher (fixed in round 13 there). Fixed in BOTH recipe
+launchers (`run-tp4-uva.sh`, `run-tp4-hotsplit.sh`, identical block): with
+`KV_PERSIST=1` the model is mounted at `/models/<cache-identity namespace>`
+derived from `kvpersist.cli model-name` (when a kv-persistence checkout is
+found) or a deterministic fallback hash of the KV-compatibility fields
+(config.json, weight indexes + shard sizes, kv dtype, max-model-len, block
+size). `MODEL_DIR` becomes REQUIRED for `KV_PERSIST=1` (remote fetch cannot be
+isolated per revision — the launcher refuses). Contract tests in recipes
+(`test_namespace_mechanism_present`, `test_off_state_needs_no_model_dir`) pin
+the mechanism and keep the plain run untouched.
+
+**P1 — the wiki "Verify the engine geometry" step could not pass on a recipe
+launch**: the recipe's defaults broke the gate two ways. Both fixed:
+* the recipe defaulted `KV_CACHE_DTYPE=auto` while the pin wants `bfloat16`
+  (exit 4 MISMATCH). The recipe now defaults to the vLLM `CacheDType` spelling
+  `bfloat16` (still overridable) — same value as kv-persistence's launcher;
+* the recipe passed no `--block-size`, so the gate read MISSING (exit 5
+  INCONCLUSIVE). The `KV_PERSIST=1` branch now pins `--block-size 16`
+  (overridable via `BLOCK_SIZE`). Independently, `verify-engine-identity.sh`
+  now RESOLVES instead of failing: `--kv-cache-dtype auto` is resolved to the
+  model's `config.json` dtype (the effective dtype the engine computes), and a
+  missing `--block-size` resolves through `config.json` (`block_size` /
+  `hybrid_block_size`) or the pinned vLLM default (16) instead of reporting
+  MISSING — so an older recipe run without the pin no longer turns into
+  INCONCLUSIVE.
+
+**P1 — `--enable-prompt-tokens-details` missing from the recipe path**: without
+it `cached_tokens` is never reported and `test-recovery.sh` cannot PASS on a
+recipe-launched server (kv-persistence's final-report already called this
+critical). The `KV_PERSIST=1` branch now passes it (both launchers).
+
+**P2 — "docker args mirror run-tp4-uva.sh one-to-one" was inaccurate**:
+`MAX_NUM_SEQS` was 2 vs 1, the dtype spelling differed, and extra flags / a
+different model path existed. Now: `MAX_NUM_SEQS` default is 2 in the recipe
+launchers (matches kv-persistence), `KV_CACHE_DTYPE` default is `bfloat16` in
+both, and the header comment of `run-vllm-with-persist.sh` honestly states it
+is a baseline + four documented additions, not a mirror. The wiki table in
+*Recipes Integration* lists every divergence and its cache consequence: a value
+difference (dtype string included) is a SAFE cache miss (the namespace hash
+changes), never a wrong read — the two paths stop sharing blocks but never
+corrupt each other.
+
+**CI**: kv-persistence had NO workflow at all (the reviewer could not confirm
+any test run). `.github/workflows/check.yml` now exists: offline unit + config
+tests (no lmcache, no GPU needed), bash syntax of every launcher/unit, and
+py_compile of every module. The recipes repo already had `check.yml` (288 tests
+green with the new contract tests included).
+
+**Test counts (review note)**: "157 unit tests" in docs was stale. Real
+numbers, verified: 142 unit tests (`tests/unit`), 159 passed + 2 skipped in the
+offline suite, 176 collected total. Fixed in final-report (EN/RU/ZH) and wiki
+Home (EN/RU/ZH).
+
+**Port naming across repos (review note)**: three variables name one endpoint
+— `LMCACHE_PORT`/`KVP_LMCACHE_PORT` (cache side) and `KV_PERSIST_PORT` (recipe
+side). Documented explicitly in *Recipes Integration* (EN/RU/ZH) with the
+"change both sides together" warning, and in the recipe README (EN/RU/ZH).
+
+**What is still NOT proven (honesty)**: the recipe's contract tests verify the
+launcher carries the machinery — they do NOT prove real NVMe recovery,
+cross-restart reuse or cross-tenant isolation. That evidence comes from
+kv-persistence's `scripts/test-recovery.sh` + integration tests on a GPU host
+(NVMe recovery = scenario B; cross-config isolation =
+`test_identity_namespace_isolates_lmcache_storage`; in-flight purge safety =
+`test_launch_registry.py`). The hardware acceptance run remains NOT DONE —
+see the overall status at the top.
 * Commit hash of this report: run `git log -1 --format=%H` in the repository.
 * Push credentials are NOT stored in this repository (verified: zero
   `github_pat_` occurrences in tree and in git history). Credentials used by
