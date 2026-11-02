@@ -238,6 +238,7 @@ for line in open(sys.argv[1]).read().splitlines():
             v = v[1:-1]
         vals[m.group(1)] = v
 try:
+    rope = vals.get("KVP_ROPE_CONFIG_DIGEST", "")
     ident = CacheIdentity(
         model_id=vals.get("KVP_MODEL_ID", ""),
         model_revision=vals.get("KVP_MODEL_REVISION", ""),
@@ -252,6 +253,10 @@ try:
         connector_version=vals.get("KVP_CONNECTOR_VERSION", ""),
         max_model_len=int(vals.get("KVP_MAX_MODEL_LEN", "0")),
         chat_template_digest=vals.get("KVP_CHAT_TEMPLATE_DIGEST", ""),
+        lora_adapters=vals.get("KVP_LORA_ADAPTERS", ""),
+        multimodal_components=vals.get("KVP_MULTIMODAL_COMPONENTS", ""),
+        rope_config_digest=rope,
+        speculative_config=vals.get("KVP_SPECULATIVE_CONFIG", ""),
     )
     ns = ident.namespace()
 except (IdentityError, ValueError, KeyError) as exc:

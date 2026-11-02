@@ -4,19 +4,31 @@ WHY
 Upstream nixl_store_dynamic writes each chunk to ``<final>.bin.tmp.<uuid>`` and
 atomically renames it on success. A purge that deletes tmp files can corrupt a
 store that is STILL WRITING. The first guard was a 15-minute mtime window --
-a heuristic: a write longer than the window, or a race between the check and
-the delete, could still lose. The review asked for a real mechanism.
+a heuristic: a write longer than the window could still be hit. A registry of
+in-flight writes was added next; the review then found that judging a marker
+dead by ITS AGE is still wrong (a write can legitimately run for hours).
 
 WHAT THIS DOES
-A tiny registry of in-flight writes, shared between the writer (the LMCache
+A registry of in-flight writes, shared between the writer (the LMCache
 adapter, patched here at the ``dynamic_store_file`` level) and the admin CLI
-(``kvpersist.cli``):
+(``kvpersist.cli``). Liveness is judged by PROOF, not by age:
 
 * Before a store starts, a marker file ``<cache_root>/.kvp-active-writes/
-  <pid>-<uuid>.active`` is created, naming the FINAL file being written.
+  <pid>-<proc_start>-<uuid>.active`` is created, naming the FINAL file being
+  written and the writer's (pid, process start-time).
+* The marker is periodically refreshed (heartbeat) while the store runs, so
+  operators can see the write is active.
 * After the store finishes (success or failure) the marker is removed.
+* A marker is considered LIVE when its writer process is STILL ALIVE at the
+  recorded (pid, start-time) -- the start-time guards against PID reuse. If
+  the liveness probe CANNOT be performed (no /proc, unreadable marker), the
+  marker is treated as LIVE: it is safer to keep one tmp file too long than to
+  delete a live store's file.
 * ``purge --tmp`` / ``purge --all`` skip any ``*.tmp.*`` whose final name is
-  listed in the registry -- regardless of how long the write takes.
+  listed in the registry with a LIVE marker -- regardless of how long the
+  write runs.
+* Only markers whose writer provably exited AND that are older than
+  ``STALE_MARKER_SEC`` are swept.
 
 Race analysis: tmp names embed a fresh uuid4, so a tmp file that exists at
 scan time but is NOT in the registry can only come from (a) an unpatched
@@ -24,58 +36,118 @@ writer or (b) a crashed store -- both are safe to delete after the stale
 window. A write that starts AFTER the purge scanned cannot collide: its tmp
 file did not exist at scan time and carries a unique name.
 
-Crash safety: a hard kill leaves the marker behind. Markers older than
-``STALE_MARKER_SEC`` are ignored and swept (their write cannot still be
-running after the window; if it somehow is, the same uncertainty as before
-applies -- documented, not hidden). The marker is also ignored when its
-referenced final file no longer has a tmp sibling.
-
 INSTALL
 ``install()`` wraps ``DynamicNixlStorageAgent.dynamic_store_file`` (the single
-place where the tmp name is created and renamed) -- an upstream-compatible,
-in-process patch, exactly like the salt-filename and size patches. Applied
-unconditionally by ``kvpersist.launch`` when the adapter module is importable;
-inert otherwise.
+place where the tmp name is created and renamed) and starts a heartbeat for
+the marker -- an upstream-compatible, in-process patch, exactly like the
+salt-filename and size patches. Applied by ``kvpersist.launch`` when the
+adapter module is importable; inert otherwise.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
+import threading
 import time
 import uuid
 
 REGISTRY_DIR = ".kvp-active-writes"
-# Markers older than this are considered crash leftovers and are ignored
-# (and swept by purge). 1 hour: far beyond any single chunk store, and a
-# process that is still writing after an hour is already a pathology of its
-# own. This window only applies to DEAD writers -- live writes are protected
-# by the registry itself, for however long they run.
+# A marker whose writer provably EXITED is a crash leftover; such markers are
+# ignored by active_final_names() and swept after this age. Live writers are
+# never aged out -- liveness, not age, is the criterion.
 STALE_MARKER_SEC = 3600
+# How often an in-flight marker is refreshed. Informational for operators;
+# liveness is decided by the process check, not by this.
+HEARTBEAT_SEC = 30
+_MARKER_RE = re.compile(r"^(?P<pid>\d+)-(?P<start>\d+)-(?P<uuid>[0-9a-f]+)\.active$")
+
+
+# ---------------------------------------------------------------------------
+# Process liveness (PID + start-time, guards against PID reuse)
+# ---------------------------------------------------------------------------
+
+
+def _proc_start_time(pid: int):
+    """Kernel start-time (clock ticks) of *pid*.
+
+    Returns:
+      int  -- start-time read from /proc/<pid>/stat;
+      None -- the process provably does NOT exist (/proc/<pid> is gone);
+      "unknown" -- the probe could not be performed (no /proc, permission
+      denied, unparseable stat): liveness cannot be decided either way.
+    """
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            data = fh.read()
+        # comm (field 2) may contain spaces/parens: split after the last ')'.
+        rparen = data.rfind(b")")
+        if rparen < 0:
+            return "unknown"
+        fields = data[rparen + 2 :].split()
+        # after ')' the next field is state (field 3), so starttime (22) is
+        # at index 22-3 = 19 of this tail.
+        return int(fields[19])
+    except FileNotFoundError:
+        return None  # /proc/<pid> is gone -> the process is provably dead
+    except Exception:  # noqa: BLE001 - no /proc, permission, parse error
+        return "unknown"
+
+
+def writer_alive(pid: int, start_time) -> bool:
+    """True when the (pid, start-time) writer must be treated as running.
+
+    Returns True (SAFETY FIRST) whenever liveness cannot be determined: an
+    unreadable probe must never justify deleting a live store's file. A
+    provably absent process (FileNotFoundError) is the ONLY case reported
+    as dead; PID reuse is excluded by comparing the recorded start-time.
+    """
+    if pid <= 0:
+        return True  # malformed marker -> keep
+    current = _proc_start_time(pid)
+    if current is None:
+        return False  # provably dead: /proc/<pid> does not exist
+    if current == "unknown":
+        return True  # cannot prove death -> assume alive
+    if not start_time:
+        return True  # marker without a usable start-time (None/0) -> keep
+    return current == start_time
+
+
+# ---------------------------------------------------------------------------
+# Marker lifecycle
+# ---------------------------------------------------------------------------
 
 
 def registry_dir(cache_root: str) -> str:
     return os.path.join(cache_root, REGISTRY_DIR)
 
 
-def _marker_name() -> str:
-    return f"{os.getpid()}-{uuid.uuid4().hex[:16]}.active"
+def register_write(cache_root: str, final_name: str):
+    """Create a marker for an in-flight store. Returns the marker path.
 
-
-def register_write(cache_root: str, final_name: str) -> str | None:
-    """Create a marker for an in-flight store. Returns the marker path."""
+    The marker encodes (pid, process start-time) so liveness can be proven
+    later even after the process exits and the PID is reused.
+    """
     reg = registry_dir(cache_root)
     try:
         os.makedirs(reg, exist_ok=True)
-        path = os.path.join(reg, _marker_name())
+        start = _proc_start_time(os.getpid())
+        name = "%d-%d-%s.active" % (
+            os.getpid(),
+            start if start is not None else 0,
+            uuid.uuid4().hex[:16],
+        )
+        path = os.path.join(reg, name)
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write(f"{final_name}\n{int(time.time())}\n")
+            fh.write("%s\n%d\n" % (final_name, int(time.time())))
         return path
     except OSError:
         return None  # never break a store because of the guard
 
 
-def unregister_write(marker_path: str | None) -> None:
+def unregister_write(marker_path) -> None:
     if not marker_path:
         return
     try:
@@ -84,50 +156,81 @@ def unregister_write(marker_path: str | None) -> None:
         pass
 
 
-def active_final_names(cache_root: str) -> set:
-    """Final file names (basenames) with a live in-flight write.
+def heartbeat(marker_path) -> None:
+    """Refresh the marker's mtime so operators can see the write is active."""
+    if not marker_path:
+        return
+    try:
+        os.utime(marker_path, None)
+    except OSError:
+        pass
 
-    Stale markers (older than STALE_MARKER_SEC) are ignored: their writer is
-    gone. Files unreadable are skipped -- an unreadable registry must never
-    block a purge.
-    """
+
+def _iter_markers(cache_root: str):
     reg = registry_dir(cache_root)
-    out: set = set()
     if not os.path.isdir(reg):
-        return out
+        return
     now = time.time()
-    for name in os.listdir(reg):
-        if not name.endswith(".active"):
+    for name in sorted(os.listdir(reg)):
+        m = _MARKER_RE.match(name)
+        if not m:
             continue
         p = os.path.join(reg, name)
         try:
             with open(p, "r", encoding="utf-8") as fh:
                 lines = fh.read().splitlines()
-            if now - os.path.getmtime(p) > STALE_MARKER_SEC:
-                continue
-            if lines and lines[0].strip():
-                out.add(os.path.basename(lines[0].strip()))
+            age = now - os.path.getmtime(p)
         except OSError:
-            continue
+            continue  # unreadable -> never yields an actionable entry
+        yield p, name, m, (lines[0].strip() if lines else ""), age
+
+
+def active_final_names(cache_root: str) -> set:
+    """Final file names (basenames) with a LIVE in-flight write.
+
+    A marker counts as live unless the registry can PROVE its writer exited:
+    the recorded (pid, start-time) pair is gone. Anything the probe cannot
+    decide (no /proc, unreadable marker, malformed marker) is kept as live --
+    safer to retain a tmp file too long than to delete a live store's file.
+    """
+    out: set = set()
+    for _p, _name, m, final, _age in _iter_markers(cache_root):
+        pid = int(m.group("pid"))
+        start = int(m.group("start"))
+        if writer_alive(pid, start or None) and final:
+            out.add(os.path.basename(final))
     return out
 
 
 def sweep_stale_markers(cache_root: str) -> int:
-    """Remove crash-leftover markers. Returns how many were removed."""
+    """Remove crash-leftover markers. Returns how many were removed.
+
+    Only removes markers whose writer PROVABLY exited AND which are older
+    than STALE_MARKER_SEC. Live writers are never swept, however old the
+    marker gets.
+    """
     reg = registry_dir(cache_root)
     if not os.path.isdir(reg):
         return 0
-    now = time.time()
     removed = 0
-    for name in os.listdir(reg):
-        p = os.path.join(reg, name)
+    for p, _name, m, _final, age in list(_iter_markers(cache_root)):
+        pid = int(m.group("pid"))
+        start = int(m.group("start"))
+        if writer_alive(pid, start or None):
+            continue  # writer still running -- keep forever
+        if age < STALE_MARKER_SEC:
+            continue  # just exited, give the CLI a grace period
         try:
-            if now - os.path.getmtime(p) > STALE_MARKER_SEC:
-                os.remove(p)
-                removed += 1
+            os.remove(p)
+            removed += 1
         except OSError:
             continue
     return removed
+
+
+# ---------------------------------------------------------------------------
+# LMCache patch
+# ---------------------------------------------------------------------------
 
 
 def install() -> bool:
@@ -135,7 +238,7 @@ def install() -> bool:
 
     Returns True when installed. The wrapper:
       1. registers the FINAL file name before the store starts,
-      2. runs the original (tmp write + atomic rename),
+      2. heartbeats the marker while the store runs,
       3. unregisters in ``finally`` -- success and failure both clear the
          marker, so only crashed stores leave one behind.
     """
@@ -155,9 +258,21 @@ def install() -> bool:
     async def guarded_store_file(self, mem_indices, file_path, page_size):
         root = getattr(self, "file_path", None) or os.path.dirname(file_path)
         marker = register_write(root, os.path.basename(file_path))
+        stop = threading.Event()
+
+        def _beat():
+            while not stop.wait(HEARTBEAT_SEC):
+                heartbeat(marker)
+
+        hb = threading.Thread(target=_beat, daemon=True) if marker else None
+        if hb:
+            hb.start()
         try:
             return await orig(self, mem_indices, file_path, page_size)
         finally:
+            stop.set()
+            if hb:
+                hb.join(timeout=1)
             unregister_write(marker)
 
     agent_cls.dynamic_store_file = guarded_store_file
@@ -166,7 +281,7 @@ def install() -> bool:
 
 
 def main() -> None:  # pragma: no cover - debugging helper
-    print(f"registry dir: {REGISTRY_DIR}", file=sys.stderr)
+    print("registry dir: %s" % REGISTRY_DIR, file=sys.stderr)
     print("install() is applied by kvpersist.launch automatically.", file=sys.stderr)
 
 

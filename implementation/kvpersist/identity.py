@@ -95,8 +95,10 @@ class CacheIdentity:
     # the serde, so two deployments sharing a cache root with DIFFERENT serde
     # would read each other's files with the wrong deserializer. Changing the
     # serde must therefore change the namespace (-> cache miss, never a corrupt
-    # read). "" is treated as "none". Lossless codecs only (kv-persistence is
-    # lossless-by-contract; lossy codecs are refused at startup).
+    # read). `""`, `"none"` and `"raw"` all mean the uncompressed mode and are
+    # normalized to ONE namespace in `canonical()`; `"zstd"`/`"lz4"` are
+    # distinct. Lossless codecs only (kv-persistence is lossless-by-contract;
+    # lossy codecs are refused at startup).
     l2_serde: str = ""
 
     def validate(self) -> None:
@@ -131,11 +133,20 @@ class CacheIdentity:
     def canonical(self) -> Dict[str, Any]:
         self.validate()
         # namespace_hint is a human label only: it must NEVER change compatibility
-        return {
-            f.name: getattr(self, f.name)
-            for f in sorted(self.__dataclass_fields__.values(), key=lambda x: x.name)
-            if f.name != "namespace_hint"
-        }
+        out = {}
+        for f in sorted(self.__dataclass_fields__.values(), key=lambda x: x.name):
+            if f.name == "namespace_hint":
+                continue
+            v = getattr(self, f.name)
+            # Review fix: `l2_serde=""` and `l2_serde="none"` mean the SAME
+            # codec (raw, no transform) but used to hash into DIFFERENT
+            # namespaces. Normalize so they are interchangeable; "zstd"/"lz4"
+            # stay distinct. Unknown codec strings are kept verbatim (validate
+            # elsewhere refuses lossy ones at startup).
+            if f.name == "l2_serde" and (v or "").strip().lower() in ("", "none", "raw"):
+                v = "none"
+            out[f.name] = v
+        return out
 
     def namespace(self) -> str:
         """Stable namespace usable as a directory name / cache key prefix."""
@@ -282,6 +293,17 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         serde = switch_serde
     else:
         serde = (get("LMCACHE_L2_SERDE") or get("KVP_L2_SERDE") or "none").strip().lower()
+    # Advanced identity fields (review fix): these ARE read from the config
+    # files / environment -- they were declared on the dataclass but never
+    # populated, so two deployments differing only in LoRA / RoPE / multimodal
+    # / speculative settings silently shared one namespace. Optional: empty
+    # means "not applicable" (the dataclass default), a non-empty value
+    # changes the namespace.
+    rope_digest = get("KVP_ROPE_CONFIG_DIGEST")
+    if rope_digest and not _SHA64.match(rope_digest):
+        raise IdentityError(
+            f"KVP_ROPE_CONFIG_DIGEST must be 64 hex chars (sha256), got {rope_digest!r}"
+        )
     return CacheIdentity(
         model_id=get("KVP_MODEL_ID"),
         model_revision=get("KVP_MODEL_REVISION"),
@@ -297,6 +319,10 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         max_model_len=int(get("KVP_MAX_MODEL_LEN") or 0),
         chat_template_digest=get("KVP_CHAT_TEMPLATE_DIGEST"),
         namespace_hint=get("KVP_NAMESPACE_HINT"),
+        lora_adapters=get("KVP_LORA_ADAPTERS"),
+        multimodal_components=get("KVP_MULTIMODAL_COMPONENTS"),
+        rope_config_digest=rope_digest,
+        speculative_config=get("KVP_SPECULATIVE_CONFIG"),
         l2_serde=serde,
     )
 

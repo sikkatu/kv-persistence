@@ -191,12 +191,111 @@ def test_namespace_from_config_optional_fields_not_required():
 
 
 def test_l2_serde_part_of_identity():
-    """Changing the L2 serde must change the namespace (the file name does not
+    """Changing the L2 codec must change the namespace (the file name does not
     encode the serde, so sharing a root with a different serde would read data
-    with the wrong deserializer -- review round 13)."""
+    with the wrong deserializer -- review round 13). Review fix: "" / "none" /
+    "raw" all mean the SAME uncompressed mode and must share ONE namespace;
+    "zstd"/"lz4" must differ."""
     base = make_identity().namespace()
-    assert make_identity(l2_serde="fp8").namespace() != base
-    assert make_identity(l2_serde="none").namespace() != base
+    assert make_identity(l2_serde="none").namespace() == base, (
+        '"" and "none" are the same codec and MUST hash to the same namespace'
+    )
+    assert make_identity(l2_serde="raw").namespace() == base
+    assert make_identity(l2_serde="").namespace() == base
+    assert make_identity(l2_serde="zstd").namespace() != base
+    assert make_identity(l2_serde="lz4").namespace() != base
+    assert make_identity(l2_serde="zstd").namespace() != make_identity(
+        l2_serde="lz4"
+    ).namespace()
+
+
+def test_advanced_identity_fields_split_the_namespace():
+    """Review fix: lora_adapters / multimodal_components / rope_config_digest /
+    speculative_config must change namespace() AND lmcache_model_name() --
+    two deployments differing only in one of them must NOT share cached KV."""
+    base = make_identity()
+    for field, value in (
+        ("lora_adapters", "lora-a@rev1"),
+        ("multimodal_components", "vision-enc@rev2"),
+        ("rope_config_digest", "c" * 64),
+        ("speculative_config", "mtp-draft@rev3"),
+    ):
+        other = make_identity(**{field: value})
+        assert other.namespace() != base.namespace(), (
+            f"{field} must split the namespace"
+        )
+        assert other.lmcache_model_name("mimo") != base.lmcache_model_name("mimo"), (
+            f"{field} must split the LMCache model_name"
+        )
+
+
+def test_advanced_identity_fields_loaded_from_config(tmp_path, monkeypatch):
+    """The loader must READ these fields from the config files -- before the
+    fix they stayed empty no matter what the operator set (review P1)."""
+    for k in ("KVP_LORA_ADAPTERS", "KVP_MULTIMODAL_COMPONENTS",
+              "KVP_ROPE_CONFIG_DIGEST", "KVP_SPECULATIVE_CONFIG",
+              "LMCACHE_L2_SERDE", "USE_LOSSLESS_SERDE"):
+        monkeypatch.delenv(k, raising=False)
+    tmp = tmp_path / "identity.env"
+    tmp.write_text(
+        "KVP_MODEL_ID=m\n"
+        "KVP_MODEL_REVISION=" + "a" * 40 + "\n"
+        "KVP_TOKENIZER_NAME=t\n"
+        "KVP_TOKENIZER_REVISION=" + "b" * 40 + "\n"
+        "KVP_KV_CACHE_DTYPE=bf16\n"
+        "KVP_BLOCK_SIZE=16\n"
+        "KVP_NUM_KV_HEADS=8\n"
+        "KVP_HEAD_DIM=128\n"
+        "KVP_TP_SIZE=4\n"
+        "KVP_CONNECTOR=LMCacheMPConnector\n"
+        "KVP_CONNECTOR_VERSION=v1\n"
+        "KVP_MAX_MODEL_LEN=1024\n"
+        "KVP_CHAT_TEMPLATE_DIGEST=" + "c" * 64 + "\n"
+        "KVP_LORA_ADAPTERS=lora-a@rev1\n"
+        "KVP_MULTIMODAL_COMPONENTS=vision-enc@rev2\n"
+        "KVP_ROPE_CONFIG_DIGEST=" + "d" * 64 + "\n"
+        "KVP_SPECULATIVE_CONFIG=mtp-draft@rev3\n"
+    )
+    from kvpersist.identity import identity_from_env_files
+
+    ident = identity_from_env_files(str(tmp))
+    assert ident.lora_adapters == "lora-a@rev1"
+    assert ident.multimodal_components == "vision-enc@rev2"
+    assert ident.rope_config_digest == "d" * 64
+    assert ident.speculative_config == "mtp-draft@rev3"
+    # and each of them is in the namespace payload
+    canon = ident.canonical()
+    assert canon["lora_adapters"] == "lora-a@rev1"
+    assert canon["speculative_config"] == "mtp-draft@rev3"
+
+
+def test_rope_digest_must_be_well_formed(tmp_path, monkeypatch):
+    for k in ("LMCACHE_L2_SERDE", "USE_LOSSLESS_SERDE"):
+        monkeypatch.delenv(k, raising=False)
+    tmp = tmp_path / "identity.env"
+    tmp.write_text(
+        "KVP_MODEL_ID=m\n"
+        "KVP_MODEL_REVISION=" + "a" * 40 + "\n"
+        "KVP_TOKENIZER_NAME=t\n"
+        "KVP_TOKENIZER_REVISION=" + "b" * 40 + "\n"
+        "KVP_KV_CACHE_DTYPE=bf16\n"
+        "KVP_BLOCK_SIZE=16\n"
+        "KVP_NUM_KV_HEADS=8\n"
+        "KVP_HEAD_DIM=128\n"
+        "KVP_TP_SIZE=4\n"
+        "KVP_CONNECTOR=LMCacheMPConnector\n"
+        "KVP_CONNECTOR_VERSION=v1\n"
+        "KVP_MAX_MODEL_LEN=1024\n"
+        "KVP_CHAT_TEMPLATE_DIGEST=" + "c" * 64 + "\n"
+        "KVP_ROPE_CONFIG_DIGEST=not-a-sha\n"
+    )
+    from kvpersist.identity import IdentityError, identity_from_env_files
+
+    try:
+        identity_from_env_files(str(tmp))
+        raise AssertionError("malformed KVP_ROPE_CONFIG_DIGEST must be refused")
+    except IdentityError:
+        pass
 
 
 def test_identity_from_env_files_env_wins(tmp_path, monkeypatch):

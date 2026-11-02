@@ -131,13 +131,17 @@ Check with `bash scripts/budget-report.sh status` (fields `tmp_files` and
 --tmp --yes` (keeps every real cache file) or `purge --all --yes`.
 Both commands protect in-flight writes with TWO guards: an **active-write
 registry** (`kvpersist.tmp_guard`) — every store registers a marker before its
-tmp file is created and clears it after the atomic rename, so a registered
-in-flight write is never deleted no matter how long it runs — plus a stale
-window: `*.tmp.*` files modified within the last 15 minutes are skipped for
-writers that do not use the registry (e.g. a bare `lmcache server`). The
-registry is authoritative; the window is a fallback net. Markers left behind
-by a crashed writer are ignored and swept after an hour. Run the purge again
-later to sweep leftovers once writes have finished.
+tmp file is created and clears it after the atomic rename. Whether a marker is
+LIVE is decided by **process liveness**, not by age: the marker records
+`(pid, process start-time)`, and the writer counts as alive while that exact
+process exists (start-time guards against PID reuse). A registered in-flight
+write is therefore never deleted, however long it runs — a >1-hour write is
+still protected. If liveness cannot be determined (no /proc, unreadable
+marker) the marker is kept: safer to retain one tmp file too long than to
+delete a live store. Markers whose writer PROVABLY exited are swept after an
+hour; a heartbeat thread refreshes the marker while the store runs. As a
+second net, `*.tmp.*` files modified within the last 15 minutes are skipped
+for writers that do not use the registry (e.g. a bare `lmcache server`).
 
 ## Grafana shows no data
 The stack is passive until the cache service pushes telemetry. Start the cache

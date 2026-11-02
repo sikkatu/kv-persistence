@@ -9,7 +9,7 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(147 unit tests), architecture proven against the pinned vLLM build's source
+(157 unit tests), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -354,7 +354,38 @@ Telemetry is opt-in and off by default (`KVP_OTLP_ENDPOINT` /
 script is exercised for syntax; the live stack has NOT been brought up on the
 target host in this session** (no GPU host / Docker daemon reachable).
 
-## Provenance
+## Review round 16 fixes
+
+* **Active-write registry liveness (P1)**: `kvpersist.tmp_guard` no longer treats
+  a marker as dead by age. A marker records `(pid, process start-time)` and its
+  writer counts as alive while that exact process exists (start-time defeats PID
+  reuse). A registered in-flight write is never deleted however long it runs;
+  liveness is judged by `/proc/<pid>/stat`, and when the probe cannot decide
+  (no /proc, unreadable marker) the marker is KEPT — safer to retain one tmp
+  file too long than to delete a live store. Markers whose writer provably
+  exited are swept after an hour. A heartbeat thread refreshes the marker while
+  the store runs. Tests: `test_live_marker_protects_tmp_regardless_of_age`,
+  `test_stale_markers_are_ignored_and_swept`, `test_writer_alive_false_for_dead_process`.
+* **Advanced identity fields loaded (P1)**: `lora_adapters`,
+  `multimodal_components`, `rope_config_digest`, `speculative_config` were
+  declared but never read from the config — two deployments differing only in
+  LoRA/RoPE silently shared one namespace. `identity_from_env_files()` now reads
+  `KVP_LORA_ADAPTERS`, `KVP_MULTIMODAL_COMPONENTS`, `KVP_ROPE_CONFIG_DIGEST`
+  (64-hex enforced), `KVP_SPECULATIVE_CONFIG`; `setup-identity.sh` verifies them
+  and `verify-engine-identity.sh` formats-checks them. Empty is legal
+  ("not applicable"); a set value splits the namespace and `model_name`.
+* **`""` vs `"none"` namespace bug**: `l2_serde=""` and `l2_serde="none"` mean the
+  same raw codec but hashed into DIFFERENT namespaces. `canonical()` now
+  normalizes `""`/`"none"`/`"raw"` to one namespace; `zstd`/`lz4` stay distinct.
+* **Real dedup test hardened** (`tests/integration/test_l2_dedup_real.py`):
+  launched via `kvpersist.launch` (full patch chain), `_wait_quiet()` waits for
+  the L2 directory to be STABLE before measuring (async stores must finish), the
+  shared prefix files are asserted BYTE-IDENTICAL (size+mtime) after the second
+  request, and both conversations must still LOOKUP all chunks. New
+  `tests/integration/test_launch_registry.py` starts the server via
+  `kvpersist.launch`, confirms the `[kvp]` banners and registry dir, proves
+  `purge --tmp` keeps a LIVE-marker tmp file and sweeps unregistered leftovers,
+  and that completed stores clear their markers.
 
 * Commit hash of this report: run `git log -1 --format=%H` in the repository.
 * Push credentials are NOT stored in this repository (verified: zero

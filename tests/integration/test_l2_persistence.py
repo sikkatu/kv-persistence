@@ -285,21 +285,27 @@ def _wait_ready(proc: subprocess.Popen, http_port: int, log: Path,
 
 
 def _start_server(adapter: Path, zmq_port: int, http_port: int,
-                  log: Path, phase: str) -> subprocess.Popen:
+                  log: Path, phase: str, launcher: str = "salt") -> subprocess.Popen:
     """Start a real lmcache server subprocess; stdout+stderr go to `log`.
-
     The L2 data directory is NEVER wiped between phases -- the same directory
     is reused across the restart by design (that is the whole point).
 
-    Review round 15: the server is launched through
-    `kvpersist.salt_filename_patch` (the same launcher scripts/start-cache.sh
-    uses) so that cache_salt is part of the L2 file names. Without the patch
-    the upstream nixl_store_dynamic adapter leaks data across salts after a
-    restart (store salt=tenantA -> lookup salt=tenantB returned 4/4 chunks).
+    launcher:
+      "salt"  -- `kvpersist.salt_filename_patch` (cache_salt in file names;
+                 the historical default of this test suite).
+      "launch" -- `kvpersist.launch`, the FULL launcher used by
+                 scripts/start-cache.sh: salt patch + lossless serde
+                 registration + the tmp_guard active-write registry. Use this
+                 when the test must exercise the whole runtime patch chain.
+
+    Review round 15: without at least the salt patch the upstream
+    nixl_store_dynamic adapter leaks data across salts after a restart
+    (store salt=tenantA -> lookup salt=tenantB returned 4/4 chunks).
     """
     impl = str(Path(__file__).resolve().parents[2] / "implementation")
     env = dict(os.environ, PYTHONPATH=impl + os.pathsep + os.environ.get("PYTHONPATH", ""))
-    launch = [sys.executable, "-m", "kvpersist.salt_filename_patch"]
+    module = "kvpersist.launch" if launcher == "launch" else "kvpersist.salt_filename_patch"
+    launch = [sys.executable, "-m", module]
     cmd = launch + [
         "server",
         "--host", "127.0.0.1", "--port", str(zmq_port),

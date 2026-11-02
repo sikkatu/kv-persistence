@@ -1,22 +1,22 @@
 """Integration: REAL deduplication measurement against a live `lmcache server`.
 
-Review finding: the previous `test_dedup.py` only wrote bytes with plain Python
-functions and never touched LMCache -- it could not prove backend dedup. This
-test closes that gap: it drives the REAL MP protocol (the same client as
-`test_l2_persistence.py`) through a real `lmcache server` subprocess and
-measures the ACTUAL L2 files written by the `nixl_store_dynamic` adapter.
-
-Scenario (the review's requested one):
-  * two requests share a stable tokenized prefix and differ in the suffix;
-  * the shared prefix chunks are stored once (identical content => identical
-    content-derived chunk key => ONE file);
-  * the second request adds only its suffix chunk files on disk;
-  * the first request still LOOKUPs all of its chunks afterwards (no silent
-    eviction of the shared blocks by the second store).
+Review fixes over the first revision of this test:
+* the server is launched through `kvpersist.launch` (NOT the salt patch alone),
+  so the tmp_guard active-write registry and the lossless serde registration
+  run in the same process as the real data path;
+* `_wait_quiet()` waits for the L2 directory to become STABLE (unchanged file
+  set for several consecutive polls) instead of returning at the first count
+  -- async stores must all finish before measuring;
+* besides counting files, the test asserts the SHARED prefix files are
+  BYTE-IDENTICAL and UNCHANGED (same size, same mtime) after the second
+  request: a silently rewritten identical path would not change the file
+  count, so content stability is checked too;
+* both conversations must still LOOKUP all of their chunks afterwards.
 
 Runs only with `KVP_LIVE_LMCACHE=1` (pinned lmcache 0.5.3 + POSIX-SHM Linux
 host) -- same external prerequisite as the other live tests, see
-docs/benchmarks.md.
+docs/benchmarks.md. Without that flag this test SKIPS: a plain `pytest` run
+does NOT verify real backend dedup (honestly stated, per review).
 """
 
 import os
@@ -43,18 +43,35 @@ pytestmark = pytest.mark.skipif(
 # KV tensors from a fixed seed, so equal token ids always carry equal bytes.
 _PREFIX_TOKENS = 48
 _SUFFIX_TOKENS = 16  # exactly one chunk
+# Directory must be unchanged this many consecutive polls before measuring.
+_QUIET_POLLS = 5
+_QUIET_INTERVAL_S = 2
 
 
-def _wait_new_files(l2: Path, at_least: int, timeout_s: int = 60) -> list:
-    """Store is asynchronous -- poll the adapter's own output files."""
+def _snapshot(l2: Path) -> dict:
+    """name -> (size, mtime_ns) of every non-empty *.bin under l2."""
+    out = {}
+    for p in pers._l2_data_files(l2):
+        st = p.stat()
+        out[p.name] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def _wait_quiet(l2: Path, timeout_s: int = 120) -> dict:
+    """Wait until the L2 directory stops changing (all async stores done)."""
     deadline = time.time() + timeout_s
-    files: list = []
+    prev, stable = None, 0
     while time.time() < deadline:
-        files = pers._l2_data_files(l2)
-        if len(files) >= at_least:
-            return files
-        time.sleep(1)
-    return files
+        cur = _snapshot(l2)
+        if prev is not None and cur == prev:
+            stable += 1
+            if stable >= _QUIET_POLLS:
+                return cur
+        else:
+            stable = 0
+        prev = cur
+        time.sleep(_QUIET_INTERVAL_S)
+    return prev or {}
 
 
 def test_shared_prefix_chunks_stored_once_real_backend(tmp_path):
@@ -66,40 +83,58 @@ def test_shared_prefix_chunks_stored_once_real_backend(tmp_path):
     zmq_port, http_port = pers._free_port(), pers._free_port()
     server = None
     try:
-        server = pers._start_server(adapter, zmq_port, http_port, log, "dedup")
+        # launch through kvpersist.launch: salt patch + tmp_guard + serde
+        # registration all active in the real write path.
+        server = pers._start_server(
+            adapter, zmq_port, http_port, log, "dedup", launcher="launch"
+        )
         pers._wait_ready(server, http_port, log)
 
         client = LmcClient(
             f"tcp://127.0.0.1:{zmq_port}", "mimo-pro/dedup", instance_id=7100
         )
         try:
-            # Conversation A: prefix + suffix A (4 chunks total).
+            # ---- Conversation A: prefix + suffix A (4 chunks total) ----
             base = list(build_token_ids(seq_no=7, num_tokens=_PREFIX_TOKENS))
             tokens_a = base + list(build_token_ids(seq_no=8, num_tokens=_SUFFIX_TOKENS))
             status_a = client.store(tokens_a, "dedup-store-A")
             assert status_a is not None, "store of conversation A failed"
 
-            files_a = _wait_new_files(l2, at_least=4)
-            assert len(files_a) >= 4, (
+            snap_a = _wait_quiet(l2)
+            assert len(snap_a) >= 4, (
                 f"conversation A must write its 4 chunks to L2, got "
-                f"{len(files_a)} files: {[p.name for p in files_a]}"
+                f"{len(snap_a)} files: {sorted(snap_a)}"
             )
-            count_a = len(files_a)
 
-            # Conversation B: the SAME prefix + a different suffix.
+            # Identify the SHARED prefix chunk files: the first 3 chunks of A
+            # come from `base`, so they are the files NOT created for the
+            # suffix. We know B shares them -- they must survive unchanged.
+            names_a = set(snap_a)
+
+            # ---- Conversation B: SAME prefix + different suffix ----
             tokens_b = base + list(build_token_ids(seq_no=9, num_tokens=_SUFFIX_TOKENS))
             status_b = client.store(tokens_b, "dedup-store-B")
             assert status_b is not None, "store of conversation B failed"
 
-            files_b = _wait_new_files(l2, at_least=count_a + 1)
-            added = len(files_b) - count_a
-            assert added == 1, (
+            snap_b = _wait_quiet(l2)
+            added = set(snap_b) - names_a
+            assert len(added) == 1, (
                 "the shared 3-chunk prefix must NOT be stored twice: expected "
-                f"exactly 1 new L2 file for B's suffix, got {added} "
-                f"({[p.name for p in files_b]})"
+                f"exactly 1 new L2 file for B's suffix, got {len(added)} new "
+                f"({sorted(added)}); total now {len(snap_b)}"
             )
 
-            # The shared blocks must still serve the FIRST conversation.
+            # Every file that existed after A must be BYTE-IDENTICAL after B
+            # (same size, same mtime): a rewrite to the same path would keep
+            # the count unchanged but silently replace shared bytes.
+            for name, meta in snap_a.items():
+                assert snap_b.get(name) == meta, (
+                    f"shared file {name} was modified by B's store "
+                    f"({meta} -> {snap_b.get(name)}) -- shared blocks must "
+                    "stay untouched"
+                )
+
+            # Both conversations must still hit all of their chunks.
             hits_a = client.lookup_hits(tokens_a, "dedup-lookup-A")
             assert hits_a == 4, (
                 f"conversation A must still hit all 4 chunks after B was "
@@ -113,4 +148,5 @@ def test_shared_prefix_chunks_stored_once_real_backend(tmp_path):
         finally:
             client.close()
     finally:
-        pers._stop_server(server, log, "dedup") if server is not None else None
+        if server is not None:
+            pers._stop_server(server, log, "dedup")

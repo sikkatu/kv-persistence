@@ -124,6 +124,22 @@ require("KVP_TOKENIZER_REVISION", vals.get("KVP_TOKENIZER_REVISION", ""), r"^[0-
 require("KVP_CHAT_TEMPLATE_DIGEST", vals.get("KVP_CHAT_TEMPLATE_DIGEST", ""), r"^[0-9a-f]{64}$", "a 64-hex sha256")
 require("KVP_CONNECTOR", vals.get("KVP_CONNECTOR", ""), None, "a connector class name")
 require("KVP_CONNECTOR_VERSION", vals.get("KVP_CONNECTOR_VERSION", ""), None, "a connector version tag")
+# Advanced identity fields (review fix): OPTIONAL -- empty is legal (means
+# "not applicable"), but a set value must be well-formed and must be part of
+# the cache namespace (kvpersist.identity reads them now).
+for _k, _pat, _why in (
+    ("KVP_ROPE_CONFIG_DIGEST", r"^[0-9a-f]{64}$", "a 64-hex sha256"),
+    ("KVP_LORA_ADAPTERS", None, None),
+    ("KVP_MULTIMODAL_COMPONENTS", None, None),
+    ("KVP_SPECULATIVE_CONFIG", None, None),
+):
+    _v = vals.get(_k, "")
+    if _v and _pat and not re.match(_pat, _v):
+        format_checks.append((_k, _v, "MALFORMED (want %s)" % _why))
+    elif _v:
+        format_checks.append((_k, _v, _v))
+    else:
+        format_checks.append((_k, "", "(unset -- not applicable, does not split namespace)"))
 
 engine_checks = []   # (label, expect, found) -- found from engine/config.json
 engine_checks.append(("max_model_len", vals.get("KVP_MAX_MODEL_LEN"), arg(cmd, "--max-model-len")))

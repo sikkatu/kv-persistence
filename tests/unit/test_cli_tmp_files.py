@@ -188,16 +188,79 @@ def test_registry_unregister_frees_the_file(tmp_path):
 
 
 def test_stale_markers_are_ignored_and_swept(tmp_path):
+    """A marker whose writer PROVABLY exited is ignored (its tmp is deletable)
+    and swept after the grace period. Liveness is judged by (pid, start-time),
+    not by age (review fix: a write may legitimately run for hours)."""
     from kvpersist import tmp_guard
 
     root = _make_root(tmp_path)
-    marker = tmp_guard.register_write(str(root), "m_0.bin")
-    assert marker is not None
+    reg = tmp_guard.registry_dir(str(root))
+    Path(reg).mkdir(parents=True, exist_ok=True)
+    # A marker for a process that certainly does not exist.
+    marker = Path(reg) / "999999-12345-abcdef0123456789.active"
+    marker.write_text("m_0.bin\n0\n")
+
+    # Dead writer -> its tmp is NOT protected.
+    assert tmp_guard.active_final_names(str(root)) == set()
+    # Fresh dead marker: grace period, not swept yet.
+    assert tmp_guard.sweep_stale_markers(str(root)) == 0
+    assert marker.exists()
+    # After the grace period it is swept.
     old = time.time() - tmp_guard.STALE_MARKER_SEC - 60
     os.utime(marker, (old, old))
-
-    # Ignored: its writer is gone.
-    assert tmp_guard.active_final_names(str(root)) == set()
-    # And swept on demand.
     assert tmp_guard.sweep_stale_markers(str(root)) == 1
-    assert Path(marker).exists() is False
+    assert marker.exists() is False
+
+
+def test_live_marker_protects_tmp_regardless_of_age(tmp_path, monkeypatch):
+    """Review fix: a REGISTERED write is protected for however long it runs --
+    the marker's age must NOT matter when the writer process is alive."""
+    from kvpersist import tmp_guard
+
+    root = _make_root(tmp_path)
+    final_name = "m_00000000_0_" + "a" * 64 + ".bin"
+    inflight = _touch(root, final_name + ".tmp." + "f" * 32, size=100,
+                      age_sec=3600)  # old tmp file
+
+    marker = tmp_guard.register_write(str(root), final_name)
+    assert marker is not None
+    # Age the marker far beyond the stale window: the writer is this test's
+    # own process, which is ALIVE -- so the write must stay protected.
+    ancient = time.time() - tmp_guard.STALE_MARKER_SEC - 600
+    os.utime(marker, (ancient, ancient))
+
+    try:
+        assert tmp_guard.active_final_names(str(root)) == {final_name}, (
+            "a live writer's marker must protect its file regardless of age"
+        )
+        monkeypatch.setenv("KVP_CACHE_ROOT", str(root))
+        monkeypatch.setenv("KVP_CACHE_BUDGET_GB", "100")
+        rc = cmd_purge(_Args(tmp=True, yes=True))
+        assert rc == 0
+        assert inflight.exists() is True, (
+            "an OLD tmp file of a LIVE writer must never be deleted"
+        )
+    finally:
+        tmp_guard.unregister_write(marker)
+
+
+def test_writer_alive_false_for_dead_process():
+    from kvpersist import tmp_guard
+
+    # PID 2^22 is above the default Linux pid_max -> cannot exist. On a
+    # Linux host with /proc the probe reports "provably dead" (None), so the
+    # marker is NOT protected; elsewhere the probe is "unknown" and safety
+    # keeps the marker.
+    probe = tmp_guard._proc_start_time(4194304)
+    if probe is None:  # /proc present and the process is gone
+        assert tmp_guard.writer_alive(4194304, 12345) is False
+    else:  # "unknown" -> cannot prove death -> keep
+        assert tmp_guard.writer_alive(4194304, 12345) is True
+
+    # A live process with the right start-time is alive.
+    me = os.getpid()
+    start = tmp_guard._proc_start_time(me)
+    if isinstance(start, int):  # /proc available (Linux)
+        assert tmp_guard.writer_alive(me, start) is True
+        # Same PID but a DIFFERENT start-time = reused PID -> dead.
+        assert tmp_guard.writer_alive(me, start + 1) is False
