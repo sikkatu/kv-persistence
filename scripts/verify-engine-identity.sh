@@ -37,6 +37,63 @@ CONFIG_BASE="$ROOT/configs/$_model_cfg/identity.env"
 # SAME effective values setup-identity.sh wrote (not the stale tracked file).
 CONFIG="$(mktemp /tmp/kvp-identity-XXXXXX.env)"
 trap 'rm -f "$CONFIG"' EXIT
+# MODEL_DIR is resolved EARLY: the shared effective-identity resolver below
+# needs it to resolve KV_CACHE_DTYPE=auto via config.json.
+MODEL_DIR="${MODEL_DIR:-${KVP_MODEL_DIR:-}}"
+# Review fix (round 23): fold the EFFECTIVE engine config into the KVP_* env
+# names BEFORE the merge's env-wins pass, using the SAME shared resolver the
+# namespace derivation uses (kvpersist.cli effective-identity). The recipe
+# launchers configure the engine with operator names (KV_CACHE_DTYPE,
+# MAX_MODEL_LEN, TP_SIZE, SERVED_MODEL_NAME) and derive the namespace from
+# them -- without this folding a non-default recipe run (fp8, 524288, ...)
+# verified its namespace against stale identity.env pins and was blocked by
+# MISMATCH. Explicit KVP_* in the operator's environment still wins (the
+# env-wins loop below checks the environment first).
+_eff_env=""
+if [ -f "$ROOT/implementation/kvpersist/cli.py" ]; then
+  _eff_env="$(PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m kvpersist.cli effective-identity ${MODEL_DIR:+--model-dir "$MODEL_DIR"} 2>/dev/null || true)"
+fi
+if [ -z "$_eff_env" ]; then
+  # Fallback: kvpersist is not importable from here (recipe-only checkout).
+  # Same resolution rules: auto -> model dtype (torch_dtype, then dtype);
+  # moe_router_dtype is deliberately NOT a fallback (router dtype != KV dtype).
+  _eff_env="$(python3 - "${MODEL_DIR:-}" <<'PYEFF'
+import json, os, sys
+def pick(*names, default=""):
+    for n in names:
+        v = os.environ.get(n, "").strip()
+        if v:
+            return v
+    return default
+kv_dtype = pick("KV_CACHE_DTYPE", default="auto").lower()
+model_dir = sys.argv[1] if len(sys.argv) > 1 else ""
+if kv_dtype == "auto" and model_dir:
+    try:
+        cfg = json.load(open(os.path.join(model_dir, "config.json")))
+    except Exception:
+        cfg = {}
+    for key in ("torch_dtype", "dtype"):
+        v = cfg.get(key)
+        if isinstance(v, str) and v.strip():
+            kv_dtype = v.strip().lower()
+            break
+print("KVP_SERVED_MODEL_NAME=%s" % pick("SERVED_MODEL_NAME", default="mimo-pro"))
+print("KVP_KV_CACHE_DTYPE=%s" % kv_dtype)
+print("KVP_MAX_MODEL_LEN=%s" % pick("MAX_MODEL_LEN", default="1048576"))
+print("KVP_BLOCK_SIZE=%s" % pick("KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
+print("KVP_TP_SIZE=%s" % pick("TP_SIZE", default="4"))
+PYEFF
+)"
+fi
+while IFS='=' read -r _eff_k _eff_v; do
+  case "$_eff_k" in
+    KVP_SERVED_MODEL_NAME|KVP_KV_CACHE_DTYPE|KVP_MAX_MODEL_LEN|KVP_BLOCK_SIZE|KVP_TP_SIZE)
+      [ -n "$_eff_v" ] && export "$_eff_k=$_eff_v" ;;
+  esac
+done <<EOF
+$_eff_env
+EOF
 python3 - "$CONFIG_BASE" "$CONFIG_LIVE" "$CONFIG" <<'PY'
 import os, sys
 base_path, live_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -90,7 +147,7 @@ with open(out_path, "w") as fh:
     for k, v in vals.items():
         fh.write(f"{k}={v}\n")
 PY
-MODEL_DIR="${MODEL_DIR:-${KVP_MODEL_DIR:-}}"
+
 python3 - "$ROOT" "$CONFIG" "$CONTAINER" "$MODEL_DIR" "$CHECK_CONFIG_ONLY" <<'PYEOF'
 import json, re, subprocess, sys
 root, config, container, model_dir = sys.argv[1:5]

@@ -9,9 +9,9 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(152 unit tests + 19 more offline config/docs tests = 171 offline collected,
-169 passed + 2 skipped; 186 collected total including the live-`lmcache`
-integration (10) and recovery (5) tests; plus 304 passed of 309 collected
+(155 unit tests + 19 more offline config/docs tests = 174 offline collected,
+172 passed + 2 skipped; 189 collected total including the live-`lmcache`
+integration (10) and recovery (5) tests; plus 306 passed of 311 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
@@ -596,14 +596,24 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 152 unit tests (`tests/unit`, 150 passed + 2 skipped),
-19 top-level offline tests, 171 offline collected (169 passed + 2 skipped),
-186 collected total (plus 304 passed of 309 collected in the
+numbers, verified: 155 unit tests (`tests/unit`, 153 passed + 2 skipped),
+19 top-level offline tests, 174 offline collected (172 passed + 2 skipped),
+189 collected total (plus 306 passed of 311 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
 **Port naming across repos (review note)**: three variables name one endpoint
 **TP naming across repos + TP != 4 is UNTESTED (review note)**: `TP_SIZE`
+**Shared effective-identity resolver (review round 23)**: the effective
+engine config (auto -> model dtype, TP/block-size/served-model-name
+defaults) is resolved by ONE code path -- `python3 -m kvpersist.cli
+effective-identity` -- used by the recipe launchers (namespace derivation
+and `live/kvp-effective-identity.env`), `run-vllm-with-persist.sh` and the
+identity gate itself. The gate folds the recipe's operator names
+(KV_CACHE_DTYPE, MAX_MODEL_LEN, TP_SIZE, SERVED_MODEL_NAME) into the
+comparison the same way, so a non-default launch (fp8, 524288, TP!=4)
+verifies clean instead of being blocked by MISMATCH against stale pins.
+
 (the recipe) and `KVP_TP_SIZE` (kv-persistence) are two names for ONE value
 -- the tensor-parallel size. Keep them consistent when overriding (both
 feed the cache-identity namespace and `--tensor-parallel-size`). A hotsplit

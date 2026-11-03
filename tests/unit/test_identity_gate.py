@@ -15,6 +15,8 @@ the bug survived review). It must:
 """
 from __future__ import annotations
 
+import os
+import sys
 import re
 import shutil
 import subprocess
@@ -245,3 +247,76 @@ def test_postlaunch_auto_dtype_resolves_to_model_dtype(tmp_path, _cleanup_local,
         f"'auto' must resolve to the model dtype and pass, got {result.returncode}"
         f"\n{result.stdout}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 23: shared effective-identity resolver (recipe operator names).
+# ---------------------------------------------------------------------------
+
+def test_operator_env_names_resolve_to_effective_values(tmp_path, _cleanup_local, _stub_env):
+    """Review (round 23): the recipe launchers configure the engine with
+    KV_CACHE_DTYPE / MAX_MODEL_LEN / TP_SIZE / SERVED_MODEL_NAME and derive the
+    cache namespace from them. The manual gate run must compare the container
+    args against the SAME effective values -- a non-default run (fp8, 524288,
+    TP=2) must PASS, not be blocked by MISMATCH against the file pins."""
+    _write_config(tmp_path)
+    args = BASE_ARGS.replace("1048576", "524288").replace("bfloat16", "fp8").replace(
+        "--tensor-parallel-size|4", "--tensor-parallel-size|2")
+    result = _run_gate(_stub_env, args, {
+        "KV_CACHE_DTYPE": "fp8",
+        "MAX_MODEL_LEN": "524288",
+        "TP_SIZE": "2",
+        "SERVED_MODEL_NAME": "my-dep",
+    })
+    assert result.returncode == 0, (
+        "a non-default recipe-style run (fp8 + 524288 + tp2) must verify clean "
+        f"against its own effective values, got exit {result.returncode}\n"
+        f"stdout:\n{result.stdout}"
+    )
+
+
+def test_operator_names_consistent_with_namespace_resolver(tmp_path):
+    """The shared resolver (kvpersist.cli effective-identity) must be the SINGLE
+    source of truth: its output is what the recipe launchers hash the namespace
+    from AND what the gate compares against. Directly verify the CLI output
+    reflects the operator names."""
+    cli = ROOT / "implementation" / "kvpersist" / "cli.py"
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "KV_CACHE_DTYPE": "fp8",
+        "MAX_MODEL_LEN": "524288",
+        "TP_SIZE": "2",
+        "SERVED_MODEL_NAME": "my-dep",
+        "PYTHONPATH": str(ROOT / "implementation"),
+    }
+    out = subprocess.run(
+        [sys.executable, "-m", "kvpersist.cli", "effective-identity",
+         "--model-dir", str(tmp_path)],
+        capture_output=True, text=True, timeout=30, env=env,
+    )
+    assert out.returncode == 0, out.stderr
+    lines = dict(l.split("=", 1) for l in out.stdout.splitlines() if "=" in l)
+    assert lines.get("KVP_KV_CACHE_DTYPE") == "fp8", lines
+    assert lines.get("KVP_MAX_MODEL_LEN") == "524288", lines
+    assert lines.get("KVP_TP_SIZE") == "2", lines
+    assert lines.get("KVP_SERVED_MODEL_NAME") == "my-dep", lines
+
+
+def test_operator_names_auto_resolves_via_shared_code(tmp_path):
+    """KV_CACHE_DTYPE=auto must resolve to the model dtype through the shared
+    code (config.json), matching what the recipe launchers hash."""
+    import json as _json
+    (tmp_path / "config.json").write_text(_json.dumps({"torch_dtype": "bfloat16"}))
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "KV_CACHE_DTYPE": "auto",
+        "PYTHONPATH": str(ROOT / "implementation"),
+    }
+    out = subprocess.run(
+        [sys.executable, "-m", "kvpersist.cli", "effective-identity",
+         "--model-dir", str(tmp_path)],
+        capture_output=True, text=True, timeout=30, env=env,
+    )
+    assert out.returncode == 0, out.stderr
+    lines = dict(l.split("=", 1) for l in out.stdout.splitlines() if "=" in l)
+    assert lines.get("KVP_KV_CACHE_DTYPE") == "bfloat16", lines

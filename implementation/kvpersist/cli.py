@@ -429,6 +429,12 @@ def main(argv=None) -> int:
     q = sub.add_parser("quota", help="show or set per-namespace quota")
     q.add_argument("--set-namespace")
     q.add_argument("--gb", type=float)
+    ei = sub.add_parser("effective-identity",
+                        help="print the effective engine identity (KVP_* lines) from "
+                             "the environment; shared resolver for the launchers "
+                             "and the identity gate")
+    ei.add_argument("--model-dir", default="",
+                    help="local model dir (resolves KV_CACHE_DTYPE=auto via config.json)")
     mn = sub.add_parser("model-name",
                         help="print the LMCache model_name enforcing the identity namespace")
     mn.add_argument("--discriminator", default="",
@@ -437,7 +443,8 @@ def main(argv=None) -> int:
     try:
         return {"status": cmd_status, "purge": cmd_purge, "quota": cmd_quota,
                 "free": cmd_free, "emergency-evict": cmd_emergency_evict,
-                "model-name": cmd_model_name}[args.cmd](args)
+                "model-name": cmd_model_name,
+                "effective-identity": cmd_effective_identity}[args.cmd](args)
     except BudgetError as exc:
         print(f"budget error: {exc}", file=sys.stderr)
         return 1
@@ -544,6 +551,62 @@ def cmd_emergency_evict(args):
         "threshold_gb": threshold_gb,
     }, indent=2))
     return 0 if du2.free / (1 << 30) >= threshold_gb else 1
+
+
+def resolve_effective_identity(model_dir: str = "") -> dict:
+    """Resolve the EFFECTIVE engine identity from the environment (review 23).
+
+    Single source of truth for every consumer:
+      * the recipe launchers (namespace via `model-name`, and the env file they
+        persist for the manual verify-engine-identity.sh run),
+      * run-vllm-with-persist.sh,
+      * the identity gate itself (via the exported KVP_* names).
+
+    Reads the operators' usual knobs (KV_CACHE_DTYPE / MAX_MODEL_LEN /
+    KV_PERSIST_BLOCK_SIZE / TP_SIZE / SERVED_MODEL_NAME) and the already-prefixed
+    KVP_* forms (KVP_* wins, so a consumer can pre-pin a value). `auto` for the
+    KV dtype is resolved to the MODEL's dtype from <model_dir>/config.json
+    (torch_dtype, then dtype; moe_router_dtype is deliberately NOT a fallback --
+    that is the ROUTER dtype, not the KV dtype).
+    """
+    def pick(*names: str, default: str = "") -> str:
+        for n in names:
+            v = os.environ.get(n, "").strip()
+            if v:
+                return v
+        return default
+    kv_dtype = pick("KVP_KV_CACHE_DTYPE", "KV_CACHE_DTYPE", default="auto").lower()
+    if kv_dtype == "auto" and model_dir:
+        try:
+            cfg = json.load(open(os.path.join(model_dir, "config.json")))
+        except Exception:
+            cfg = {}
+        for key in ("torch_dtype", "dtype"):
+            v = cfg.get(key)
+            if isinstance(v, str) and v.strip():
+                kv_dtype = v.strip().lower()
+                break
+    return {
+        "KVP_SERVED_MODEL_NAME": pick("KVP_SERVED_MODEL_NAME", "SERVED_MODEL_NAME",
+                                      default="mimo-pro"),
+        "KVP_KV_CACHE_DTYPE": kv_dtype,
+        "KVP_MAX_MODEL_LEN": pick("KVP_MAX_MODEL_LEN", "MAX_MODEL_LEN",
+                                  default="1048576"),
+        "KVP_BLOCK_SIZE": pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE",
+                               default="16"),
+        "KVP_TP_SIZE": pick("KVP_TP_SIZE", "TP_SIZE", default="4"),
+    }
+
+
+def cmd_effective_identity(args) -> int:
+    """Print the effective engine identity as `KVP_X=value` lines (shell-safe:
+    values contain no spaces or quotes). Consumers `source` this output or hand
+    it to `python3 -m kvpersist.cli model-name` via the environment so namespace
+    derivation and the identity gate always see the SAME values."""
+    eff = resolve_effective_identity(args.model_dir)
+    for k, v in eff.items():
+        print(f"{k}={v}")
+    return 0
 
 
 def cmd_model_name(args) -> int:

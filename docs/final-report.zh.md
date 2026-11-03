@@ -6,9 +6,9 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（152 个单元测试 + 19 个离线配置/文档测试 = 171 个离线收集，
-169 通过 + 2 跳过；共收集 186 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
-另有伴生仓库 `sikkatu/recipes` 304 通过 / 309 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
+实现已完成，离线测试全绿（155 个单元测试 + 19 个离线配置/文档测试 = 174 个离线收集，
+172 通过 + 2 跳过；共收集 189 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+另有伴生仓库 `sikkatu/recipes` 306 通过 / 311 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
 上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
@@ -361,13 +361,21 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：152 个单元测试（150 通过 + 2 跳过），19 个离线配置/文档测试，
-171 个离线收集（169 通过 + 2 跳过），共收集 186 个（另有伴生仓库 `sikkatu/recipes` 304 通过 / 309 收集；
+**测试计数**：此前的数字已过时。实际：155 个单元测试（153 通过 + 2 跳过），19 个离线配置/文档测试，
+174 个离线收集（172 通过 + 2 跳过），共收集 189 个（另有伴生仓库 `sikkatu/recipes` 306 通过 / 311 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
 **端口命名**：三个变量指向同一端点 —— 已在 *配方集成*（EN/RU/ZH）与配方 README
 **TP 命名跨仓库一致性、且 TP != 4 未经测试（评审备注）**：`TP_SIZE`（配方）
+**共享的有效标识解析器（rev. 23）**：引擎的有效配置（auto -> 模型 dtype、
+TP/block-size/served-model-name 默认值）由唯一代码路径解析——
+`python3 -m kvpersist.cli effective-identity`——被配方启动器（namespace 与
+`live/kvp-effective-identity.env`）、`run-vllm-with-persist.sh` 和标识门禁
+共同使用。门禁以同样方式折叠配方的运维变量名（KV_CACHE_DTYPE、
+MAX_MODEL_LEN、TP_SIZE、SERVED_MODEL_NAME），因此非默认启动（fp8、
+524288、TP!=4）能干净通过验证，而不会因过期 pin 的 MISMATCH 被阻塞。
+
 与 `KVP_TP_SIZE`（kv-persistence）是同一个值——张量并行数——的两个名字。
 覆盖时请保持一致（两者都进入缓存命名空间和 `--tensor-parallel-size`）。
 非 TP=4 的 hotsplit 运行未经测试：`numa_bind.py` 的 GPU 映射示例按 4 卡计算，
