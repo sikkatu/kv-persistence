@@ -103,3 +103,145 @@ def test_gate_env_parsing_matches_other_loaders(tmp_path, _cleanup_local):
         f"same way as env.sh / the Python loader, got exit {result.returncode}\n"
         f"stdout:\n{result.stdout}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Post-launch (container-args) tests with a stub docker (review round 22).
+# The blocking connector bug lived in this branch and no test reached it.
+# ---------------------------------------------------------------------------
+
+DOCKER_STUB = """#!/usr/bin/env bash
+case "$1" in
+  inspect)
+    if [ -n "${STUB_CMD_ARGS:-}" ]; then
+      python3 -c 'import json,os; print(json.dumps(os.environ["STUB_CMD_ARGS"].split("|")))'
+    else
+      cat <<'JSON'
+["--model","/models/x","--max-model-len","1048576","--tensor-parallel-size","4","--kv-cache-dtype","bfloat16","--block-size","16","--kv-transfer-config","{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\"}"]
+JSON
+    fi
+    exit 0 ;;
+  logs) echo ""; exit 0 ;;
+esac
+exit 0
+"""
+
+KVTC = ('{"kv_connector":"LMCacheMPConnector",'
+        '"kv_connector_module_path":"lmcache.integration.vllm.lmcache_mp_connector",'
+        '"kv_role":"kv_both"}')
+BASE_ARGS = ("--model|/models/x|--max-model-len|1048576|--tensor-parallel-size|4|"
+             "--kv-cache-dtype|bfloat16|--block-size|16|--kv-transfer-config|" + KVTC)
+
+
+@pytest.fixture()
+def _stub_env(tmp_path):
+    """A stub docker on PATH + a model dir whose config.json matches the pins."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    docker = bindir / "docker"
+    docker.write_text(DOCKER_STUB)
+    docker.chmod(0o755)
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text(
+        '{"torch_dtype":"bfloat16","num_key_value_heads":8,"head_dim":128}'
+    )
+    import os
+    env = os.environ.copy()
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["MODEL_DIR"] = str(model)
+    # Clear any KVP_* overrides the caller's shell may carry -- the pins in
+    # identity.env(.local) are the comparison baseline for these tests.
+    for k in list(env):
+        if k.startswith("KVP_"):
+            del env[k]
+    return env
+
+
+def _run_gate(env, cmd_args, extra=None):
+    import os
+    e = env.copy()
+    e["STUB_CMD_ARGS"] = cmd_args
+    e.update(extra or {})
+    return subprocess.run(
+        ["bash", str(GATE), "test-container"],
+        capture_output=True, text=True, timeout=60, env=e,
+    )
+
+
+def test_postlaunch_args_match_pins_passes(tmp_path, _cleanup_local, _stub_env):
+    """BLOCKING-BUG regression (round 22): when the container args EQUAL the
+    identity pins (including the full --kv-transfer-config JSON), the
+    post-launch gate must PASS. It used to exit 4 forever because the
+    connector check compared the whole JSON against the short pin string."""
+    _write_config(tmp_path)
+    result = _run_gate(_stub_env, BASE_ARGS)
+    assert result.returncode == 0, (
+        "post-launch gate must pass when args == pins, got exit "
+        f"{result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_postlaunch_connector_in_json_is_accepted(tmp_path, _cleanup_local, _stub_env):
+    """The connector pin must match when PRESENT anywhere in the
+    --kv-transfer-config JSON (review round 22: the found value must be the
+    pin, not the JSON)."""
+    _write_config(tmp_path)
+    result = _run_gate(_stub_env, BASE_ARGS)
+    assert result.returncode == 0
+    assert "connector: identity=LMCacheMPConnector" in result.stdout
+
+
+def test_postlaunch_wrong_connector_is_mismatch(tmp_path, _cleanup_local, _stub_env):
+    """A --kv-transfer-config that does NOT reference the pinned connector
+    must be a MISMATCH (exit 4)."""
+    _write_config(tmp_path)
+    bad = BASE_ARGS.replace("LMCacheMPConnector", "WrongConnector")
+    result = _run_gate(_stub_env, bad)
+    assert result.returncode == 4, (
+        f"a wrong connector must be exit 4, got {result.returncode}\n{result.stdout}"
+    )
+    assert "connector" in result.stdout
+
+
+def test_postlaunch_max_model_len_override_needs_env(tmp_path, _cleanup_local, _stub_env):
+    """A changed engine arg is a MISMATCH against the file pins (safe miss),
+    and passes once the operator exports the matching KVP_* override -- the
+    documented env-wins precedence (review round 22)."""
+    _write_config(tmp_path)
+    changed = BASE_ARGS.replace("1048576", "524288")
+    result = _run_gate(_stub_env, changed)
+    assert result.returncode == 4, (
+        f"a changed --max-model-len must mismatch the file pins, got {result.returncode}"
+    )
+    result2 = _run_gate(_stub_env, changed, {"KVP_MAX_MODEL_LEN": "524288"})
+    assert result2.returncode == 0, (
+        f"KVP_MAX_MODEL_LEN=524288 must make the gate pass (env wins), got "
+        f"{result2.returncode}\n{result2.stdout}"
+    )
+
+
+def test_postlaunch_dtype_override_needs_env(tmp_path, _cleanup_local, _stub_env):
+    """Same contract for kv-cache dtype: fp8 vs the bfloat16 pin is a MISMATCH
+    unless the operator exports KVP_KV_CACHE_DTYPE=fp8 (review round 22)."""
+    _write_config(tmp_path)
+    changed = BASE_ARGS.replace("bfloat16", "fp8")
+    result = _run_gate(_stub_env, changed)
+    assert result.returncode == 4
+    result2 = _run_gate(_stub_env, changed, {"KVP_KV_CACHE_DTYPE": "fp8"})
+    assert result2.returncode == 0, (
+        f"KVP_KV_CACHE_DTYPE=fp8 must make the gate pass (env wins), got "
+        f"{result2.returncode}\n{result2.stdout}"
+    )
+
+
+def test_postlaunch_auto_dtype_resolves_to_model_dtype(tmp_path, _cleanup_local, _stub_env):
+    """--kv-cache-dtype auto is resolved to the model's dtype (config.json),
+    so an auto launch of a bfloat16 model passes against the bfloat16 pin."""
+    _write_config(tmp_path)
+    changed = BASE_ARGS.replace("bfloat16", "auto")
+    result = _run_gate(_stub_env, changed)
+    assert result.returncode == 0, (
+        f"'auto' must resolve to the model dtype and pass, got {result.returncode}"
+        f"\n{result.stdout}"
+    )

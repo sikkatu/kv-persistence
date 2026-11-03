@@ -58,6 +58,35 @@ CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 #  cache identity, so a dtype change is a cache MISS.
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"
+# Review fix (round 22): export the EFFECTIVE engine settings as KVP_* so the
+# identity gate compares the container args against the SAME values this
+# launcher uses, not against stale file pins. `auto` is resolved to the model's
+# dtype first (config.json), exactly like the recipe KV_PERSIST=1 branch. The
+# gate honours "env wins over files" (like scripts/env.sh and the Python
+# loader), so these exports make MAX_MODEL_LEN=524288 / KV_CACHE_DTYPE=fp8
+# launches verify clean instead of always MISMATCHing the pinned identity.
+KVP_KV_CACHE_DTYPE="$KV_CACHE_DTYPE"
+if [ "$KVP_KV_CACHE_DTYPE" = "auto" ]; then
+  KVP_KV_CACHE_DTYPE="$(python3 - "$MODEL_DIR" <<'PYPY'
+import json, os, sys
+try:
+    cfg = json.load(open(os.path.join(sys.argv[1], "config.json")))
+except Exception:
+    print("auto")
+    raise SystemExit(0)
+for key in ("torch_dtype", "dtype"):
+    v = cfg.get(key)
+    if isinstance(v, str) and v.strip():
+        print(v.strip().lower())
+        raise SystemExit(0)
+print("auto")
+PYPY
+)"
+fi
+export KVP_KV_CACHE_DTYPE
+export KVP_MAX_MODEL_LEN="$MAX_MODEL_LEN"
+export KVP_BLOCK_SIZE="${KVP_BLOCK_SIZE:-16}"
+export KVP_TP_SIZE="${KVP_TP_SIZE:-4}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"; GPU_UTIL="${GPU_UTIL:-0.85}"
@@ -164,7 +193,7 @@ if [ "$PERSIST" = "true" ]; then
   # repos agreed only by accident of identical defaults. `auto` is RESOLVED
   # first (config.json -> the model's dtype), so an `auto` launch hashes the
   # same as an explicit-dtype launch of that model.
-  KV_DTYPE_EFF="$KV_CACHE_DTYPE"
+  KV_DTYPE_EFF="$KVP_KV_CACHE_DTYPE"
   if [ "$KV_DTYPE_EFF" = "auto" ]; then
     KV_DTYPE_EFF="$(python3 - "$MODEL_DIR" <<'PYPY'
 import json, os, sys

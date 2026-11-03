@@ -76,6 +76,16 @@ for path in (base_path, live_path):
                 vals[kv[0]] = kv[1]
     except FileNotFoundError:
         pass
+# Review fix (round 22): the documented precedence is "env wins over files"
+# (scripts/env.sh _kvp_load_env, kvpersist.config.load_config and
+# identity_from_env_files all honour it). The gate read ONLY the files, so an
+# operator override like MAX_MODEL_LEN=524288 or KV_CACHE_DTYPE=fp8 changed
+# the NAMESPACE while the gate still compared the container args against the
+# stale file pins -> guaranteed MISMATCH. Exported KVP_* vars now override
+# the file values here too.
+for k in list(vals):
+    if k in os.environ:
+        vals[k] = os.environ[k].strip()
 with open(out_path, "w") as fh:
     for k, v in vals.items():
         fh.write(f"{k}={v}\n")
@@ -248,8 +258,13 @@ elif kvtc == "MISSING":
     # MISMATCH when the identity pins a connector.
     connector_seen = "MISSING" if want_conn else "(none, and none pinned)"
 else:
+    # Review fix (round 22, blocking): on a match, report the PIN (what we
+    # compare against), not the whole --kv-transfer-config JSON. The old code
+    # put the full JSON into `found`, which then never equaled the short
+    # `KVP_CONNECTOR=LMCacheMPConnector` pin -- the post-launch gate ALWAYS
+    # returned exit 4 and the launcher refused to start with cache attached.
     connector_seen = (
-        kvtc if (want_conn and want_conn in kvtc)
+        want_conn if (want_conn and want_conn in kvtc)
         else f"--kv-transfer-config does not reference {want_conn!r}"
     )
 engine_checks.append(("connector", want_conn, connector_seen))

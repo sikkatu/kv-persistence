@@ -9,12 +9,11 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(144 unit tests + 34 more offline integration/config tests = 163 passed,
-2 skipped; 180 collected total including the live-`lmcache` integration
-tests; plus 304 passed of 309 collected in the companion `sikkatu/recipes`
-(skips are environment-dependent: the count excludes torch-only tests on
-hosts without torch)
-repo), architecture proven against the pinned vLLM build's source
+(152 unit tests + 19 more offline config/docs tests = 171 offline collected,
+169 passed + 2 skipped; 186 collected total including the live-`lmcache`
+integration (10) and recovery (5) tests; plus 304 passed of 309 collected
+in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
+e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
 evidence) are scripted and ready (`scripts/test-recovery.sh`,
 `scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
@@ -597,12 +596,20 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 144 unit tests (`tests/unit`), 163 passed + 2 skipped in the
-offline suite, 180 collected total (plus 304 passed of 309 collected in the
+numbers, verified: 152 unit tests (`tests/unit`, 150 passed + 2 skipped),
+19 top-level offline tests, 171 offline collected (169 passed + 2 skipped),
+186 collected total (plus 304 passed of 309 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
 **Port naming across repos (review note)**: three variables name one endpoint
+**TP naming across repos + TP != 4 is UNTESTED (review note)**: `TP_SIZE`
+(the recipe) and `KVP_TP_SIZE` (kv-persistence) are two names for ONE value
+-- the tensor-parallel size. Keep them consistent when overriding (both
+feed the cache-identity namespace and `--tensor-parallel-size`). A hotsplit
+run NOT on TP=4 has NOT been tested: `numa_bind.py`'s GPU map examples are
+calculated for 4 GPUs, so any TP != 4 is unverified territory.
+
 — `LMCACHE_PORT`/`KVP_LMCACHE_PORT` (cache side) and `KV_PERSIST_PORT` (recipe
 side). Documented explicitly in *Recipes Integration* (EN/RU/ZH) with the
 "change both sides together" warning, and in the recipe README (EN/RU/ZH).
