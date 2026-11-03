@@ -66,7 +66,7 @@ def pick(*names, default=""):
         if v:
             return v
     return default
-kv_dtype = pick("KV_CACHE_DTYPE", default="auto").lower()
+kv_dtype = pick("KVP_KV_CACHE_DTYPE", "KV_CACHE_DTYPE", default="auto").lower()
 model_dir = sys.argv[1] if len(sys.argv) > 1 else ""
 if kv_dtype == "auto" and model_dir:
     try:
@@ -78,11 +78,11 @@ if kv_dtype == "auto" and model_dir:
         if isinstance(v, str) and v.strip():
             kv_dtype = v.strip().lower()
             break
-print("KVP_SERVED_MODEL_NAME=%s" % pick("SERVED_MODEL_NAME", default="mimo-pro"))
+print("KVP_SERVED_MODEL_NAME=%s" % pick("KVP_SERVED_MODEL_NAME", "SERVED_MODEL_NAME", default="mimo-pro"))
 print("KVP_KV_CACHE_DTYPE=%s" % kv_dtype)
-print("KVP_MAX_MODEL_LEN=%s" % pick("MAX_MODEL_LEN", default="1048576"))
-print("KVP_BLOCK_SIZE=%s" % pick("KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
-print("KVP_TP_SIZE=%s" % pick("TP_SIZE", default="4"))
+print("KVP_MAX_MODEL_LEN=%s" % pick("KVP_MAX_MODEL_LEN", "MAX_MODEL_LEN", default="1048576"))
+print("KVP_BLOCK_SIZE=%s" % pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
+print("KVP_TP_SIZE=%s" % pick("KVP_TP_SIZE", "TP_SIZE", default="4"))
 PYEFF
 )"
 fi

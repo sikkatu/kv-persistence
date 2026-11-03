@@ -11,7 +11,7 @@ GitHub remote API).
 **Overall status: PARTIAL** — implementation complete, offline tests pass
 (155 unit tests + 19 more offline config/docs tests = 174 offline collected,
 172 passed + 2 skipped; 189 collected total including the live-`lmcache`
-integration (10) and recovery (5) tests; plus 306 passed of 311 collected
+integration (10) and recovery (5) tests; plus 314 passed of 319 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
@@ -598,13 +598,23 @@ green with the new contract tests included).
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
 numbers, verified: 155 unit tests (`tests/unit`, 153 passed + 2 skipped),
 19 top-level offline tests, 174 offline collected (172 passed + 2 skipped),
-189 collected total (plus 306 passed of 311 collected in the
+189 collected total (plus 314 passed of 319 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
 **Port naming across repos (review note)**: three variables name one endpoint
 **TP naming across repos + TP != 4 is UNTESTED (review note)**: `TP_SIZE`
 **Shared effective-identity resolver (review round 23)**: the effective
+**Single source of truth for engine args (review round 24)**: the
+resolved effective values are what the ENGINE IS STARTED WITH -- the
+docker args (--served-model-name/--kv-cache-dtype/--max-model-len/
+--tensor-parallel-size/--block-size), the smoke request and the gate
+all carry the same values, so a conflicting KVP_* export can no longer
+desync namespace/gate from the running engine. The inline fallback of
+the resolver picks KVP_* FIRST (identical to
+resolve_effective_identity). The launcher smoke request builds its JSON
+with python3 (safe encoding) and uses the ACTUAL served-model-name.
+
 engine config (auto -> model dtype, TP/block-size/served-model-name
 defaults) is resolved by ONE code path -- `python3 -m kvpersist.cli
 effective-identity` -- used by the recipe launchers (namespace derivation

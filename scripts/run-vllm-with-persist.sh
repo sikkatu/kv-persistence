@@ -77,6 +77,12 @@ done <<EOF
 $_EFF_ENV
 EOF
 [ -n "${KVP_KV_CACHE_DTYPE:-}" ] || die "empty effective KV dtype -- refusing to guess"
+# Review fix (round 24): SINGLE SOURCE OF TRUTH -- the engine is started with
+# EXACTLY these KVP_* values (see the docker run line below). A conflicting
+# KVP_* export no longer desyncs namespace/gate from the running engine: the
+# resolver's output IS what the engine runs. The gate compares the container
+# args against the same values, so a namespace can never claim settings the
+# engine does not have.
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"; GPU_UTIL="${GPU_UTIL:-0.85}"
@@ -230,19 +236,19 @@ docker run -d --name "$CONTAINER" --restart no \
   -e "VLLM_API_KEY=$API_KEY" \
   "${MOUNTS[@]}" "$IMAGE" \
   --model "$MODEL_MOUNT" \
-  --served-model-name "${SERVED_MODEL_NAME:-mimo-pro}" \
+  --served-model-name "$KVP_SERVED_MODEL_NAME" \
   --trust-remote-code \
-  --tensor-parallel-size "${KVP_TP_SIZE:-4}" \
-  --block-size "${KVP_BLOCK_SIZE:-16}" \
+  --tensor-parallel-size "$KVP_TP_SIZE" \
+  --block-size "$KVP_BLOCK_SIZE" \
   --disable-custom-all-reduce \
   --offload-backend uva \
   --cpu-offload-gb "$CPU_OFFLOAD_GB" \
   --cpu-offload-params routed_experts.w13_weight routed_experts.w2_weight \
   --moe-backend "$MOE_BACKEND" \
-  --max-model-len "$MAX_MODEL_LEN" \
+  --max-model-len "$KVP_MAX_MODEL_LEN" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
-  --kv-cache-dtype "$KV_CACHE_DTYPE" \
+  --kv-cache-dtype "$KVP_KV_CACHE_DTYPE" \
   --enable-prefix-caching \
   --gpu-memory-utilization "$GPU_UTIL" \
   ${KV_TRANSFER_ARGS[@]+"${KV_TRANSFER_ARGS[@]}"} \
