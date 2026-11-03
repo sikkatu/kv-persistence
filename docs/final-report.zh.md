@@ -6,8 +6,9 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（143 个单元测试 + 34 个离线集成/配置测试 = 160 通过，2 跳过；
-共收集 177 个，含依赖真实 `lmcache` 的集成测试；另有伴生仓库 `sikkatu/recipes` 302 通过 / 307 收集）。
+实现已完成，离线测试全绿（144 个单元测试 + 34 个离线集成/配置测试 = 163 通过，2 跳过；
+共收集 180 个，含依赖真实 `lmcache` 的集成测试；另有伴生仓库 `sikkatu/recipes` 304 通过 / 309 收集；
+跳过数依赖环境——无 torch 的主机会跳过部分测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
 上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
@@ -360,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：文档中的「157 unit tests」已过时。实际：143 个单元测试，160 通过 +
-2 跳过，共收集 177 个（另有伴生仓库 `sikkatu/recipes` 302 通过 / 307 收集）。已在
+**测试计数**：文档中的「157 unit tests」已过时。实际：144 个单元测试，163 通过 +
+2 跳过，共收集 180 个（另有伴生仓库 `sikkatu/recipes` 304 通过 / 309 收集；跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
 **端口命名**：三个变量指向同一端点 —— 已在 *配方集成*（EN/RU/ZH）与配方 README

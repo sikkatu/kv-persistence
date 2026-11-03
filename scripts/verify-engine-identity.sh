@@ -13,7 +13,6 @@ if [ "$CONTAINER" = "--check-config-only" ]; then
   CHECK_CONFIG_ONLY=1
   CONTAINER=""
 fi
-CONFIG="$ROOT/configs/mimo-v2.6-pro/identity.env"
 # Universal model-config selector + .local overlay (review P1: setup writes to
 # identity.env.local; the gate MUST verify the same source, not the stale
 # tracked file).
@@ -39,15 +38,42 @@ CONFIG_BASE="$ROOT/configs/$_model_cfg/identity.env"
 CONFIG="$(mktemp /tmp/kvp-identity-XXXXXX.env)"
 trap 'rm -f "$CONFIG"' EXIT
 python3 - "$CONFIG_BASE" "$CONFIG_LIVE" "$CONFIG" <<'PY'
-import re, sys
+import os, sys
 base_path, live_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Parsing MUST match scripts/env.sh _kvp_parse_line and
+# kvpersist/config.py _parse_env_file (the documented "MUST match" contract):
+#   * optional "export " prefix,
+#   * trailing comment cut at " #" / tab+# (whitespace + hash),
+#   * ONE matching outer quote pair stripped (single or double),
+#   * $HOME expansion.
+def parse_line(line):
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    line = line.removeprefix("export ").strip()
+    if "=" not in line:
+        return None
+    name, val = line.split("=", 1)
+    name = name.strip()
+    if not name:
+        return None
+    for sep in (" #", "\t#"):
+        if sep in val:
+            val = val.split(sep, 1)[0]
+    val = val.strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+        val = val[1:-1]
+    val = os.path.expanduser(val.replace("${HOME}", "~").replace("$HOME", "~"))
+    return name, val
+
 vals = {}
 for path in (base_path, live_path):
     try:
         for line in open(path):
-            m = re.match(r"^([A-Z][A-Z0-9_]*)=(.*)$", line.strip())
-            if m:
-                vals[m.group(1)] = m.group(2).strip().strip('"')
+            kv = parse_line(line)
+            if kv:
+                vals[kv[0]] = kv[1]
     except FileNotFoundError:
         pass
 with open(out_path, "w") as fh:
@@ -231,6 +257,13 @@ engine_checks.append(("connector", want_conn, connector_seen))
 bad, inconc = [], []
 for label, expect, found in format_checks:
     if found == expect:
+        continue
+    # Review fix (blocking bug): an OPTIONAL field left empty is legal ("not
+    # applicable"), and the check above reports it with the "(unset ..."
+    # marker instead of the raw value. Comparing that marker against the
+    # empty expect always mismatched (exit 4 on the standard config).
+    # Treat the "(unset" marker as an explicit pass for empty values.
+    if found.startswith("(unset"):
         continue
     if found.startswith("EMPTY") or found.startswith("MALFORMED"):
         bad.append(f"{label}: {found} -- identity={expect!r}")

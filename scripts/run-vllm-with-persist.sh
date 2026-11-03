@@ -15,11 +15,16 @@
 #   * verifies engine identity BEFORE and AFTER launch (verify-engine-identity.sh)
 #     and REFUSES to attach the cache on mismatch -- the recipe's branch only
 #     reminds the operator to run the gate manually;
-#   * keeps the recipe's pinned defaults (MAX_NUM_SEQS=2, KV_CACHE_DTYPE=bfloat16
-#     spelling, MAX_MODEL_LEN=1048576, block-size 16) so BOTH paths derive
-#     compatible KV. If you override any of these in one path, override them in
-#     the other too -- a different value is a SAFE cache miss (the namespace
-#     changes), never a wrong read, but it silently stops reuse between paths.
+#   * keeps the recipe's engine defaults compatible (MAX_NUM_SEQS=2,
+#     KV_CACHE_DTYPE spelling `bfloat16`, MAX_MODEL_LEN=1048576, block-size 16)
+#     so BOTH paths derive compatible KV. Review fix: the RECIPE's own default
+#     for KV_CACHE_DTYPE is `auto` (not `bfloat16`), and `auto` resolves to the
+#     MODEL's dtype -- this launcher resolves `auto` the same way before hashing
+#     the namespace, so an `auto` recipe run and a `bfloat16` run of a bf16 model
+#     share one namespace. If you override any of these in one path, override
+#     them in the other too -- a different value is a SAFE cache miss (the
+#     namespace changes), never a wrong read, but it silently stops reuse
+#     between paths.
 # ROLLBACK: run the recipe launcher; NVMe data is kept.
 #
 # MANDATORY identity gate (review): verify-engine-identity.sh must pass BEFORE
@@ -39,8 +44,10 @@ printf '%s' "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$' || die "IMAGE must be pi
 MODEL_DIR="${MODEL_DIR:?set MODEL_DIR to the local model directory}"
 [ -d "$MODEL_DIR" ] || die "MODEL_DIR not found: $MODEL_DIR"
 API_KEY="${API_KEY:-}"
-[ -f "$PWD/live/api_key" ] && [ -z "$API_KEY" ] && API_KEY="$(head -n1 "$PWD/live/api_key" | tr -d '[:space:]')"
-[ -n "$API_KEY" ] || die "API_KEY required (live/api_key; non-loopback binds always need it)"
+# Review fix: look up live/api_key under the REPO ROOT ($ROOT), not $PWD --
+# the launcher must work from any working directory, not only from the repo root.
+[ -f "$ROOT/live/api_key" ] && [ -z "$API_KEY" ] && API_KEY="$(head -n1 "$ROOT/live/api_key" | tr -d '[:space:]')"
+[ -n "$API_KEY" ] || die "API_KEY required (live/api_key under the repo root; non-loopback binds always need it)"
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # NOTE on REQUESTED settings from the task brief vs the VERIFIED recipe:
@@ -86,8 +93,8 @@ PIDF="$KVP_CACHE_ROOT/lmcache-server.pid"
 # with INCONCLUSIVE. On reruns the gate checks the container that is about to
 # be REPLACED (it holds the OLD args), so the meaningful check is against the
 # args we are about to pass, plus the container as a secondary signal. The
-# gate is therefore split: pre-launch arg check (always), post-launch
-# container check (after docker run).
+# gate is therefore split: pre-launch config check (always), post-launch
+# container-args check (after docker run).
 # KVP_PERSIST_ENABLED=0 genuinely bypasses both gates: without the connector
 # there is no cache to mistrust, so refusing to launch would be wrong.
 PERSIST="${KVP_PERSIST_ENABLED:-true}"
@@ -149,7 +156,33 @@ if [ "$PERSIST" = "true" ]; then
   # shared cached blocks. Default now follows SERVED_MODEL_NAME (what the
   # engine is actually called via --served-model-name) exactly.
   export KVP_SERVED_MODEL_NAME="${KVP_SERVED_MODEL_NAME:-${SERVED_MODEL_NAME:-mimo-pro}}"
-  KVP_MODEL_NAME="$(python3 -m kvpersist.cli model-name ${KVP_TENANT_DISCRIMINATOR:+--discriminator "$KVP_TENANT_DISCRIMINATOR"})" \
+  # Review fix: pass the REAL engine settings as KVP_* overrides so the
+  # namespace follows what the engine is actually started with, exactly like
+  # the recipe KV_PERSIST=1 branch does. Before this, only
+  # KVP_SERVED_MODEL_NAME was forwarded and KV_CACHE_DTYPE=fp8, another
+  # MAX_MODEL_LEN or TP_SIZE hashed under the SHIPPED identity pins -- the two
+  # repos agreed only by accident of identical defaults. `auto` is RESOLVED
+  # first (config.json -> the model's dtype), so an `auto` launch hashes the
+  # same as an explicit-dtype launch of that model.
+  KV_DTYPE_EFF="$KV_CACHE_DTYPE"
+  if [ "$KV_DTYPE_EFF" = "auto" ]; then
+    KV_DTYPE_EFF="$(python3 - "$MODEL_DIR" <<'PYPY'
+import json, os, sys
+try:
+    cfg = json.load(open(os.path.join(sys.argv[1], "config.json")))
+except Exception:
+    print("auto")
+    raise SystemExit(0)
+for key in ("torch_dtype", "dtype"):
+    v = cfg.get(key)
+    if isinstance(v, str) and v.strip():
+        print(v.strip().lower())
+        raise SystemExit(0)
+print("auto")
+PYPY
+)"
+  fi
+  KVP_MODEL_NAME="$(KVP_KV_CACHE_DTYPE="$KV_DTYPE_EFF" KVP_MAX_MODEL_LEN="$MAX_MODEL_LEN" KVP_BLOCK_SIZE="${KVP_BLOCK_SIZE:-16}" KVP_TP_SIZE="${KVP_TP_SIZE:-4}" python3 -m kvpersist.cli model-name ${KVP_TENANT_DISCRIMINATOR:+--discriminator "$KVP_TENANT_DISCRIMINATOR"})" \
     || die "cannot derive LMCache model_name from the identity config"
   [ -n "$KVP_MODEL_NAME" ] || die "empty LMCache model_name -- identity config incomplete"
   # `/models/<name>` where <name> encodes the identity namespace (no '/' in it).
