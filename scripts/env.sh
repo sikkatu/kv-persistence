@@ -21,6 +21,11 @@
 
 _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
   local line="$1"
+  # Review fix (round 32): trim the WHOLE line first, exactly like the
+  # python parsers (raw.strip() before removeprefix("export ")) --
+  # ` export KEY=value` used to be rejected here but accepted by python.
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
   case "$line" in ''|'#'*) return 1 ;; esac
   line="${line#export }"
   _name="${line%%=*}"

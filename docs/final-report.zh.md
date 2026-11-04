@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（183 个单元测试 + 19 个离线配置/文档测试 = 202 个离线收集，
-200 通过 + 2 跳过；共收集 217 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（185 个单元测试 + 19 个离线配置/文档测试 = 204 个离线收集，
+202 通过 + 2 跳过；共收集 219 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：183 个单元测试（181 通过 + 2 跳过），19 个离线配置/文档测试，
-202 个离线收集（200 通过 + 2 跳过），共收集 217 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
+**测试计数**：此前的数字已过时。实际：185 个单元测试（183 通过 + 2 跳过），19 个离线配置/文档测试，
+204 个离线收集（202 通过 + 2 跳过），共收集 219 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -376,6 +376,15 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **分层配置解析（rev. 28）**：(1) cache.env 中的 KVP_* 别名现已注释——
 **解析器一致性 + 端到端门禁测试（rev. 30）**：bash 解析器 env.sh 现在
 **测试安全性 + 严格 env 格式（rev. 31）**：测试 fixture 现在会备份并恢复
+**仅 ASCII 名称 + 全字典一致性（rev. 32）**：python `str.isidentifier()`
+接受 Unicode 名称（КЛЮЧ=value 可通过），bash 拒绝——两个 Python 解析器
+现在都使用显式 ASCII 正则 `^[A-Za-z_][A-Za-z0-9_]*$`，与 bash 完全一致。
+bash 解析器现在也在 `export` 前缀前裁剪行首空白（` export KEY=value`
+此前 bash 拒绝但 python 接受）。参数化一致性测试比较完整解析字典
+（不只是值），覆盖 20 种输入，包括 Unicode 名称和带前导空格的 export 形式。
+测试不会留下被修改的配置文件（备份+恢复；configs/ 的完整临时副本是已
+记录的未来改进）。
+
 操作员真实的 `identity.env.local`——此前每次测试运行后都会将其删除
 （执行过 setup-identity.sh 的用户在 `pytest` 后丢失身份 pin）。端到端
 测试现在诚实地证明 .local 优先于 base（base 声明 lz4，.local 声明 zstd，

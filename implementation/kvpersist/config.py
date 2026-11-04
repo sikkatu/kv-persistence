@@ -18,6 +18,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import re
+
+# Review fix (round 32): the strict env-file format allows ONLY ASCII
+# identifiers -- python str.isidentifier() accepts Unicode (КЛЮЧ=value
+# passes) while bash rejects it. One rule for all parsers.
+_ASCII_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class ConfigError(Exception):
@@ -120,7 +126,7 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
         if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
             val = val[1:-1]
         val = val.replace("$HOME", os.path.expanduser("~")).replace("${HOME}", os.path.expanduser("~"))
-        if name and name.isidentifier():
+        if name and _ASCII_IDENT.match(name):
             out[name] = val
     return out
 

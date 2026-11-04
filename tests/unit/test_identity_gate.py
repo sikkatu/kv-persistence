@@ -27,6 +27,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "scripts" / "verify-engine-identity.sh"
 CONFIG_DIR = ROOT / "configs" / "mimo-v2.6-pro"
+# Review note (round 32): these tests still read/write the REPO config files
+# (identity.env, identity.env.local, cache.env) but always BACK UP and RESTORE
+# every file they touch (see _cleanup_local and the try/finally blocks), so a
+# pytest run can never leave them modified. FUTURE IMPROVEMENT: copy the whole
+# configs/ tree to a tmp dir and run the gate there -- that needs a
+# KVP_CONFIG_ROOT override in verify-engine-identity.sh (the gate resolves
+# configs/ from its own $ROOT today).
 
 
 def _write_config(tmp_path: Path, **overrides: str) -> Path:
@@ -643,68 +650,67 @@ def test_gate_end_to_end_with_home_expansion(tmp_path, _stub_env, _cleanup_local
 # ---------------------------------------------------------------------------
 
 PARSER_CASES = [
-    # (input line, expected value or None for reject)
-    ("KEY=value", "value"),
-    (" KEY=value", "value"),             # leading whitespace trimmed
-    ("KEY= value", "value"),             # value whitespace trimmed
-    ("KEY=  value  ", "value"),          # both edges trimmed
-    ("export KEY=value", "value"),
-    ("export  KEY=value", "value"),      # double space after export
-    ("FOO BAR=value", None),             # spaces in name = reject
-    ("1BAD=value", None),               # leading digit = reject
-    ("KEY=", ""),                        # empty value is legal
-    ("KEY=value # comment", "value"),
-    ("KEY=value\t# comment", "value"),   # tab before #
-    ("KEY='quoted'", "quoted"),
-    ("KEY=\"quoted\"", "quoted"),
-    ("# KEY=value", None),               # comment line
-    ("", None),                          # empty line
-    ("NOEQUALS", None),                  # no = sign
-    ("KEY=va lue", "va lue"),            # spaces INSIDE value kept
-    ("KEY=a#b", "a#b"),                 # # without whitespace is literal
+    # (input line, expected dict or None for reject-all)
+    ("KEY=value", {"KEY": "value"}),
+    (" KEY=value", {"KEY": "value"}),             # leading whitespace trimmed
+    ("KEY= value", {"KEY": "value"}),             # value whitespace trimmed
+    ("KEY=  value  ", {"KEY": "value"}),          # both edges trimmed
+    ("export KEY=value", {"KEY": "value"}),
+    ("export  KEY=value", {"KEY": "value"}),      # double space after export
+    (" export KEY=value", {"KEY": "value"}),      # leading space before export
+    ("FOO BAR=value", {}),                        # spaces in name = reject
+    ("1BAD=value", {}),                           # leading digit = reject
+    ("\u041a\u041b\u042e\u0427=value", {}),   # Unicode name = reject (ASCII only)
+    ("KEY=", {"KEY": ""}),                        # empty value is legal
+    ("KEY=value # comment", {"KEY": "value"}),
+    ("KEY=value\t# comment", {"KEY": "value"}),   # tab before #
+    ("KEY='quoted'", {"KEY": "quoted"}),
+    ("KEY=\"quoted\"", {"KEY": "quoted"}),
+    ("# KEY=value", {}),                          # comment line
+    ("", {}),                                     # empty line
+    ("NOEQUALS", {}),                             # no = sign
+    ("KEY=va lue", {"KEY": "va lue"}),            # spaces INSIDE value kept
+    ("KEY=a#b", {"KEY": "a#b"}),                  # # without whitespace is literal
 ]
 
 
 @pytest.mark.parametrize("line,expected", PARSER_CASES)
 def test_all_parsers_agree(line, expected, tmp_path):
-    """Review (round 31): bash env.sh, config._parse_env_file and
-    identity._read_env_config must agree byte-for-byte on EVERY input --
-    accepted value or rejection. One strict env-file format for all."""
+    """Review (round 31/32): bash env.sh, config._parse_env_file and
+    identity._read_env_config must agree on EVERY input -- the full parsed
+    dict must be identical (not just one value). One strict env-file format
+    for all: name = ASCII identifier only, value trimmed then unquoted."""
+    import json as _json
     import subprocess as _sp
     f = tmp_path / "p.env"
     f.write_text(line + chr(10))
-    # python: both parsers
     out = _sp.run(
         [sys.executable, "-c",
-         "import sys; sys.path.insert(0, sys.argv[2]); "
+         "import sys, json; sys.path.insert(0, sys.argv[2]); "
          "from kvpersist.config import read_env_file; "
          "from kvpersist.identity import _read_env_config; "
          "c = read_env_file(sys.argv[1]); i = _read_env_config(sys.argv[1]); "
-         "cv = c.get('KEY') if 'KEY' in c else (list(c.values())[0] if c else None); "
-         "iv = i.get('KEY') if 'KEY' in i else (list(i.values())[0] if i else None); "
-         "import json; print(json.dumps([cv, iv]))",
+         "print(json.dumps([c, i]))",
          str(f), str(ROOT / "implementation")],
         capture_output=True, text=True, timeout=30,
     )
     assert out.returncode == 0, out.stderr
-    import json as _json
-    c_val, i_val = _json.loads(out.stdout.strip())
-    # bash: _kvp_parse_line
+    c_dict, i_dict = _json.loads(out.stdout.strip())
+    # bash: _kvp_parse_line -> check name+val match the expected dict
     escaped = line.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))
     out_bash = _sp.run(
         ["bash", "-c",
-         f". {ROOT}/scripts/env.sh; _kvp_parse_line {chr(39)}{escaped}{chr(39)} && printf %s \"$_val\" || echo REJECT"],
+         f". {ROOT}/scripts/env.sh; _kvp_parse_line {chr(39)}{escaped}{chr(39)} && "
+         f"printf {chr(39)}%s=%s{chr(39)} \"$_name\" \"$_val\" || echo REJECT"],
         capture_output=True, text=True, timeout=30,
     )
-    bash_val = out_bash.stdout.strip()
-    if bash_val == "REJECT":
-        bash_val = None
-    # all three must agree
-    if expected is None:
-        assert c_val is None or c_val == "", f"config accepted {line!r} -> {c_val!r}"
-        assert i_val is None or i_val == "", f"identity accepted {line!r} -> {i_val!r}"
-        assert bash_val is None or bash_val == "", f"bash accepted {line!r} -> {bash_val!r}"
+    bash_raw = out_bash.stdout.strip()
+    if bash_raw == "REJECT" or not bash_raw:
+        bash_dict = {}
     else:
-        assert c_val == expected, f"config: {line!r} -> {c_val!r}, want {expected!r}"
-        assert i_val == expected, f"identity: {line!r} -> {i_val!r}, want {expected!r}"
-        assert bash_val == expected, f"bash: {line!r} -> {bash_val!r}, want {expected!r}"
+        eq = bash_raw.index("=")
+        bash_dict = {bash_raw[:eq]: bash_raw[eq + 1:]}
+    # all three must produce the identical dict
+    assert c_dict == expected, f"config: {line!r} -> {c_dict}, want {expected}"
+    assert i_dict == expected, f"identity: {line!r} -> {i_dict}, want {expected}"
+    assert bash_dict == expected, f"bash: {line!r} -> {bash_dict}, want {expected}"

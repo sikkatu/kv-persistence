@@ -226,10 +226,11 @@ def _read_env_config(path: str) -> Dict[str, str]:
                     if _sep in val:
                         val = val.split(_sep, 1)[0]
                 val = val.strip()
-                # Review fix (round 31): the name must be an ASCII identifier,
-                # identical to config._parse_env_file (name.isidentifier()) and
-                # env.sh -- `FOO BAR=v` / `1BAD=v` are NOT assignments.
-                if not name.isidentifier():
+                # Review fix (round 31/32): the name must be an ASCII
+                # identifier -- python isidentifier() accepts Unicode
+                # (КЛЮЧ=value passes) while bash rejects it, so use the same
+                # explicit ASCII rule as config._parse_env_file.
+                if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                     continue
                 if name:
                     out[name] = _strip_quotes(val)

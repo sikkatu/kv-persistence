@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(183 unit tests + 19 more offline config/docs tests = 202 offline collected,
-200 passed + 2 skipped; 217 collected total including the live-`lmcache`
+(185 unit tests + 19 more offline config/docs tests = 204 offline collected,
+202 passed + 2 skipped; 219 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 183 unit tests (`tests/unit`, 181 passed + 2 skipped),
-19 top-level offline tests, 202 offline collected (200 passed + 2 skipped),
-217 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 185 unit tests (`tests/unit`, 183 passed + 2 skipped),
+19 top-level offline tests, 204 offline collected (202 passed + 2 skipped),
+219 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -612,6 +612,18 @@ Home (EN/RU/ZH).
 **Layered config resolution (review round 28)**: (1) KVP_* aliases in
 **Parser parity + end-to-end gate test (review round 30)**: the bash
 **Test safety + strict env format (review round 31)**: the test fixture
+**ASCII-only names + full-dict parity (review round 32)**: python
+`str.isidentifier()` accepts Unicode names (КЛЮЧ=value passed) while
+bash rejects them -- both Python parsers now use an explicit ASCII
+regex `^[A-Za-z_][A-Za-z0-9_]*$`, matching bash exactly. The bash
+parser also trims leading whitespace BEFORE the `export` prefix now
+(` export KEY=value` was rejected by bash but accepted by python).
+The parameterized parity test compares the FULL parsed dict (not just
+one value) and covers 20 inputs including Unicode names and the
+leading-space export form. Tests never leave repo config files
+modified (backup + restore; a full tmp-copy of configs/ is a documented
+future improvement).
+
 now BACKS UP and RESTORES the operator's real `identity.env.local` --
 it used to DELETE it after every test run (a user who ran
 setup-identity.sh lost their identity pins on `pytest`). The
