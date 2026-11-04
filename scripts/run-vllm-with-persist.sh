@@ -27,10 +27,14 @@
 #     for KV_CACHE_DTYPE is `auto` (not `bfloat16`), and `auto` resolves to the
 #     MODEL's dtype -- this launcher resolves `auto` the same way before hashing
 #     the namespace, so an `auto` recipe run and a `bfloat16` run of a bf16 model
-#     share one namespace. If you override any of these in one path, override
-#     them in the other too -- a different value is a SAFE cache miss (the
-#     namespace changes), never a wrong read, but it silently stops reuse
-#     between paths.
+#     share one namespace. Review fix (round 27): operator names
+#     (KV_CACHE_DTYPE, MAX_MODEL_LEN, TP_SIZE, SERVED_MODEL_NAME) are PROMOTED
+#     to their KVP_* form before the engine starts, so the engine, the cache
+#     namespace and the identity gate all use the SAME effective value -- the
+#     old advice to "override in both paths" is no longer needed for a single
+#     launch. For a DURABLE pin across restarts, set the value in
+#     identity.env.local; a changed value is a SAFE cache miss (the namespace
+#     changes), never a wrong read.
 # ROLLBACK: run the recipe launcher; NVMe data is kept.
 #
 # MANDATORY identity gate (review): verify-engine-identity.sh must pass BEFORE
@@ -79,6 +83,26 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"
 # launchers and the gate itself also use -- the consumers cannot drift apart.
 # The gate honours "env wins over files", so these exports make
 # MAX_MODEL_LEN=524288 / KV_CACHE_DTYPE=fp8 launches verify clean.
+# Review fix (round 27): PROMOTE explicitly-set operator names to their KVP_*
+# form BEFORE the resolver, so they win over the identity.env pins that
+# scripts/env.sh exported. Without this a `KV_CACHE_DTYPE=fp8` /
+# `MAX_MODEL_LEN=524288` / `TP_SIZE=2` was silently ignored (the engine ran the
+# pinned identity.env value) while the recipe launcher honoured it -- two
+# "identical" commands started different engines (and an operator lowering the
+# context to avoid OOM got the full 1M). The gate + namespace follow the same
+# promoted values (single source of truth).
+for _pair in "KV_CACHE_DTYPE:KVP_KV_CACHE_DTYPE" "MAX_MODEL_LEN:KVP_MAX_MODEL_LEN" \
+             "TP_SIZE:KVP_TP_SIZE" "SERVED_MODEL_NAME:KVP_SERVED_MODEL_NAME" \
+             "KV_PERSIST_BLOCK_SIZE:KVP_BLOCK_SIZE" "BLOCK_SIZE:KVP_BLOCK_SIZE"; do
+  _op="${_pair%%:*}"; _kp="${_pair##*:}"
+  if [ -n "${!_op:-}" ]; then
+    if [ -n "${!_kp:-}" ] && [ "${!_kp}" != "${!_op}" ]; then
+      echo "NOTE: $_op=${!_op} overrides the pinned $_kp=${!_kp} (identity.env)" >&2
+      echo "      engine, namespace and gate will all use $_op=${!_op}." >&2
+    fi
+    export "$_kp=${!_op}"
+  fi
+done
 _EFF_ENV="$(PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}" \
   python3 -m kvpersist.cli effective-identity --model-dir "$MODEL_DIR")" \
   || die "cannot resolve the effective engine identity (kvpersist.cli effective-identity)"

@@ -157,6 +157,12 @@ def _stub_env(tmp_path):
     for k in list(env):
         if k.startswith("KVP_"):
             del env[k]
+    # The l2_serde check reads the SERVER's rendered adapter (written by
+    # start-cache.sh at launch). Provide one by default: raw chunks ("none").
+    cache_root = tmp_path / "cache_root"
+    cache_root.mkdir(exist_ok=True)
+    (cache_root / "l2-adapter.rendered.json").write_text("{}")
+    env["KVP_CACHE_ROOT"] = str(cache_root)
     return env
 
 
@@ -327,28 +333,54 @@ def test_operator_names_auto_resolves_via_shared_code(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_l2_serde_mismatch_is_caught(tmp_path, _cleanup_local, _stub_env):
-    """Review (round 26): the L2 codec is part of the cache identity. A gate
-    shell with USE_LOSSLESS_SERDE=1 (zstd chunks on the server) against an
-    UNPINNED identity must MISMATCH -- chunks written with one codec would
-    otherwise be read back with another."""
+    """Review (round 27): the l2_serde check verifies the SERVER's codec (from
+    l2-adapter.rendered.json) against the namespace the cache is filed under.
+    A server started with zstd (rendered adapter) while the namespace was
+    hashed as "none" (no USE_LOSSLESS_SERDE in the gate/launcher shell) MUST
+    MISMATCH -- chunks written with one codec would otherwise be read back
+    with another."""
     _write_config(tmp_path)
-    result = _run_gate(_stub_env, BASE_ARGS, {"USE_LOSSLESS_SERDE": "1"})
+    cache_root = Path(_stub_env["KVP_CACHE_ROOT"])
+    (cache_root / "l2-adapter.rendered.json").write_text(
+        '{"serde": {"type": "kvp-zstd", "level": "3", "align_bytes": "4096"}}'
+    )
+    result = _run_gate(_stub_env, BASE_ARGS)
     assert result.returncode == 4, (
-        f"USE_LOSSLESS_SERDE=1 vs an unpinned l2_serde must mismatch, got "
+        f"a zstd server against a none namespace must mismatch, got "
         f"{result.returncode}\n{result.stdout}"
     )
     assert "l2_serde" in result.stdout
 
 
-def test_l2_serde_pin_makes_it_pass(tmp_path, _cleanup_local, _stub_env):
-    """A matching KVP_L2_SERDE pin (zstd) with USE_LOSSLESS_SERDE=1 must pass."""
+def test_l2_serde_namespace_follows_server(tmp_path, _cleanup_local, _stub_env):
+    """When the namespace WAS hashed with the same codec the server uses
+    (USE_LOSSLESS_SERDE=1 -> zstd, server rendered zstd), the gate passes --
+    this is the README's `USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`
+    scenario (review round 27: it used to fail with exit 4)."""
     _write_config(tmp_path)
-    result = _run_gate(_stub_env, BASE_ARGS,
-                       {"USE_LOSSLESS_SERDE": "1", "KVP_L2_SERDE": "zstd"})
+    cache_root = Path(_stub_env["KVP_CACHE_ROOT"])
+    (cache_root / "l2-adapter.rendered.json").write_text(
+        '{"serde": {"type": "kvp-zstd", "level": "3", "align_bytes": "4096"}}'
+    )
+    result = _run_gate(_stub_env, BASE_ARGS, {"USE_LOSSLESS_SERDE": "1"})
     assert result.returncode == 0, (
-        f"KVP_L2_SERDE=zstd + USE_LOSSLESS_SERDE=1 must pass, got "
+        f"the README scenario (shell switch == server codec) must pass, got "
         f"{result.returncode}\n{result.stdout}"
     )
+
+
+def test_l2_serde_missing_adapter_is_inconclusive(tmp_path, _cleanup_local, _stub_env):
+    """Without the rendered adapter the gate cannot PROVE the server's codec --
+    it must report INCONCLUSIVE (exit 5), never silently pass."""
+    _write_config(tmp_path)
+    cache_root = Path(_stub_env["KVP_CACHE_ROOT"])
+    (cache_root / "l2-adapter.rendered.json").unlink()
+    result = _run_gate(_stub_env, BASE_ARGS)
+    assert result.returncode == 5, (
+        f"missing l2-adapter.rendered.json must be INCONCLUSIVE, got "
+        f"{result.returncode}\n{result.stdout}"
+    )
+    assert "l2-adapter.rendered.json" in result.stdout
 
 
 def test_kvp_lmcache_duplicates_propagate_to_lmcache_names(tmp_path):

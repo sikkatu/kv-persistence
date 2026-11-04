@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(158 unit tests + 19 more offline config/docs tests = 177 offline collected,
-175 passed + 2 skipped; 192 collected total including the live-`lmcache`
+(160 unit tests + 19 more offline config/docs tests = 179 offline collected,
+177 passed + 2 skipped; 194 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 158 unit tests (`tests/unit`, 156 passed + 2 skipped),
-19 top-level offline tests, 177 offline collected (175 passed + 2 skipped),
-192 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 160 unit tests (`tests/unit`, 158 passed + 2 skipped),
+19 top-level offline tests, 179 offline collected (177 passed + 2 skipped),
+194 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -608,6 +608,23 @@ Home (EN/RU/ZH).
 **Single source of truth for engine args (review round 24)**: the
 **Smoke request follows the engine (review round 25)**: the launcher
 **Cross-repo consistency (review round 26)**: (1) cache.env(.local)
+**Codec check follows the server (review round 27)**: the l2_serde
+check now reads the SERVER's actual codec from
+`<cache-root>/l2-adapter.rendered.json` (written at server start), not
+the gate's own shell env -- the README's `USE_LOSSLESS_SERDE=1 bash
+scripts/run-vllm-with-persist.sh` works again, and a server started
+with zstd in another shell IS caught (MISMATCH vs the namespace).
+KVP_L2_SERDE is now documented in identity.env (EN/RU/ZH), README,
+deployment.md and the recipe's tp4.env.example (3 languages).
+run-vllm-with-persist.sh PROMOTES operator names (KV_CACHE_DTYPE,
+MAX_MODEL_LEN, TP_SIZE, SERVED_MODEL_NAME) to their KVP_* form before
+the engine starts -- an explicit `KV_CACHE_DTYPE=fp8` is no longer
+silently ignored in favour of the identity.env pin (the two launchers
+now start the SAME engine for the same env). The systemd wrapper
+routes port/L1/chunk/eviction through repo_cfg WITH the KVP_* alias,
+so cache.env.local edits work under systemd too, and CONFIG WARNING no
+longer fires for conflicts the propagation already resolved.
+
 KVP_LMCACHE_* / KVP_L1_SIZE_GB values are now PROPAGATED into the
 LMCACHE_* names the cache server reads (they used to be silently
 ignored -- the server started with the shipped defaults), and

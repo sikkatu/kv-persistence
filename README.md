@@ -242,6 +242,9 @@ USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 ```
 
 `USE_LOSSLESS_SERDE` must be identical for both commands — it is part of the
+cache-identity namespace. Pin the same value as `KVP_L2_SERDE` in
+`identity.env.local` so the identity gate can verify the server's codec
+(it reads the rendered L2 adapter the server was started with).
 cache-identity namespace. Omit it everywhere to stay on the byte-exact raw
 mode.
 

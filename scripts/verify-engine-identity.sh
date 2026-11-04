@@ -340,8 +340,27 @@ engine_checks.append(("connector", want_conn, connector_seen))
 # and the server shell does not (or vice versa), the namespaces diverge and
 # chunks written with one codec are read back with another. The effective
 # value is resolved by env.sh / the shared resolver; compare against the pin.
-# Fold USE_LOSSLESS_SERDE exactly like scripts/env.sh (_kvp_resolve_l2_serde)
-# so both sides of the comparison use the SAME effective codec.
+# Review fix (round 27): the codec check must verify what the SERVER is
+# actually using, NOT the gate's own shell env. start-cache.sh / the systemd
+# wrapper write the effective codec into <cache-root>/l2-adapter.rendered.json
+# (the "serde" sub-dict: "type": "kvp-<codec>"; absent = none/raw). Read it
+# from there; fall back to the shell env only when the file is unavailable
+# (pre-launch check), and report INCONCLUSIVE rather than guessing.
+def _codec_from_adapter() -> str:
+    cache_root = os.environ.get("KVP_CACHE_ROOT", "").strip()
+    if not cache_root:
+        return ""
+    p = os.path.join(cache_root, "l2-adapter.rendered.json")
+    try:
+        spec = json.load(open(p))
+    except Exception:
+        return ""
+    serde = spec.get("serde") or {}
+    stype = (serde.get("type") or "").strip().lower()
+    if stype.startswith("kvp-"):
+        return stype[4:]
+    return "none"  # no serde key = raw byte-exact chunks
+
 def _fold_serde(switch: str, configured: str) -> str:
     switch = (switch or "").strip().lower()
     configured = (configured or "").strip().lower() or "none"
@@ -350,19 +369,34 @@ def _fold_serde(switch: str, configured: str) -> str:
     if switch == "lz4":
         return "lz4"
     return configured if configured not in ("raw", "") else "none"
-_l2_cfg = os.environ.get("LMCACHE_L2_SERDE", "")
-_l2_seen = _fold_serde(os.environ.get("USE_LOSSLESS_SERDE", ""), _l2_cfg)
-# The EXPECTED side comes ONLY from the identity pin (KVP_L2_SERDE in
-# identity.env(.local) or exported) -- never from the current shell's
-# LMCACHE_L2_SERDE, or the check would compare a value with itself and catch
-# nothing. Empty pin normalizes to "none" exactly like kvpersist.identity
-# ("" / "none" / "raw" share one namespace). A server started in ANOTHER
-# shell with USE_LOSSLESS_SERDE=1 stores zstd chunks; the gate then reports
-# identity=none != zstd and the operator must pin KVP_L2_SERDE explicitly.
-_l2_expect = _fold_serde("", vals.get("KVP_L2_SERDE", ""))
+
+_l2_missing_adapter = False
+_l2_from_server = _codec_from_adapter()
+if _l2_from_server:
+    _l2_seen = _l2_from_server
+else:
+    _l2_seen = _fold_serde(os.environ.get("USE_LOSSLESS_SERDE", ""),
+                           os.environ.get("LMCACHE_L2_SERDE", ""))
+    # post-launch: the server SHOULD have written the adapter; without it we
+    # cannot prove the codec -- flag for INCONCLUSIVE (never a silent pass).
+    if not check_config_only:
+        _l2_missing_adapter = True
+# The EXPECTED side is what the NAMESPACE was hashed from: the identity pin
+# (KVP_L2_SERDE) or LMCACHE_L2_SERDE from the config, with USE_LOSSLESS_SERDE
+# folded in -- exactly like kvpersist.identity.identity_from_env_files. This
+# is the documented contract (README: run the launcher and the server with the
+# SAME USE_LOSSLESS_SERDE), so the gate verifies that the SERVER'S codec
+# (seen, from the rendered adapter) matches the namespace the cache is filed
+# under. Empty pin normalizes to "none" ("" / "none" / "raw" share one
+# namespace).
+_l2_expect = _fold_serde(os.environ.get("USE_LOSSLESS_SERDE", ""),
+                         vals.get("KVP_L2_SERDE", "") or os.environ.get("LMCACHE_L2_SERDE", ""))
 engine_checks.append(("l2_serde", _l2_expect, _l2_seen))
 
 bad, inconc = [], []
+if _l2_missing_adapter:
+    inconc.append("l2_serde: no l2-adapter.rendered.json under KVP_CACHE_ROOT -- "
+                  "cannot prove which codec the server actually uses")
 for label, expect, found in format_checks:
     if found == expect:
         continue

@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（158 个单元测试 + 19 个离线配置/文档测试 = 177 个离线收集，
-175 通过 + 2 跳过；共收集 192 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（160 个单元测试 + 19 个离线配置/文档测试 = 179 个离线收集，
+177 通过 + 2 跳过；共收集 194 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：158 个单元测试（156 通过 + 2 跳过），19 个离线配置/文档测试，
-177 个离线收集（175 通过 + 2 跳过），共收集 192 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
+**测试计数**：此前的数字已过时。实际：160 个单元测试（158 通过 + 2 跳过），19 个离线配置/文档测试，
+179 个离线收集（177 通过 + 2 跳过），共收集 194 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -372,6 +372,20 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **引擎参数的唯一事实来源（rev. 24）**：引擎以解析后的有效值启动——
 **Smoke 请求跟随引擎（rev. 25）**：启动器将 served-model-name 显式传给
 **跨仓库一致性（rev. 26）**：(1) cache.env(.local) 中的 KVP_LMCACHE_* /
+**编解码器检查跟随服务器（rev. 27）**：l2_serde 检查现在从
+`<cache-root>/l2-adapter.rendered.json`（服务器启动时写入）读取服务器
+实际编解码器，而不是门禁自身的 shell 环境——README 中的
+`USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh` 恢复正常，
+而在另一 shell 中以 zstd 启动的服务器会被抓到（与 namespace MISMATCH）。
+KVP_L2_SERDE 现已在 identity.env（EN/RU/ZH）、README、deployment.md 和
+配方 tp4.env.example（3 种语言）中说明。run-vllm-with-persist.sh 在
+引擎启动前将运维变量名（KV_CACHE_DTYPE、MAX_MODEL_LEN、TP_SIZE、
+SERVED_MODEL_NAME）提升为 KVP_* 形式——显式 `KV_CACHE_DTYPE=fp8` 不再
+被 identity.env 的 pin 静默忽略（两个启动器对相同环境启动相同引擎）。
+systemd 包装器通过带 KVP_* 别名的 repo_cfg 读取 port/L1/chunk/eviction，
+cache.env.local 修改在 systemd 下同样生效，CONFIG WARNING 不再对
+传播已解决的冲突误报。
+
 KVP_L1_SIZE_GB 值现在会传播到缓存服务器读取的 LMCACHE_* 名称（此前被
 静默忽略——服务器使用默认值启动），config.verify() 在启动时报告冲突。
 (2) 身份门禁检查 L2 编解码器（l2_serde）：一侧 USE_LOSSLESS_SERDE 与

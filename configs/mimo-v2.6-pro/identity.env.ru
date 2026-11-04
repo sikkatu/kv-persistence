@@ -79,6 +79,13 @@ KVP_LORA_ADAPTERS=
 KVP_MULTIMODAL_COMPONENTS=
 # sha256 (64 hex) реально действующей конфигурации RoPE (scaling/theta/sections):
 # смена RoPE меняет позиции токенов -> другой KV, переиспользовать нельзя.
+# Кодек L2-кэша (только без потерь: none|zstd|lz4). Часть идентичности кэша:
+# деплои с РАЗНЫМИ кодеками НЕ должны разделять кэшированный KV. Закрепите
+# значение, с которым стартовал кэш-сервер (то же, что USE_LOSSLESS_SERDE /
+# LMCACHE_L2_SERDE для start-cache.sh). Гейт сверяет этот пин с фактическим
+# кодеком СЕРВЕРА (из <cache-root>/l2-adapter.rendered.json): расхождение
+# это MISMATCH, а не повреждённое чтение. Пусто = "none" (сырые чанки).
+KVP_L2_SERDE=
 KVP_ROPE_CONFIG_DIGEST=
 # Реально активные настройки speculative/MTP/draft-модели, как стабильная метка
 # (напр. "mtp-draft@rev, num_speculative_tokens=2"). Пусто = выключено.

@@ -126,6 +126,8 @@ payloads), pick a codec:
 ```bash
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh     # zstd
 USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
+# Pin the SAME codec as KVP_L2_SERDE in identity.env.local -- the identity
+# gate compares it against the server's rendered L2 adapter.
 ```
 
 or permanently in `configs/generic/lmcache-server.env(.local)`:

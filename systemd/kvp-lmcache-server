@@ -36,14 +36,40 @@ ADAPTER_FILE="${1:-}"
 # the system disk). The effective value = process env > repo .local > repo base
 # > the defaults below -- identical to scripts/env.sh.
 repo_cfg() { # repo_cfg <KEY> <default>
-  local k="$1" def="$2" v=""
+  local k="$1" def="$2" v="" alias=""
+  # Review fix (round 27): the repo config files carry BOTH spellings --
+  # cache.env(.local) uses the KVP_* alias (KVP_LMCACHE_PORT, KVP_L1_SIZE_GB,
+  # ...), lmcache-server.env uses LMCACHE_*. Look up the alias too so a
+  # KVP_* edit in cache.env.local is honoured under systemd, exactly like
+  # scripts/env.sh (_kvp_load_env propagates KVP_* -> LMCACHE_*).
+  case "$k" in
+    LMCACHE_HOST)                    alias=KVP_LMCACHE_HOST ;;
+    LMCACHE_PORT)                    alias=KVP_LMCACHE_PORT ;;
+    LMCACHE_HTTP_PORT)               alias=KVP_LMCACHE_HTTP_PORT ;;
+    LMCACHE_L1_SIZE_GB)              alias=KVP_L1_SIZE_GB ;;
+    LMCACHE_CHUNK_SIZE)              alias=KVP_CHUNK_SIZE ;;
+    LMCACHE_EVICTION_TRIGGER_WATERMARK) alias=KVP_EVICT_TRIGGER_WATERMARK ;;
+    LMCACHE_EVICTION_RATIO)          alias=KVP_EVICT_RATIO ;;
+  esac
   if [ -n "$REPO_ROOT" ]; then
-    v="$(sed -n "s/^${k}=//p" \
-        "$REPO_ROOT/configs/generic/cache.env" \
-        "$REPO_ROOT/configs/generic/cache.env.local" \
-        "$REPO_ROOT/configs/generic/lmcache-server.env" \
-        "$REPO_ROOT/configs/generic/lmcache-server.env.local" 2>/dev/null \
-        | tail -1 | tr -d '\"' | sed 's/ *#.*//')"
+    # Review fix (round 27, part 2): the KVP_* alias wins over the LMCACHE_*
+    # file value -- identical to env.sh propagation, where KVP_* overrides
+    # what the files set (lmcache-server.env always ships LMCACHE_PORT=5555,
+    # so an "only if empty" rule would ignore a KVP_LMCACHE_PORT edit).
+    if [ -n "$alias" ]; then
+      v="$(sed -n "s/^${alias}=//p" \
+          "$REPO_ROOT/configs/generic/cache.env" \
+          "$REPO_ROOT/configs/generic/cache.env.local" 2>/dev/null \
+          | tail -1 | tr -d '\"' | sed 's/ *#.*//')"
+    fi
+    if [ -z "$v" ]; then
+      v="$(sed -n "s/^${k}=//p" \
+          "$REPO_ROOT/configs/generic/cache.env" \
+          "$REPO_ROOT/configs/generic/cache.env.local" \
+          "$REPO_ROOT/configs/generic/lmcache-server.env" \
+          "$REPO_ROOT/configs/generic/lmcache-server.env.local" 2>/dev/null \
+          | tail -1 | tr -d '\"' | sed 's/ *#.*//')"
+    fi
   fi
   echo "${!k:-${v:-$def}}"
 }
@@ -157,14 +183,19 @@ ensure_cache_root
 # configs/generic/lmcache-server.env).
 export LMCACHE_LOG_LEVEL
 LMCACHE_LOG_LEVEL="${LMCACHE_LOG_LEVEL:-$(repo_cfg LMCACHE_LOG_LEVEL DEBUG)}"
+# Review fix (round 27): port, L1 size, chunk size and eviction MUST also come
+# from the repo config files via repo_cfg -- previously they fell back to bare
+# defaults (5555 / 64 / 256) and KVP_* edits in cache.env(.local) were silently
+# ignored under systemd. repo_cfg precedence: process env > .local > base file
+# > the defaults here -- identical to scripts/env.sh.
 exec python3 -m kvpersist.launch server \
-  --host "${LMCACHE_HOST:-127.0.0.1}" \
-  --port "${LMCACHE_PORT:-5555}" \
-  --l1-size-gb "${LMCACHE_L1_SIZE_GB:-64}" \
-  --eviction-policy "${LMCACHE_EVICTION_POLICY:-LRU}" \
-  --eviction-trigger-watermark "${LMCACHE_EVICTION_TRIGGER_WATERMARK:-0.9}" \
-  --eviction-ratio "${LMCACHE_EVICTION_RATIO:-0.1}" \
-  --chunk-size "${LMCACHE_CHUNK_SIZE:-256}" \
+  --host "$(repo_cfg LMCACHE_HOST 127.0.0.1)" \
+  --port "$(repo_cfg LMCACHE_PORT 5555)" \
+  --l1-size-gb "$(repo_cfg LMCACHE_L1_SIZE_GB 64)" \
+  --eviction-policy "$(repo_cfg LMCACHE_EVICTION_POLICY LRU)" \
+  --eviction-trigger-watermark "$(repo_cfg LMCACHE_EVICTION_TRIGGER_WATERMARK 0.9)" \
+  --eviction-ratio "$(repo_cfg LMCACHE_EVICTION_RATIO 0.1)" \
+  --chunk-size "$(repo_cfg LMCACHE_CHUNK_SIZE 256)" \
   --l2-adapter "$ADAPTER_JSON" \
   ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
   ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \

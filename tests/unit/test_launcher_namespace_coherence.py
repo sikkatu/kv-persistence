@@ -64,3 +64,46 @@ def test_served_model_name_default_matches_served_model_name(tmp_path):
             assert out.stdout.strip() != model_dir.name, (
                 f"{script.name}: the default must NOT be basename(MODEL_DIR)"
             )
+
+
+def _promotion_loop(script: Path) -> str:
+    text = script.read_text()
+    start = text.index("for _pair in \"KV_CACHE_DTYPE:KVP_KV_CACHE_DTYPE\"")
+    end = text.index("done", start) + len("done")
+    return text[start:end]
+
+
+def test_operator_names_promoted_to_kvp(tmp_path):
+    """Review (round 27): an explicitly-set operator name must override the
+    KVP_* pin (promoted BEFORE the resolver), never be silently ignored."""
+    script = ROOT / "scripts" / "run-vllm-with-persist.sh"
+    loop = _promotion_loop(script)
+    body = loop + '\nprintf "%s %s %s %s\\n" "$KVP_KV_CACHE_DTYPE" "$KVP_MAX_MODEL_LEN" "$KVP_TP_SIZE" "$KVP_SERVED_MODEL_NAME"'
+    cases = [
+        # (operator env, pinned KVP_* env, expected KVP_* after promotion)
+        ({"KV_CACHE_DTYPE": "fp8", "MAX_MODEL_LEN": "524288", "TP_SIZE": "2",
+          "SERVED_MODEL_NAME": "my-deployment"},
+         {"KVP_KV_CACHE_DTYPE": "bfloat16", "KVP_MAX_MODEL_LEN": "1048576",
+          "KVP_TP_SIZE": "4", "KVP_SERVED_MODEL_NAME": "mimo-pro"},
+         "fp8 524288 2 my-deployment"),
+        # nothing set -> the pins stay
+        ({},
+         {"KVP_KV_CACHE_DTYPE": "bfloat16", "KVP_MAX_MODEL_LEN": "1048576",
+          "KVP_TP_SIZE": "4", "KVP_SERVED_MODEL_NAME": "mimo-pro"},
+         "bfloat16 1048576 4 mimo-pro"),
+    ]
+    for op_env, pin_env, expected in cases:
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            **pin_env,
+            **op_env,
+        }
+        out = subprocess.run(
+            ["bash", "-c", body], env=env, capture_output=True, text=True, timeout=30,
+        )
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.strip() == expected, (
+            f"operator env {op_env} + pins {pin_env} must give {expected!r}, "
+            f"got {out.stdout.strip()!r} -- operator names must override the "
+            f"identity.env pins (they were silently ignored before round 27)"
+        )
