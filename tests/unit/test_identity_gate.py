@@ -492,3 +492,46 @@ def test_kvp_l2_serde_pin_reaches_namespace(tmp_path):
         "a KVP_L2_SERDE=zstd pin must change the namespace "
         f"(raw {out_raw.stdout.strip()} vs pinned {out_pin.stdout.strip()})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 29: KVP_CACHE_ROOT fallback parses like env.sh (shared parser).
+# ---------------------------------------------------------------------------
+
+def test_cache_root_fallback_expands_home(tmp_path, monkeypatch):
+    """Review (round 29): `export KVP_CACHE_ROOT=$HOME/kv-cache   # comment`
+    in cache.env must resolve to the REAL home-expanded path -- the gate then
+    finds <that>/l2-adapter.rendered.json instead of a literal "$HOME/..."."""
+    import subprocess as _sp
+    fake_home = tmp_path / "home"
+    (fake_home / "kv-cache").mkdir(parents=True)
+    (fake_home / "kv-cache" / "l2-adapter.rendered.json").write_text("{}")
+    repo = tmp_path / "repo"
+    (repo / "configs" / "generic").mkdir(parents=True)
+    (repo / "configs" / "mimo-v2.6-pro").mkdir(parents=True)
+    (repo / "configs" / "generic" / "cache.env").write_text(
+        "# comment line\nexport KVP_CACHE_ROOT=$HOME/kv-cache   # trailing comment\n")
+    (repo / "configs" / "generic" / "lmcache-server.env").write_text("")
+    (repo / "configs" / "mimo-v2.6-pro" / "identity.env").write_text("KVP_MODEL_ID=x\n")
+
+    code = (
+        "import os, sys; "
+        "from kvpersist.config import read_env_file; "
+        "os.environ['HOME'] = sys.argv[2]; "
+        "v = read_env_file(os.path.join(sys.argv[1], 'configs/generic/cache.env')); "
+        "print(v.get('KVP_CACHE_ROOT', ''))"
+    )
+    out = _sp.run(
+        [sys.executable, "-c", code, str(repo), str(fake_home)],
+        capture_output=True, text=True, timeout=30,
+        env={**os.environ, "HOME": str(fake_home),
+             "PYTHONPATH": str(ROOT / "implementation")},
+    )
+    assert out.returncode == 0, out.stderr
+    got = out.stdout.strip()
+    expected = str(fake_home / "kv-cache")
+    assert got == expected, (
+        f"KVP_CACHE_ROOT=$HOME/kv-cache must expand to {expected!r}, got {got!r} "
+        f"-- the gate must use the shared parser (export / trailing comment / "
+        f"$HOME) like env.sh, not a hand-rolled regex"
+    )

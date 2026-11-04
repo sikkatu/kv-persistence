@@ -348,22 +348,26 @@ engine_checks.append(("connector", want_conn, connector_seen))
 # (pre-launch check), and report INCONCLUSIVE rather than guessing.
 def _codec_from_adapter() -> str:
     cache_root = os.environ.get("KVP_CACHE_ROOT", "").strip()
-    # Review fix (round 28): the recipe's manual-gate run may not export
+    # Review fix (round 28/29): the recipe's manual-gate run may not export
     # KVP_CACHE_ROOT -- read it from the repo config files as a fallback
-    # (same layer order as env.sh: .local over base).
-    if not cache_root and config:
-        import re as _re
-        for _p in (os.path.join(root, "configs", "generic", "cache.env.local"),
-                   os.path.join(root, "configs", "generic", "cache.env")):
-            try:
-                for _line in open(_p):
-                    m = _re.match(r"^KVP_CACHE_ROOT=(.*)$", _line.strip())
-                    if m:
-                        cache_root = m.group(1).strip().strip('"').strip("'")
-            except OSError:
-                pass
-            if cache_root:
-                break
+    # (.local over base, same layer order as env.sh). Round 29: parse through
+    # the ONE shared parser (kvpersist.config.read_env_file), which handles
+    # `export`, trailing comments, quotes and $HOME expansion exactly like
+    # env.sh -- the hand-rolled regex left "$HOME/kv-cache" unexpanded and the
+    # gate then failed with a misleading INCONCLUSIVE.
+    if not cache_root:
+        try:
+            from kvpersist.config import read_env_file as _read_env
+        except Exception:
+            _read_env = None
+        if _read_env is not None:
+            for _rel in ("configs/generic/cache.env.local",
+                         "configs/generic/cache.env"):
+                _vals = _read_env(os.path.join(root, _rel))
+                _v = (_vals.get("KVP_CACHE_ROOT") or "").strip()
+                if _v:
+                    cache_root = _v
+                    break
     if not cache_root:
         return ""
     p = os.path.join(cache_root, "l2-adapter.rendered.json")

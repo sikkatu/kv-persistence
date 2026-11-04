@@ -125,6 +125,17 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
     return out
 
 
+def read_env_file(path: str) -> Dict[str, str]:
+    """Public wrapper around the ONE env-file parser shared by load_config,
+    the identity gate (verify-engine-identity.sh) and the launchers.
+
+    Handles `export KEY=...`, trailing ` #` comments, one matching outer quote
+    pair and $HOME / ${HOME} expansion -- byte-for-byte the rules of
+    scripts/env.sh `_kvp_parse_line` and kvpersist/config.py `_parse_env_file`.
+    Missing files yield an empty dict (never an error).
+    """
+    return _parse_env_file(Path(path))
+
 def load_config(repo_root: str, *, env_wins: bool = True, model_config: Optional[str] = None) -> Dict[str, str]:
     """Merge store env files in order. Precedence (env_wins=True):
 

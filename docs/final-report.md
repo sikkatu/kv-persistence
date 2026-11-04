@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(162 unit tests + 19 more offline config/docs tests = 181 offline collected,
-179 passed + 2 skipped; 196 collected total including the live-`lmcache`
+(163 unit tests + 19 more offline config/docs tests = 182 offline collected,
+180 passed + 2 skipped; 197 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 162 unit tests (`tests/unit`, 160 passed + 2 skipped),
-19 top-level offline tests, 181 offline collected (179 passed + 2 skipped),
-196 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 163 unit tests (`tests/unit`, 161 passed + 2 skipped),
+19 top-level offline tests, 182 offline collected (180 passed + 2 skipped),
+197 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
