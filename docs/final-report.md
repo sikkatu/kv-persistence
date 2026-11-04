@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(165 unit tests + 19 more offline config/docs tests = 184 offline collected,
-182 passed + 2 skipped; 199 collected total including the live-`lmcache`
+(183 unit tests + 19 more offline config/docs tests = 202 offline collected,
+200 passed + 2 skipped; 217 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 165 unit tests (`tests/unit`, 163 passed + 2 skipped),
-19 top-level offline tests, 184 offline collected (182 passed + 2 skipped),
-199 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 183 unit tests (`tests/unit`, 181 passed + 2 skipped),
+19 top-level offline tests, 202 offline collected (200 passed + 2 skipped),
+217 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -611,6 +611,17 @@ Home (EN/RU/ZH).
 **Codec check follows the server (review round 27)**: the l2_serde
 **Layered config resolution (review round 28)**: (1) KVP_* aliases in
 **Parser parity + end-to-end gate test (review round 30)**: the bash
+**Test safety + strict env format (review round 31)**: the test fixture
+now BACKS UP and RESTORES the operator's real `identity.env.local` --
+it used to DELETE it after every test run (a user who ran
+setup-identity.sh lost their identity pins on `pytest`). The
+end-to-end test now PROVES .local-over-base honestly (base declares
+lz4, .local declares zstd, no env override, adapter is zstd -> exit 0).
+All three env parsers (bash env.sh, config._parse_env_file,
+identity._read_env_config) now share ONE strict format -- name must be
+an ASCII identifier, value is trimmed then unquoted -- and a
+parameterized test runs 18 identical inputs through all of them.
+
 env.sh parser now cuts trailing comments at space OR tab before `#`,
 byte-for-byte identical to both Python parsers (config._parse_env_file,
 identity._read_env_config) -- the "MUST match" contract holds for

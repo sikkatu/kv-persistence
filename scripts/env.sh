@@ -25,8 +25,15 @@ _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
   line="${line#export }"
   _name="${line%%=*}"
   [ "$_name" = "$line" ] && return 1
-  _name="$(printf '%s' "$_name" | tr -d ' ')"
-  [ -z "$_name" ] && return 1
+  # Review fix (round 31): ONE strict format for all parsers. The name is
+  # trimmed at the edges (NOT stripped of inner spaces -- `FOO BAR=x` is not
+  # an assignment, matching python name.isidentifier()) and must be an ASCII
+  # identifier. The old `tr -d ' '` silently turned `FOO BAR=x` into FOOBAR=x.
+  _name="${_name#"${_name%%[![:space:]]*}"}"
+  _name="${_name%"${_name##*[![:space:]]}"}"
+  case "$_name" in
+    ''|*[!A-Za-z0-9_]*|[0-9]*) return 1 ;;
+  esac
   _val="${line#*=}"
   # Review fix (round 30): cut a trailing comment at a space OR a TAB
   # before '#' -- byte-for-byte the Python parsers (config._parse_env_file,
@@ -35,6 +42,12 @@ _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
   # comment here while Python dropped it (the "MUST match" contract).
   _val="${_val%% #*}"
   _val="${_val%%$'\t'#*}"
+  # Review fix (round 31): trim the value after the comment cut and BEFORE
+  # quote stripping -- byte-for-byte the python order
+  # (comment cut -> val.strip() -> quote strip). Without this `KEY= value`
+  # kept a leading space here while python stripped it.
+  _val="${_val#"${_val%%[![:space:]]*}"}"
+  _val="${_val%"${_val##*[![:space:]]}"}"
   # Review fix: strip ONE matching outer quote pair (single or double), exactly
   # like `kvpersist/config.py::_parse_env_file`. The old code only removed
   # double quotes, so `KVP_X='abc'` came out as `'abc'` here but `abc` in

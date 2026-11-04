@@ -49,9 +49,16 @@ def _write_config(tmp_path: Path, **overrides: str) -> Path:
 
 @pytest.fixture()
 def _cleanup_local():
+    """Review fix (round 31): BACK UP the operator's real identity.env.local
+    and RESTORE it afterwards. The old fixture DELETED it -- a user who ran
+    setup-identity.sh lost their real identity pins on `pytest`."""
     local = CONFIG_DIR / "identity.env.local"
+    existed = local.exists()
+    backup = local.read_text() if existed else None
     yield local
-    if local.exists():
+    if existed:
+        local.write_text(backup)
+    elif local.exists():
         local.unlink()
 
 
@@ -578,30 +585,39 @@ def test_tab_comment_parsers_agree(tmp_path):
 
 
 def test_gate_end_to_end_with_home_expansion(tmp_path, _stub_env, _cleanup_local):
-    """Review (round 30): the REAL gate must run end-to-end with a
+    """Review (round 30/31): the REAL gate must run end-to-end with a
     KVP_CACHE_ROOT=$HOME/kv-cache fallback -- proving .local-over-base
-    selection, adapter discovery, real codec read and exit 0."""
+    selection, adapter discovery, real codec read and exit 0.
+    Round 31: the test now PROVES .local-over-base honestly -- the base
+    identity.env declares KVP_L2_SERDE=lz4, identity.env.local declares
+    zstd, NO env variable is set, and the rendered adapter is zstd. Exit 0
+    can only happen if the .local pin won over the base file."""
     import subprocess as _sp
     fake_home = tmp_path / "home"
     cache_dir = fake_home / "kv-cache"
     cache_dir.mkdir(parents=True)
-    (cache_dir / "l2-adapter.rendered.json").write_text(
+    (cache_dir / 'l2-adapter.rendered.json').write_text(
         '{"serde": {"type": "kvp-zstd", "level": "3", "align_bytes": "4096"}}'
     )
     _write_config(tmp_path)
     local = CONFIG_DIR / "identity.env.local"
     local.write_text(local.read_text().rstrip() + chr(10) + "KVP_L2_SERDE=zstd" + chr(10))
-
+    # base file declares a DIFFERENT codec (lz4) -- .local must win
+    base_file = CONFIG_DIR / "identity.env"
+    original_base = base_file.read_text()
+    base_file.write_text(original_base.rstrip() + chr(10) + "KVP_L2_SERDE=lz4" + chr(10))
     cache_env = ROOT / "configs" / "generic" / "cache.env"
     original_cache_env = cache_env.read_text()
     cache_env.write_text(
-        original_cache_env + chr(10) + "export KVP_CACHE_ROOT=$HOME/kv-cache   # r30" + chr(10)
+        original_cache_env + chr(10) + "export KVP_CACHE_ROOT=$HOME/kv-cache   # r31" + chr(10)
     )
     try:
         env = dict(_stub_env)
-        env.pop("KVP_CACHE_ROOT", None)  # force the $HOME fallback
+        env.pop("KVP_CACHE_ROOT", None)   # force the $HOME fallback
+        env.pop("KVP_L2_SERDE", None)     # NO env override -- .local must win
+        env.pop("LMCACHE_L2_SERDE", None)
+        env.pop("USE_LOSSLESS_SERDE", None)
         env["HOME"] = str(fake_home)
-        env["KVP_L2_SERDE"] = "zstd"
         env["STUB_CMD_ARGS"] = BASE_ARGS
         result = _sp.run(
             ["bash", str(GATE), "test-container"],
@@ -609,14 +625,86 @@ def test_gate_end_to_end_with_home_expansion(tmp_path, _stub_env, _cleanup_local
         )
     finally:
         cache_env.write_text(original_cache_env)
-
+        base_file.write_text(original_base)
     assert result.returncode == 0, (
-        f"gate must pass end-to-end with $HOME fallback, got exit "
-        f"{result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"gate must pass end-to-end with $HOME fallback AND .local-over-base, "
+        f"got exit {result.returncode}" + chr(10) + "stdout:" + chr(10) + result.stdout + chr(10) + "stderr:" + chr(10) + result.stderr
     )
     assert "identity verified" in result.stdout, (
-        f"gate must report identity verified, got:\n{result.stdout[-800:]}"
+        f"gate must report identity verified, got:" + chr(10) + result.stdout[-800:]
     )
     assert "l2_serde" in result.stdout and "zstd" in result.stdout, (
-        f"gate must read zstd from the rendered adapter, got:\n{result.stdout[-800:]}"
+        f"gate must read zstd from the rendered adapter via the .local pin, "
+        f"got:" + chr(10) + result.stdout[-800:]
     )
+
+# ---------------------------------------------------------------------------
+# Round 31: parameterized parser parity (bash vs config vs identity).
+# ---------------------------------------------------------------------------
+
+PARSER_CASES = [
+    # (input line, expected value or None for reject)
+    ("KEY=value", "value"),
+    (" KEY=value", "value"),             # leading whitespace trimmed
+    ("KEY= value", "value"),             # value whitespace trimmed
+    ("KEY=  value  ", "value"),          # both edges trimmed
+    ("export KEY=value", "value"),
+    ("export  KEY=value", "value"),      # double space after export
+    ("FOO BAR=value", None),             # spaces in name = reject
+    ("1BAD=value", None),               # leading digit = reject
+    ("KEY=", ""),                        # empty value is legal
+    ("KEY=value # comment", "value"),
+    ("KEY=value\t# comment", "value"),   # tab before #
+    ("KEY='quoted'", "quoted"),
+    ("KEY=\"quoted\"", "quoted"),
+    ("# KEY=value", None),               # comment line
+    ("", None),                          # empty line
+    ("NOEQUALS", None),                  # no = sign
+    ("KEY=va lue", "va lue"),            # spaces INSIDE value kept
+    ("KEY=a#b", "a#b"),                 # # without whitespace is literal
+]
+
+
+@pytest.mark.parametrize("line,expected", PARSER_CASES)
+def test_all_parsers_agree(line, expected, tmp_path):
+    """Review (round 31): bash env.sh, config._parse_env_file and
+    identity._read_env_config must agree byte-for-byte on EVERY input --
+    accepted value or rejection. One strict env-file format for all."""
+    import subprocess as _sp
+    f = tmp_path / "p.env"
+    f.write_text(line + chr(10))
+    # python: both parsers
+    out = _sp.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, sys.argv[2]); "
+         "from kvpersist.config import read_env_file; "
+         "from kvpersist.identity import _read_env_config; "
+         "c = read_env_file(sys.argv[1]); i = _read_env_config(sys.argv[1]); "
+         "cv = c.get('KEY') if 'KEY' in c else (list(c.values())[0] if c else None); "
+         "iv = i.get('KEY') if 'KEY' in i else (list(i.values())[0] if i else None); "
+         "import json; print(json.dumps([cv, iv]))",
+         str(f), str(ROOT / "implementation")],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert out.returncode == 0, out.stderr
+    import json as _json
+    c_val, i_val = _json.loads(out.stdout.strip())
+    # bash: _kvp_parse_line
+    escaped = line.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))
+    out_bash = _sp.run(
+        ["bash", "-c",
+         f". {ROOT}/scripts/env.sh; _kvp_parse_line {chr(39)}{escaped}{chr(39)} && printf %s \"$_val\" || echo REJECT"],
+        capture_output=True, text=True, timeout=30,
+    )
+    bash_val = out_bash.stdout.strip()
+    if bash_val == "REJECT":
+        bash_val = None
+    # all three must agree
+    if expected is None:
+        assert c_val is None or c_val == "", f"config accepted {line!r} -> {c_val!r}"
+        assert i_val is None or i_val == "", f"identity accepted {line!r} -> {i_val!r}"
+        assert bash_val is None or bash_val == "", f"bash accepted {line!r} -> {bash_val!r}"
+    else:
+        assert c_val == expected, f"config: {line!r} -> {c_val!r}, want {expected!r}"
+        assert i_val == expected, f"identity: {line!r} -> {i_val!r}, want {expected!r}"
+        assert bash_val == expected, f"bash: {line!r} -> {bash_val!r}, want {expected!r}"
