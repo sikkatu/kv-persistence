@@ -125,7 +125,9 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
         # mis-parsed values like "a'b".
         if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
             val = val[1:-1]
-        val = val.replace("$HOME", os.path.expanduser("~")).replace("${HOME}", os.path.expanduser("~"))
+        # Review fix (round 33): expand ${HOME} BEFORE $HOME -- the
+        # canonical safe order (brace form first).
+        val = val.replace("${HOME}", os.path.expanduser("~")).replace("$HOME", os.path.expanduser("~"))
         if name and _ASCII_IDENT.match(name):
             out[name] = val
     return out

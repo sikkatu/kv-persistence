@@ -63,7 +63,9 @@ _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
       \'*\') _val="${_val#\'}"; _val="${_val%\'}" ;;
     esac
   fi
-  case "$_val" in *'$HOME'*|*'${HOME}'*) _val="${_val//\$HOME/$HOME}"; _val="${_val//\$\{HOME\}/$HOME}" ;; esac
+  # Review fix (round 33): expand ${HOME} BEFORE $HOME -- canonical safe
+  # order, same as config._parse_env_file / identity._read_env_config.
+  case "$_val" in *'$HOME'*|*'${HOME}'*) _val="${_val//\$\{HOME\}/$HOME}"; _val="${_val//\$HOME/$HOME}" ;; esac
   return 0
 }
 

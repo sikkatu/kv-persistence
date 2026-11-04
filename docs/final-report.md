@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(185 unit tests + 19 more offline config/docs tests = 204 offline collected,
-202 passed + 2 skipped; 219 collected total including the live-`lmcache`
+(188 unit tests + 19 more offline config/docs tests = 207 offline collected,
+205 passed + 2 skipped; 222 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 185 unit tests (`tests/unit`, 183 passed + 2 skipped),
-19 top-level offline tests, 204 offline collected (202 passed + 2 skipped),
-219 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 188 unit tests (`tests/unit`, 186 passed + 2 skipped),
+19 top-level offline tests, 207 offline collected (205 passed + 2 skipped),
+222 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -613,6 +613,16 @@ Home (EN/RU/ZH).
 **Parser parity + end-to-end gate test (review round 30)**: the bash
 **Test safety + strict env format (review round 31)**: the test fixture
 **ASCII-only names + full-dict parity (review round 32)**: python
+**HOME expansion parity (review round 33)**: `identity._read_env_config()`
+did not expand `$HOME`/`${HOME}` at all while `config._parse_env_file`
+and bash `env.sh` did -- it now expands both forms exactly like the
+other two parsers. All three parsers now expand `${HOME}` BEFORE
+`$HOME` (canonical safe order; note `$HOME` is not actually a substring
+of `${HOME}` because of the brace, so the old order did not corrupt --
+verified empirically -- but the brace-first order is trivially safe).
+The parity test covers both forms plus a mixed one with a CONTROLLED
+`HOME` passed to all three parser subprocesses (24 cases total).
+
 `str.isidentifier()` accepts Unicode names (КЛЮЧ=value passed) while
 bash rejects them -- both Python parsers now use an explicit ASCII
 regex `^[A-Za-z_][A-Za-z0-9_]*$`, matching bash exactly. The bash

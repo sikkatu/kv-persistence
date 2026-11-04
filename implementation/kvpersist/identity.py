@@ -48,6 +48,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import re
 from typing import Any, Dict
 
@@ -233,7 +234,12 @@ def _read_env_config(path: str) -> Dict[str, str]:
                 if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                     continue
                 if name:
-                    out[name] = _strip_quotes(val)
+                    # Review fix (round 33): expand ${HOME}/$HOME exactly like
+                    # config._parse_env_file and env.sh -- ${HOME} first.
+                    v = _strip_quotes(val)
+                    v = v.replace("${HOME}", os.path.expanduser("~"))
+                    v = v.replace("$HOME", os.path.expanduser("~"))
+                    out[name] = v
     except OSError:
         pass
     return out

@@ -671,6 +671,11 @@ PARSER_CASES = [
     ("NOEQUALS", {}),                             # no = sign
     ("KEY=va lue", {"KEY": "va lue"}),            # spaces INSIDE value kept
     ("KEY=a#b", {"KEY": "a#b"}),                  # # without whitespace is literal
+    # Review (round 33): HOME expansion must be identical in all three
+    # parsers -- both the bare and the brace form (controlled HOME below).
+    ("KEY=$HOME/cache", {"KEY": "/kvp-test-home/cache"}),
+    ("KEY=${HOME}/cache", {"KEY": "/kvp-test-home/cache"}),
+    ("KEY=${HOME}/$HOME", {"KEY": "/kvp-test-home//kvp-test-home"}),
 ]
 
 
@@ -684,6 +689,10 @@ def test_all_parsers_agree(line, expected, tmp_path):
     import subprocess as _sp
     f = tmp_path / "p.env"
     f.write_text(line + chr(10))
+    import os as _os
+    # Review (round 33): controlled HOME so the expected values above are
+    # stable regardless of the test host's real home directory.
+    _env = dict(_os.environ, HOME="/kvp-test-home")
     out = _sp.run(
         [sys.executable, "-c",
          "import sys, json; sys.path.insert(0, sys.argv[2]); "
@@ -692,7 +701,7 @@ def test_all_parsers_agree(line, expected, tmp_path):
          "c = read_env_file(sys.argv[1]); i = _read_env_config(sys.argv[1]); "
          "print(json.dumps([c, i]))",
          str(f), str(ROOT / "implementation")],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, env=_env,
     )
     assert out.returncode == 0, out.stderr
     c_dict, i_dict = _json.loads(out.stdout.strip())
@@ -702,7 +711,7 @@ def test_all_parsers_agree(line, expected, tmp_path):
         ["bash", "-c",
          f". {ROOT}/scripts/env.sh; _kvp_parse_line {chr(39)}{escaped}{chr(39)} && "
          f"printf {chr(39)}%s=%s{chr(39)} \"$_name\" \"$_val\" || echo REJECT"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, env=_env,
     )
     bash_raw = out_bash.stdout.strip()
     if bash_raw == "REJECT" or not bash_raw:
