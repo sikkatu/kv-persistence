@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(160 unit tests + 19 more offline config/docs tests = 179 offline collected,
-177 passed + 2 skipped; 194 collected total including the live-`lmcache`
+(162 unit tests + 19 more offline config/docs tests = 181 offline collected,
+179 passed + 2 skipped; 196 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 160 unit tests (`tests/unit`, 158 passed + 2 skipped),
-19 top-level offline tests, 179 offline collected (177 passed + 2 skipped),
-194 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 162 unit tests (`tests/unit`, 160 passed + 2 skipped),
+19 top-level offline tests, 181 offline collected (179 passed + 2 skipped),
+196 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -609,6 +609,18 @@ Home (EN/RU/ZH).
 **Smoke request follows the engine (review round 25)**: the launcher
 **Cross-repo consistency (review round 26)**: (1) cache.env(.local)
 **Codec check follows the server (review round 27)**: the l2_serde
+**Layered config resolution (review round 28)**: (1) KVP_* aliases in
+cache.env are now commented out -- an LMCACHE_* edit in
+lmcache-server.env.local wins naturally (the shipped KVP_* defaults
+used to override it). (2) a KVP_L2_SERDE pin in identity.env(.local)
+now reaches the NAMESPACE (zstd pin -> zstd namespace), closing the
+gap where the gate accepted the pin but the namespace stayed raw.
+(3) bare BLOCK_SIZE is not promoted in run-vllm-with-persist.sh
+(round 26 rule preserved). (4) the gate reads KVP_CACHE_ROOT from
+cache.env(.local) when not exported, and the recipe's manual-gate
+reminder mentions it. (5) README paragraph un-glued (EN) + KVP_L2_SERDE
+note mirrored in RU/ZH.
+
 check now reads the SERVER's actual codec from
 `<cache-root>/l2-adapter.rendered.json` (written at server start), not
 the gate's own shell env -- the README's `USE_LOSSLESS_SERDE=1 bash

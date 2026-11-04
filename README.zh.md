@@ -190,7 +190,9 @@ bash scripts/start-observability.sh
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 ```
-`USE_LOSSLESS_SERDE` 在两条命令中必须一致 —— 它属于缓存身份命名空间。
+`USE_LOSSLESS_SERDE` 在两条命令中必须一致 —— 它属于缓存身份命名空间。请在
+`identity.env.local` 中将相同值固定为 `KVP_L2_SERDE`，以便身份门禁验证服务器
+的编解码器（它读取服务器启动时渲染的 L2 适配器）。
 不设置该变量即保持逐字节精确的原始模式。
 ## 仓库结构
 | 路径 | 内容 |

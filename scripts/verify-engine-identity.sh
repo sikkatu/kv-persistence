@@ -348,6 +348,22 @@ engine_checks.append(("connector", want_conn, connector_seen))
 # (pre-launch check), and report INCONCLUSIVE rather than guessing.
 def _codec_from_adapter() -> str:
     cache_root = os.environ.get("KVP_CACHE_ROOT", "").strip()
+    # Review fix (round 28): the recipe's manual-gate run may not export
+    # KVP_CACHE_ROOT -- read it from the repo config files as a fallback
+    # (same layer order as env.sh: .local over base).
+    if not cache_root and config:
+        import re as _re
+        for _p in (os.path.join(root, "configs", "generic", "cache.env.local"),
+                   os.path.join(root, "configs", "generic", "cache.env")):
+            try:
+                for _line in open(_p):
+                    m = _re.match(r"^KVP_CACHE_ROOT=(.*)$", _line.strip())
+                    if m:
+                        cache_root = m.group(1).strip().strip('"').strip("'")
+            except OSError:
+                pass
+            if cache_root:
+                break
     if not cache_root:
         return ""
     p = os.path.join(cache_root, "l2-adapter.rendered.json")

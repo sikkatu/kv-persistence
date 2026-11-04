@@ -409,3 +409,86 @@ def test_kvp_lmcache_duplicates_propagate_to_lmcache_names(tmp_path):
     assert lines.get("LMCACHE_L1_SIZE_GB") == "32", (
         f"KVP_L1_SIZE_GB=32 must propagate to LMCACHE_L1_SIZE_GB: {lines}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 28: layered alias resolution + KVP_L2_SERDE pin in the namespace.
+# ---------------------------------------------------------------------------
+
+def test_layered_alias_resolution(tmp_path):
+    """Review (round 28, item 1): an LMCACHE_* edit in lmcache-server.env.local
+    must win over the shipped KVP_* aliases (cache.env). The aliases are
+    commented out now; a layer-local edit is never overridden."""
+    import subprocess as _sp
+    root = tmp_path / "repo"
+    (root / "configs" / "generic").mkdir(parents=True)
+    (root / "configs" / "mimo-v2.6-pro").mkdir(parents=True)
+    (root / "configs" / "generic" / "cache.env").write_text(
+        "# KVP_L1_SIZE_GB=64\n# KVP_LMCACHE_PORT=5555\n# KVP_CHUNK_SIZE=256\n")
+    (root / "configs" / "generic" / "lmcache-server.env").write_text(
+        "LMCACHE_L1_SIZE_GB=64\nLMCACHE_PORT=5555\nLMCACHE_CHUNK_SIZE=256\n")
+    (root / "configs" / "generic" / "lmcache-server.env.local").write_text(
+        "LMCACHE_L1_SIZE_GB=128\nLMCACHE_PORT=6000\nLMCACHE_CHUNK_SIZE=512\n")
+    (root / "configs" / "mimo-v2.6-pro" / "identity.env").write_text(
+        "KVP_MODEL_ID=x\n")
+    out = _sp.run(
+        [sys.executable, "-c",
+         "import sys; from kvpersist.config import load_config; "
+         "c = load_config(sys.argv[1], env_wins=False); "
+         "print(c.get('LMCACHE_L1_SIZE_GB'), c.get('LMCACHE_PORT'), "
+         "c.get('LMCACHE_CHUNK_SIZE'))", str(root)],
+        capture_output=True, text=True, timeout=30,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "implementation")},
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "128 6000 512", (
+        f"lmcache-server.env.local edits must win over the KVP_* aliases, "
+        f"got {out.stdout.strip()!r}"
+    )
+
+
+def test_kvp_l2_serde_pin_reaches_namespace(tmp_path):
+    """Review (round 28, item 2): a KVP_L2_SERDE pin in identity.env must
+    change the NAMESPACE (zstd pin != raw). Previously the pin was ignored
+    for the namespace while the gate accepted it -- zstd chunks landed under
+    the raw namespace."""
+    import subprocess as _sp
+    root = tmp_path / "repo"
+    (root / "configs" / "generic").mkdir(parents=True)
+    (root / "configs" / "mimo-v2.6-pro").mkdir(parents=True)
+    (root / "configs" / "generic" / "cache.env").write_text("")
+    (root / "configs" / "generic" / "lmcache-server.env").write_text("LMCACHE_L2_SERDE=none\n")
+    (root / "configs" / "mimo-v2.6-pro" / "identity.env").write_text(
+        "KVP_MODEL_ID=x\nKVP_MODEL_REVISION=" + "0" * 40 +
+        "\nKVP_TOKENIZER_NAME=x\nKVP_TOKENIZER_REVISION=" + "0" * 40 +
+        "\nKVP_KV_CACHE_DTYPE=bfloat16\nKVP_BLOCK_SIZE=16\nKVP_NUM_KV_HEADS=8"
+        "\nKVP_HEAD_DIM=128\nKVP_TP_SIZE=4\nKVP_CONNECTOR=c\n"
+        "KVP_CONNECTOR_VERSION=v\nKVP_MAX_MODEL_LEN=1\n"
+        "KVP_CHAT_TEMPLATE_DIGEST=" + "0" * 64 + "\n")
+    code = (
+        "import os, sys; "
+        "from kvpersist.identity import identity_from_env_files; "
+        "[os.environ.pop(k, None) for k in "
+        "('LMCACHE_L2_SERDE','KVP_L2_SERDE','USE_LOSSLESS_SERDE')]; "
+        "g = os.path.join; base = g(sys.argv[1], 'configs/generic'); "
+        "mc = g(sys.argv[1], 'configs/mimo-v2.6-pro'); "
+        "paths = [g(base, 'cache.env'), g(base, 'lmcache-server.env'), "
+        "g(mc, 'identity.env')]; "
+        "print(identity_from_env_files(*paths).namespace())"
+    )
+    out_raw = _sp.run([sys.executable, "-c", code, str(root)],
+                      capture_output=True, text=True, timeout=30,
+                      env={**os.environ, "PYTHONPATH": str(ROOT / "implementation")})
+    # now set the pin
+    (root / "configs" / "mimo-v2.6-pro" / "identity.env").write_text(
+        (root / "configs" / "mimo-v2.6-pro" / "identity.env").read_text() +
+        "KVP_L2_SERDE=zstd\n")
+    out_pin = _sp.run([sys.executable, "-c", code, str(root)],
+                      capture_output=True, text=True, timeout=30,
+                      env={**os.environ, "PYTHONPATH": str(ROOT / "implementation")})
+    assert out_raw.returncode == 0, out_raw.stderr
+    assert out_pin.returncode == 0, out_pin.stderr
+    assert out_raw.stdout.strip() != out_pin.stdout.strip(), (
+        "a KVP_L2_SERDE=zstd pin must change the namespace "
+        f"(raw {out_raw.stdout.strip()} vs pinned {out_pin.stdout.strip()})"
+    )

@@ -37,6 +37,61 @@ _KNOB_PAIRS: Tuple[Tuple[str, str], ...] = (
 )
 
 
+# Round 28: a knob may be spelled LMCACHE_* (lmcache-server.env) OR KVP_*
+# (cache.env). They are ONE setting. Conflicts must be resolved by LAYER ORDER
+# (process env > .local files > base files), NOT by "alias always wins" --
+# cache.env ships active KVP_* defaults, and those must not override an
+# operator's LMCACHE_* edit in lmcache-server.env.local.
+_ALIAS_MAP = {
+    "LMCACHE_HOST": "KVP_LMCACHE_HOST",
+    "LMCACHE_PORT": "KVP_LMCACHE_PORT",
+    "LMCACHE_HTTP_PORT": "KVP_LMCACHE_HTTP_PORT",
+    "LMCACHE_L1_SIZE_GB": "KVP_L1_SIZE_GB",
+    "LMCACHE_CHUNK_SIZE": "KVP_CHUNK_SIZE",
+    "LMCACHE_EVICTION_TRIGGER_WATERMARK": "KVP_EVICT_TRIGGER_WATERMARK",
+    "LMCACHE_EVICTION_RATIO": "KVP_EVICT_RATIO",
+    "LMCACHE_L2_SERDE": "KVP_L2_SERDE",
+}
+
+def resolve_layered(repo_root: str) -> Dict[str, str]:
+    """Merge every env file by LAYER (base first, .local last) with BOTH
+    spellings of a knob folded into ONE name (the LMCACHE_* spelling).
+    The LAST layer to set either spelling wins -- identical semantics to
+    scripts/env.sh _kvp_seed (which exports in this order).
+    """
+    root = Path(repo_root)
+    gen = root / "configs" / "generic"
+    layers = [
+        gen / "cache.env",
+        gen / "lmcache-server.env",
+        gen / "cache.env.local",
+        gen / "lmcache-server.env.local",
+    ]
+    for d in sorted(root.glob("configs/*")):
+        if d.name != "generic":
+            layers.insert(2, d / "identity.env")
+            layers.append(d / "identity.env.local")
+    out: Dict[str, str] = {}
+    for p in layers:
+        for k, v in _parse_env_file(p).items():
+            out[k] = v
+    # fold aliases into the canonical LMCACHE_* spelling by layer order:
+    # a later assignment to EITHER spelling replaces the folded value
+    folded: Dict[str, str] = {}
+    for p in layers:
+        vals = _parse_env_file(p)
+        for k, v in vals.items():
+            canonical = k
+            for lm, kv in _ALIAS_MAP.items():
+                if k == kv:
+                    canonical = lm
+            folded[canonical] = v
+    # preserve non-alias keys as-is
+    for k, v in out.items():
+        if k not in _ALIAS_MAP.values() and k not in _ALIAS_MAP:
+            folded.setdefault(k, v)
+    return folded
+
 def _parse_env_file(path: Path) -> Dict[str, str]:
     """Parse KEY=VALUE env file. MUST match scripts/env.sh `_kvp_parse_line`."""
     out: Dict[str, str] = {}
@@ -107,9 +162,17 @@ def load_config(repo_root: str, *, env_wins: bool = True, model_config: Optional
         # Later file wins for every key (identical to the bash seeder).
         merged.update(_parse_env_file(p))
     if env_wins:
-        for k in list(merged):
-            if k in os.environ:
+        # Review fix (round 28): "env wins over files" means an EXPORTED
+        # operator value is visible even when NO file defines that key (the
+        # KVP_* aliases are commented out in cache.env by default now). Also
+        # fold an exported KVP_* alias into the canonical LMCACHE_* spelling
+        # so the namespace and the server see ONE value.
+        for k in os.environ:
+            if k.startswith("KVP_") or k.startswith("LMCACHE_") or k == "USE_LOSSLESS_SERDE":
                 merged[k] = os.environ[k]
+        for _lm, _kv in _ALIAS_MAP.items():
+            if _kv in os.environ:
+                merged[_lm] = os.environ[_kv]
     return merged
 
 

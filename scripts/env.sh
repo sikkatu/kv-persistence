@@ -85,11 +85,19 @@ _kvp_resolve_l2_serde(){
       echo "ERROR: USE_LOSSLESS_SERDE=${USE_LOSSLESS_SERDE} not understood (use 1 / zstd / lz4 / 0)" >&2
       return 1 ;;
   esac
+  # Review fix (round 28, item 2): the KVP_L2_SERDE PIN in identity.env(.local)
+  # is a real source of the effective codec -- it must reach the namespace,
+  # or a zstd pin silently lands under the "none" namespace while the gate
+  # accepts it (the reviewer's divergence). Precedence: explicit env export >
+  # USE_LOSSLESS_SERDE switch > KVP_L2_SERDE file pin > LMCACHE_L2_SERDE from
+  # files > none.
   if [ -n "${_kvp_env_serde:-}" ]; then
     # Rule 1: explicit env export beats the shorthand switch.
     LMCACHE_L2_SERDE="$_kvp_env_serde"
   elif [ -n "$_kvp_switch_serde" ]; then
     LMCACHE_L2_SERDE="$_kvp_switch_serde"
+  elif [ -n "${KVP_L2_SERDE:-}" ]; then
+    LMCACHE_L2_SERDE="$KVP_L2_SERDE"
   else
     LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-none}"
   fi

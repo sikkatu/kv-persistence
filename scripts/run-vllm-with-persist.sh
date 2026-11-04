@@ -85,6 +85,9 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"
 # MAX_MODEL_LEN=524288 / KV_CACHE_DTYPE=fp8 launches verify clean.
 # Review fix (round 27): PROMOTE explicitly-set operator names to their KVP_*
 # form BEFORE the resolver, so they win over the identity.env pins that
+# scripts/env.sh exported. Review fix (round 28): bare BLOCK_SIZE is NOT
+# promoted (round 26 removed it everywhere -- a stray BLOCK_SIZE=64 in the
+# environment must not change --block-size; KV_PERSIST_BLOCK_SIZE is the knob).
 # scripts/env.sh exported. Without this a `KV_CACHE_DTYPE=fp8` /
 # `MAX_MODEL_LEN=524288` / `TP_SIZE=2` was silently ignored (the engine ran the
 # pinned identity.env value) while the recipe launcher honoured it -- two
@@ -93,7 +96,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"
 # promoted values (single source of truth).
 for _pair in "KV_CACHE_DTYPE:KVP_KV_CACHE_DTYPE" "MAX_MODEL_LEN:KVP_MAX_MODEL_LEN" \
              "TP_SIZE:KVP_TP_SIZE" "SERVED_MODEL_NAME:KVP_SERVED_MODEL_NAME" \
-             "KV_PERSIST_BLOCK_SIZE:KVP_BLOCK_SIZE" "BLOCK_SIZE:KVP_BLOCK_SIZE"; do
+             "KV_PERSIST_BLOCK_SIZE:KVP_BLOCK_SIZE"; do
   _op="${_pair%%:*}"; _kp="${_pair##*:}"
   if [ -n "${!_op:-}" ]; then
     if [ -n "${!_kp:-}" ] && [ "${!_kp}" != "${!_op}" ]; then

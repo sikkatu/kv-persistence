@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（160 个单元测试 + 19 个离线配置/文档测试 = 179 个离线收集，
-177 通过 + 2 跳过；共收集 194 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（162 个单元测试 + 19 个离线配置/文档测试 = 181 个离线收集，
+179 通过 + 2 跳过；共收集 196 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：160 个单元测试（158 通过 + 2 跳过），19 个离线配置/文档测试，
-179 个离线收集（177 通过 + 2 跳过），共收集 194 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
+**测试计数**：此前的数字已过时。实际：162 个单元测试（160 通过 + 2 跳过），19 个离线配置/文档测试，
+181 个离线收集（179 通过 + 2 跳过），共收集 196 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -373,6 +373,15 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **Smoke 请求跟随引擎（rev. 25）**：启动器将 served-model-name 显式传给
 **跨仓库一致性（rev. 26）**：(1) cache.env(.local) 中的 KVP_LMCACHE_* /
 **编解码器检查跟随服务器（rev. 27）**：l2_serde 检查现在从
+**分层配置解析（rev. 28）**：(1) cache.env 中的 KVP_* 别名现已注释——
+lmcache-server.env.local 中的 LMCACHE_* 修改自然生效（此前被默认的
+KVP_* 覆盖）。(2) identity.env(.local) 中的 KVP_L2_SERDE pin 现在进入
+NAMESPACE（zstd pin -> zstd namespace），消除门禁接受 pin 但 namespace
+仍为原始模式的漏洞。(3) run-vllm-with-persist.sh 不再提升裸 BLOCK_SIZE
+（保留 round 26 规则）。(4) 门禁在未导出时从 cache.env(.local) 读取
+KVP_CACHE_ROOT，配方提醒中提及该变量。(5) README 粘连段落修复（EN），
+KVP_L2_SERDE 说明同步到 RU/ZH。
+
 `<cache-root>/l2-adapter.rendered.json`（服务器启动时写入）读取服务器
 实际编解码器，而不是门禁自身的 shell 环境——README 中的
 `USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh` 恢复正常，

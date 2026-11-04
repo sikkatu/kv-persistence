@@ -256,6 +256,11 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
     for k in ("LMCACHE_L2_SERDE", "KVP_L2_SERDE", "USE_LOSSLESS_SERDE"):
         if k in _os.environ:
             vals[k] = _os.environ[k]
+    # Review fix (round 28, item 2): the KVP_L2_SERDE PIN in identity.env(.local)
+    # must reach the namespace -- otherwise a zstd pin silently hashes as
+    # "none" while the gate accepts it (chunks land under the wrong namespace).
+    # It is already in `vals` from the file layers; the fold below must prefer
+    # it over LMCACHE_L2_SERDE from the config files (env still wins).
     def get(name: str, default: str = "") -> str:
         return vals.get(name, default)
     # Fold the operator switch USE_LOSSLESS_SERDE into the effective
@@ -287,12 +292,20 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
             f"USE_LOSSLESS_SERDE={use_lossless!r} not understood "
             "(use 1 / zstd / lz4 / 0)"
         )
+    # Review fix (round 28): the KVP_L2_SERDE PIN (identity.env[.local]) wins
+    # over the LMCACHE_L2_SERDE config value -- the pin is the deployment's
+    # declared codec and must reach the namespace, or zstd chunks land under
+    # the "none" namespace while the gate accepts the pin. Env values still
+    # win (they overwrote `vals` above). Precedence: env (LMCACHE_L2_SERDE or
+    # KVP_L2_SERDE exported) > USE_LOSSLESS_SERDE switch > KVP_L2_SERDE pin >
+    # LMCACHE_L2_SERDE file > none.
     if env_serde:
         serde = env_serde.strip().lower()
     elif switch_serde:
         serde = switch_serde
     else:
-        serde = (get("LMCACHE_L2_SERDE") or get("KVP_L2_SERDE") or "none").strip().lower()
+        _env_pin = _os.environ.get("KVP_L2_SERDE", "").strip()
+        serde = (get("KVP_L2_SERDE") or _env_pin or get("LMCACHE_L2_SERDE") or "none").strip().lower()
     # Advanced identity fields (review fix): these ARE read from the config
     # files / environment -- they were declared on the dataclass but never
     # populated, so two deployments differing only in LoRA / RoPE / multimodal
