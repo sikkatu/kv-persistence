@@ -5,7 +5,13 @@
 #
 # Relationship to the recipe launchers (run-tp4-uva.sh / run-tp4-hotsplit.sh,
 # review fix round 19): the docker args are based on the same recipe baseline,
-# but NOT a byte-for-byte mirror. This launcher:
+# but NOT a byte-for-byte mirror. Review fix (round 26), HONEST SCOPE: this
+# launcher runs the UVA BASELINE only -- it mounts the loader patches
+# (mimo_v2*.py) but NOT the hotsplit machinery (sitecustomize.py, hotsplit.py,
+# --compilation-config FULL_DECODE_ONLY, --cap-add IPC_LOCK/SYS_NICE). The KV
+# values are the same as the recipe's, but the PERFORMANCE numbers measured on
+# hotsplit do NOT apply to runs of THIS launcher. For the hotsplit profile use
+# the recipe's run-tp4-hotsplit.sh. This launcher:
 #   * mounts the model at /models/<cache-identity namespace> (not /model) --
 #     the recipe's KV_PERSIST=1 branch now does the same, but the plain
 #     recipe run does NOT (it intentionally has no cache identity);
@@ -35,7 +41,15 @@ set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-RECIPE="${RECIPE_DIR:-$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit}"
+# Review fix (round 26): try the documented clone layout first
+# (~/sikkatu-recipes/recipes/...), then the plain ~/recipes layout.
+if [ -n "${RECIPE_DIR:-}" ]; then
+  RECIPE="$RECIPE_DIR"
+elif [ -d "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit" ]; then
+  RECIPE="$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"
+else
+  RECIPE="$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"
+fi
 . "$HERE/env.sh"
 _kvp_load_env "$ROOT"
 [ -d "$RECIPE" ] || die "production recipe not found at $RECIPE (set RECIPE_DIR)"

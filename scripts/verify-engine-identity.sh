@@ -81,7 +81,9 @@ if kv_dtype == "auto" and model_dir:
 print("KVP_SERVED_MODEL_NAME=%s" % pick("KVP_SERVED_MODEL_NAME", "SERVED_MODEL_NAME", default="mimo-pro"))
 print("KVP_KV_CACHE_DTYPE=%s" % kv_dtype)
 print("KVP_MAX_MODEL_LEN=%s" % pick("KVP_MAX_MODEL_LEN", "MAX_MODEL_LEN", default="1048576"))
-print("KVP_BLOCK_SIZE=%s" % pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
+# Review fix (round 26): bare BLOCK_SIZE deliberately NOT read (clashes with
+# unrelated environments; KV_PERSIST_BLOCK_SIZE is the recipe knob).
+print("KVP_BLOCK_SIZE=%s" % pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", default="16"))
 print("KVP_TP_SIZE=%s" % pick("KVP_TP_SIZE", "TP_SIZE", default="4"))
 PYEFF
 )"
@@ -143,13 +145,20 @@ for path in (base_path, live_path):
 for k in list(vals):
     if k in os.environ:
         vals[k] = os.environ[k].strip()
+# Review fix (round 26): exported KVP_* names must enter `vals` even when the
+# identity files do not define them (KVP_L2_SERDE is optional and ships
+# absent) -- otherwise an explicit override is silently dropped.
+for k in ("KVP_L2_SERDE", "KVP_ROPE_CONFIG_DIGEST", "KVP_LORA_ADAPTERS",
+          "KVP_MULTIMODAL_COMPONENTS", "KVP_SPECULATIVE_CONFIG"):
+    if k in os.environ and k not in vals:
+        vals[k] = os.environ[k].strip()
 with open(out_path, "w") as fh:
     for k, v in vals.items():
         fh.write(f"{k}={v}\n")
 PY
 
 python3 - "$ROOT" "$CONFIG" "$CONTAINER" "$MODEL_DIR" "$CHECK_CONFIG_ONLY" <<'PYEOF'
-import json, re, subprocess, sys
+import json, os, re, subprocess, sys
 root, config, container, model_dir = sys.argv[1:5]
 check_config_only = sys.argv[5] == "1"
 sys.path.insert(0, root + "/implementation")
@@ -225,6 +234,7 @@ for _k, _pat, _why in (
     ("KVP_LORA_ADAPTERS", None, None),
     ("KVP_MULTIMODAL_COMPONENTS", None, None),
     ("KVP_SPECULATIVE_CONFIG", None, None),
+    ("KVP_L2_SERDE", None, None),
 ):
     _v = vals.get(_k, "")
     if _v and _pat and not re.match(_pat, _v):
@@ -325,6 +335,32 @@ else:
         else f"--kv-transfer-config does not reference {want_conn!r}"
     )
 engine_checks.append(("connector", want_conn, connector_seen))
+# Review fix (round 26): check the L2 codec (serde). It lives in the shell
+# that started the cache server -- if the recipe shell has USE_LOSSLESS_SERDE=1
+# and the server shell does not (or vice versa), the namespaces diverge and
+# chunks written with one codec are read back with another. The effective
+# value is resolved by env.sh / the shared resolver; compare against the pin.
+# Fold USE_LOSSLESS_SERDE exactly like scripts/env.sh (_kvp_resolve_l2_serde)
+# so both sides of the comparison use the SAME effective codec.
+def _fold_serde(switch: str, configured: str) -> str:
+    switch = (switch or "").strip().lower()
+    configured = (configured or "").strip().lower() or "none"
+    if switch in ("1", "yes", "true", "zstd"):
+        return "zstd"
+    if switch == "lz4":
+        return "lz4"
+    return configured if configured not in ("raw", "") else "none"
+_l2_cfg = os.environ.get("LMCACHE_L2_SERDE", "")
+_l2_seen = _fold_serde(os.environ.get("USE_LOSSLESS_SERDE", ""), _l2_cfg)
+# The EXPECTED side comes ONLY from the identity pin (KVP_L2_SERDE in
+# identity.env(.local) or exported) -- never from the current shell's
+# LMCACHE_L2_SERDE, or the check would compare a value with itself and catch
+# nothing. Empty pin normalizes to "none" exactly like kvpersist.identity
+# ("" / "none" / "raw" share one namespace). A server started in ANOTHER
+# shell with USE_LOSSLESS_SERDE=1 stores zstd chunks; the gate then reports
+# identity=none != zstd and the operator must pin KVP_L2_SERDE explicitly.
+_l2_expect = _fold_serde("", vals.get("KVP_L2_SERDE", ""))
+engine_checks.append(("l2_serde", _l2_expect, _l2_seen))
 
 bad, inconc = [], []
 for label, expect, found in format_checks:

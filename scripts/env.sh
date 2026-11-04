@@ -138,6 +138,42 @@ _kvp_load_env(){ # _kvp_load_env <repo root>
   _kvp_seed "$root/configs/generic/cache.env.local"           "$pre"
   _kvp_seed "$root/configs/generic/lmcache-server.env.local"  "$pre"
   _kvp_seed "$root/configs/$model_cfg/identity.env.local"     "$pre"
+  # Review fix (round 26): PROPAGATE the KVP_* duplicates into their LMCACHE_*
+  # counterparts so cache.env(.local) edits actually take effect. The server
+  # reads only LMCACHE_*; setting KVP_LMCACHE_PORT=6000 or KVP_L1_SIZE_GB=32
+  # in cache.env.local used to be silently ignored (server started with the
+  # defaults from lmcache-server.env). Precedence: explicit LMCACHE_* env still
+  # wins (documented "env wins" contract).
+  for _pair in "KVP_LMCACHE_HOST:LMCACHE_HOST" "KVP_LMCACHE_PORT:LMCACHE_PORT" \
+               "KVP_LMCACHE_HTTP_PORT:LMCACHE_HTTP_PORT" "KVP_L1_SIZE_GB:LMCACHE_L1_SIZE_GB" \
+               "KVP_CHUNK_SIZE:LMCACHE_CHUNK_SIZE" \
+               "KVP_EVICT_TRIGGER_WATERMARK:LMCACHE_EVICTION_TRIGGER_WATERMARK" \
+               "KVP_EVICT_RATIO:LMCACHE_EVICTION_RATIO"; do
+    _kv_name="${_pair%%:*}"; _lm_name="${_pair##*:}"
+    # an LMCACHE_* explicitly exported BEFORE the files were loaded wins
+    # (the documented "env wins" contract)
+    case "$pre" in
+      *$'\n'"$_lm_name"$'\n'*) continue ;;
+    esac
+    # otherwise the KVP_* value is authoritative and overwrites the file value
+    # (lmcache-server.env always ships LMCACHE_PORT=5555, so an "only if empty"
+    # rule would silently ignore a KVP_LMCACHE_PORT edit)
+    if [ -n "${!_kv_name:-}" ]; then
+      export "$_lm_name=${!_kv_name}"
+    fi
+  done
+  # Review fix (round 26): call config.verify() so conflicting duplicate knobs
+  # (KVP_LMCACHE_PORT vs LMCACHE_PORT etc.) are reported at startup, not only
+  # by tests. Non-fatal: print warnings but continue (the propagation above
+  # already resolves most cases).
+  if command -v python3 >/dev/null 2>&1; then
+    _kvp_conflicts="$(PYTHONPATH="$root/implementation${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 -c 'from kvpersist.config import verify; import sys
+msgs = verify(sys.argv[1])
+for m in msgs:
+    print("CONFIG WARNING: " + m)' "$root" 2>/dev/null || true)"
+    [ -n "$_kvp_conflicts" ] && printf '%s\n' "$_kvp_conflicts" >&2
+  fi
   # Fold USE_LOSSLESS_SERDE into the exported LMCACHE_L2_SERDE so the
   # cache-identity namespace (kvpersist.identity) matches what the server
   # actually stores. Failure is fatal: a mismatched namespace would let one

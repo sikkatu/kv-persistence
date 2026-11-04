@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（155 个单元测试 + 19 个离线配置/文档测试 = 174 个离线收集，
-172 通过 + 2 跳过；共收集 189 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（158 个单元测试 + 19 个离线配置/文档测试 = 177 个离线收集，
+175 通过 + 2 跳过；共收集 192 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：155 个单元测试（153 通过 + 2 跳过），19 个离线配置/文档测试，
-174 个离线收集（172 通过 + 2 跳过），共收集 189 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
+**测试计数**：此前的数字已过时。实际：158 个单元测试（156 通过 + 2 跳过），19 个离线配置/文档测试，
+177 个离线收集（175 通过 + 2 跳过），共收集 192 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -371,6 +371,17 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **共享的有效标识解析器（rev. 23）**：引擎的有效配置（auto -> 模型 dtype、
 **引擎参数的唯一事实来源（rev. 24）**：引擎以解析后的有效值启动——
 **Smoke 请求跟随引擎（rev. 25）**：启动器将 served-model-name 显式传给
+**跨仓库一致性（rev. 26）**：(1) cache.env(.local) 中的 KVP_LMCACHE_* /
+KVP_L1_SIZE_GB 值现在会传播到缓存服务器读取的 LMCACHE_* 名称（此前被
+静默忽略——服务器使用默认值启动），config.verify() 在启动时报告冲突。
+(2) 身份门禁检查 L2 编解码器（l2_serde）：一侧 USE_LOSSLESS_SERDE 与
+空 pin 不再静默分歧——不一致即 MISMATCH（exit 4），请将 KVP_L2_SERDE
+固定为与服务器一致。(3) 不再读取裸名称 BLOCK_SIZE（配方旋钮为
+KV_PERSIST_BLOCK_SIZE）。(4) 配方的 KV_PERSIST_PORT 必须与
+kv-persistence 的 LMCACHE_PORT 一致——已在 tp4.env.example（3 种语言）
+中说明。(5) run-vllm-with-persist.sh 明确声明运行的是 UVA 基线而非
+hotsplit。(6) RECIPE_DIR 现在优先尝试 ~/sikkatu-recipes/recipes。
+
 smoke 请求的 python（shell 赋值未导出，仅设置 KVP_SERVED_MODEL_NAME 时
 os.environ 查找会回退到 mimo-pro）。回归测试覆盖该场景以及五参数同时
 冲突的组合检查（docker 参数 + namespace + smoke 请求均使用解析值）。

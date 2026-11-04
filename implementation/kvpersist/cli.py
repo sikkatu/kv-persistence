@@ -592,7 +592,11 @@ def resolve_effective_identity(model_dir: str = "") -> dict:
         "KVP_KV_CACHE_DTYPE": kv_dtype,
         "KVP_MAX_MODEL_LEN": pick("KVP_MAX_MODEL_LEN", "MAX_MODEL_LEN",
                                   default="1048576"),
-        "KVP_BLOCK_SIZE": pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE",
+        # Review fix (round 26): bare BLOCK_SIZE is NOT read -- it was renamed to
+        # KV_PERSIST_BLOCK_SIZE precisely to avoid clashing with unrelated
+        # environments; a stray BLOCK_SIZE=64 made the persisted gate file claim
+        # 64 while the engine ran 16 (false MISMATCH).
+        "KVP_BLOCK_SIZE": pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE",
                                default="16"),
         "KVP_TP_SIZE": pick("KVP_TP_SIZE", "TP_SIZE", default="4"),
     }

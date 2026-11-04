@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(155 unit tests + 19 more offline config/docs tests = 174 offline collected,
-172 passed + 2 skipped; 189 collected total including the live-`lmcache`
+(158 unit tests + 19 more offline config/docs tests = 177 offline collected,
+175 passed + 2 skipped; 192 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 155 unit tests (`tests/unit`, 153 passed + 2 skipped),
-19 top-level offline tests, 174 offline collected (172 passed + 2 skipped),
-189 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 158 unit tests (`tests/unit`, 156 passed + 2 skipped),
+19 top-level offline tests, 177 offline collected (175 passed + 2 skipped),
+192 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -607,6 +607,21 @@ Home (EN/RU/ZH).
 **Shared effective-identity resolver (review round 23)**: the effective
 **Single source of truth for engine args (review round 24)**: the
 **Smoke request follows the engine (review round 25)**: the launcher
+**Cross-repo consistency (review round 26)**: (1) cache.env(.local)
+KVP_LMCACHE_* / KVP_L1_SIZE_GB values are now PROPAGATED into the
+LMCACHE_* names the cache server reads (they used to be silently
+ignored -- the server started with the shipped defaults), and
+config.verify() is called at startup so conflicting duplicates are
+reported. (2) the identity gate CHECKS the L2 codec (l2_serde):
+USE_LOSSLESS_SERDE in one shell and an unpinned identity no longer
+diverge silently -- a mismatch is a MISMATCH (exit 4), pin KVP_L2_SERDE
+to match the server. (3) the bare BLOCK_SIZE name is no longer read
+(KV_PERSIST_BLOCK_SIZE is the recipe knob). (4) the recipe's
+KV_PERSIST_PORT must match kv-persistence's LMCACHE_PORT -- documented
+in tp4.env.example (3 languages). (5) run-vllm-with-persist.sh states
+honestly it runs the UVA BASELINE, not hotsplit. (6) RECIPE_DIR
+defaults now try ~/sikkatu-recipes/recipes (the documented layout).
+
 passes the served-model-name EXPLICITLY to the smoke-request python
 (the shell assignment is not exported, so an os.environ lookup fell
 back to mimo-pro when only KVP_SERVED_MODEL_NAME was set). Regression

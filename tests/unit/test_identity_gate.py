@@ -320,3 +320,60 @@ def test_operator_names_auto_resolves_via_shared_code(tmp_path):
     assert out.returncode == 0, out.stderr
     lines = dict(l.split("=", 1) for l in out.stdout.splitlines() if "=" in l)
     assert lines.get("KVP_KV_CACHE_DTYPE") == "bfloat16", lines
+
+
+# ---------------------------------------------------------------------------
+# Round 26: L2 codec check + KVP_LMCACHE_* propagation.
+# ---------------------------------------------------------------------------
+
+def test_l2_serde_mismatch_is_caught(tmp_path, _cleanup_local, _stub_env):
+    """Review (round 26): the L2 codec is part of the cache identity. A gate
+    shell with USE_LOSSLESS_SERDE=1 (zstd chunks on the server) against an
+    UNPINNED identity must MISMATCH -- chunks written with one codec would
+    otherwise be read back with another."""
+    _write_config(tmp_path)
+    result = _run_gate(_stub_env, BASE_ARGS, {"USE_LOSSLESS_SERDE": "1"})
+    assert result.returncode == 4, (
+        f"USE_LOSSLESS_SERDE=1 vs an unpinned l2_serde must mismatch, got "
+        f"{result.returncode}\n{result.stdout}"
+    )
+    assert "l2_serde" in result.stdout
+
+
+def test_l2_serde_pin_makes_it_pass(tmp_path, _cleanup_local, _stub_env):
+    """A matching KVP_L2_SERDE pin (zstd) with USE_LOSSLESS_SERDE=1 must pass."""
+    _write_config(tmp_path)
+    result = _run_gate(_stub_env, BASE_ARGS,
+                       {"USE_LOSSLESS_SERDE": "1", "KVP_L2_SERDE": "zstd"})
+    assert result.returncode == 0, (
+        f"KVP_L2_SERDE=zstd + USE_LOSSLESS_SERDE=1 must pass, got "
+        f"{result.returncode}\n{result.stdout}"
+    )
+
+
+def test_kvp_lmcache_duplicates_propagate_to_lmcache_names(tmp_path):
+    """Review (round 26): KVP_LMCACHE_* / KVP_L1_SIZE_GB in cache.env(.local)
+    must reach the LMCACHE_* names the server reads -- they used to be
+    silently ignored (server started with the shipped defaults)."""
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "KVP_LMCACHE_PORT": "6000",
+        "KVP_L1_SIZE_GB": "32",
+        "PYTHONPATH": str(ROOT / "implementation"),
+    }
+    # run the env.sh loader in a clean shell and print the effective values
+    out = subprocess.run(
+        ["bash", "-c",
+         '. scripts/env.sh && _kvp_load_env "$PWD" >/dev/null 2>&1; '
+         'printf "LMCACHE_PORT=%s\nLMCACHE_L1_SIZE_GB=%s\n" '
+         '"${LMCACHE_PORT:-}" "${LMCACHE_L1_SIZE_GB:-}"'],
+        capture_output=True, text=True, timeout=60, env=env, cwd=str(ROOT),
+    )
+    assert out.returncode == 0, out.stderr
+    lines = dict(l.split("=", 1) for l in out.stdout.splitlines() if "=" in l)
+    assert lines.get("LMCACHE_PORT") == "6000", (
+        f"KVP_LMCACHE_PORT=6000 must propagate to LMCACHE_PORT: {lines}"
+    )
+    assert lines.get("LMCACHE_L1_SIZE_GB") == "32", (
+        f"KVP_L1_SIZE_GB=32 must propagate to LMCACHE_L1_SIZE_GB: {lines}"
+    )
