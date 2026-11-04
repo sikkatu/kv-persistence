@@ -220,7 +220,12 @@ def _read_env_config(path: str) -> Dict[str, str]:
                     continue
                 name, val = line.split("=", 1)
                 name = name.strip()
-                val = val.split(" #")[0].strip()
+                # Review fix (round 30): comment cut at " #" AND "\t#" --
+                # identical to config._parse_env_file and env.sh _kvp_parse_line.
+                for _sep in (" #", "\t#"):
+                    if _sep in val:
+                        val = val.split(_sep, 1)[0]
+                val = val.strip()
                 if name:
                     out[name] = _strip_quotes(val)
     except OSError:

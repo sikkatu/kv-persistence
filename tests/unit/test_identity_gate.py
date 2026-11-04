@@ -535,3 +535,88 @@ def test_cache_root_fallback_expands_home(tmp_path, monkeypatch):
         f"-- the gate must use the shared parser (export / trailing comment / "
         f"$HOME) like env.sh, not a hand-rolled regex"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 30: end-to-end gate test + tab-comment parser parity.
+# ---------------------------------------------------------------------------
+
+def test_tab_comment_parsers_agree(tmp_path):
+    """Review (round 30): bash env.sh and both Python parsers must cut
+    trailing comments at space AND tab before '#' identically. The old bash
+    ${_val%% #*} only cut at a space; `KEY=value<TAB># comment` kept the
+    comment while Python dropped it."""
+    env_file = tmp_path / "test.env"
+    env_file.write_text("KVP_CACHE_ROOT=/mnt/nvme/kv-cache\t# comment\n")
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, sys.argv[2]); "
+         "from kvpersist.config import read_env_file; "
+         "from kvpersist.identity import _read_env_config; "
+         "c = read_env_file(sys.argv[1]).get('KVP_CACHE_ROOT',''); "
+         "i = _read_env_config(sys.argv[1]).get('KVP_CACHE_ROOT',''); "
+         "print('config=' + repr(c) + ' identity=' + repr(i))",
+         str(env_file), str(ROOT / "implementation")],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert out.returncode == 0, out.stderr
+    assert "'/mnt/nvme/kv-cache'" in out.stdout, (
+        f"tab-comment must be cut identically in both Python parsers, got {out.stdout}"
+    )
+    assert "comment" not in out.stdout, (
+        f"trailing comment after TAB must be stripped, got {out.stdout}"
+    )
+    # bash side
+    out_bash = subprocess.run(
+        ["bash", "-c",
+         f". {ROOT}/scripts/env.sh; _kvp_parse_line 'KVP_CACHE_ROOT=/mnt/nvme/kv-cache\t# comment'; echo $_val"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert out_bash.stdout.strip() == "/mnt/nvme/kv-cache", (
+        f"bash parser must cut tab-comment identically, got {out_bash.stdout.strip()!r}"
+    )
+
+
+def test_gate_end_to_end_with_home_expansion(tmp_path, _stub_env, _cleanup_local):
+    """Review (round 30): the REAL gate must run end-to-end with a
+    KVP_CACHE_ROOT=$HOME/kv-cache fallback -- proving .local-over-base
+    selection, adapter discovery, real codec read and exit 0."""
+    import subprocess as _sp
+    fake_home = tmp_path / "home"
+    cache_dir = fake_home / "kv-cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "l2-adapter.rendered.json").write_text(
+        '{"serde": {"type": "kvp-zstd", "level": "3", "align_bytes": "4096"}}'
+    )
+    _write_config(tmp_path)
+    local = CONFIG_DIR / "identity.env.local"
+    local.write_text(local.read_text().rstrip() + chr(10) + "KVP_L2_SERDE=zstd" + chr(10))
+
+    cache_env = ROOT / "configs" / "generic" / "cache.env"
+    original_cache_env = cache_env.read_text()
+    cache_env.write_text(
+        original_cache_env + chr(10) + "export KVP_CACHE_ROOT=$HOME/kv-cache   # r30" + chr(10)
+    )
+    try:
+        env = dict(_stub_env)
+        env.pop("KVP_CACHE_ROOT", None)  # force the $HOME fallback
+        env["HOME"] = str(fake_home)
+        env["KVP_L2_SERDE"] = "zstd"
+        env["STUB_CMD_ARGS"] = BASE_ARGS
+        result = _sp.run(
+            ["bash", str(GATE), "test-container"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+    finally:
+        cache_env.write_text(original_cache_env)
+
+    assert result.returncode == 0, (
+        f"gate must pass end-to-end with $HOME fallback, got exit "
+        f"{result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "identity verified" in result.stdout, (
+        f"gate must report identity verified, got:\n{result.stdout[-800:]}"
+    )
+    assert "l2_serde" in result.stdout and "zstd" in result.stdout, (
+        f"gate must read zstd from the rendered adapter, got:\n{result.stdout[-800:]}"
+    )

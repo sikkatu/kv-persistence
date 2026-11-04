@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(163 unit tests + 19 more offline config/docs tests = 182 offline collected,
-180 passed + 2 skipped; 197 collected total including the live-`lmcache`
+(165 unit tests + 19 more offline config/docs tests = 184 offline collected,
+182 passed + 2 skipped; 199 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 163 unit tests (`tests/unit`, 161 passed + 2 skipped),
-19 top-level offline tests, 182 offline collected (180 passed + 2 skipped),
-197 collected total (plus 318 passed of 323 collected in the
+numbers, verified: 165 unit tests (`tests/unit`, 163 passed + 2 skipped),
+19 top-level offline tests, 184 offline collected (182 passed + 2 skipped),
+199 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -610,6 +610,14 @@ Home (EN/RU/ZH).
 **Cross-repo consistency (review round 26)**: (1) cache.env(.local)
 **Codec check follows the server (review round 27)**: the l2_serde
 **Layered config resolution (review round 28)**: (1) KVP_* aliases in
+**Parser parity + end-to-end gate test (review round 30)**: the bash
+env.sh parser now cuts trailing comments at space OR tab before `#`,
+byte-for-byte identical to both Python parsers (config._parse_env_file,
+identity._read_env_config) -- the "MUST match" contract holds for
+`KEY=value<TAB># comment` too. A new end-to-end test RUNS the real
+gate with a $HOME-expanded KVP_CACHE_ROOT fallback and asserts exit 0
+(.local-over-base selection, adapter discovery, codec read).
+
 cache.env are now commented out -- an LMCACHE_* edit in
 lmcache-server.env.local wins naturally (the shipped KVP_* defaults
 used to override it). (2) a KVP_L2_SERDE pin in identity.env(.local)

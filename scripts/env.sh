@@ -28,7 +28,13 @@ _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
   _name="$(printf '%s' "$_name" | tr -d ' ')"
   [ -z "$_name" ] && return 1
   _val="${line#*=}"
+  # Review fix (round 30): cut a trailing comment at a space OR a TAB
+  # before '#' -- byte-for-byte the Python parsers (config._parse_env_file,
+  # identity._read_env_config), which split at " #" and "\t#". The old
+  # ${_val%% #*} only cut at a SPACE, so `KEY=value<TAB># comment` kept the
+  # comment here while Python dropped it (the "MUST match" contract).
   _val="${_val%% #*}"
+  _val="${_val%%$'\t'#*}"
   # Review fix: strip ONE matching outer quote pair (single or double), exactly
   # like `kvpersist/config.py::_parse_env_file`. The old code only removed
   # double quotes, so `KVP_X='abc'` came out as `'abc'` here but `abc` in
