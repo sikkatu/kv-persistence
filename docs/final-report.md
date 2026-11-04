@@ -11,7 +11,7 @@ GitHub remote API).
 **Overall status: PARTIAL** — implementation complete, offline tests pass
 (155 unit tests + 19 more offline config/docs tests = 174 offline collected,
 172 passed + 2 skipped; 189 collected total including the live-`lmcache`
-integration (10) and recovery (5) tests; plus 314 passed of 319 collected
+integration (10) and recovery (5) tests; plus 318 passed of 323 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
@@ -598,7 +598,7 @@ green with the new contract tests included).
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
 numbers, verified: 155 unit tests (`tests/unit`, 153 passed + 2 skipped),
 19 top-level offline tests, 174 offline collected (172 passed + 2 skipped),
-189 collected total (plus 314 passed of 319 collected in the
+189 collected total (plus 318 passed of 323 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -606,6 +606,13 @@ Home (EN/RU/ZH).
 **TP naming across repos + TP != 4 is UNTESTED (review note)**: `TP_SIZE`
 **Shared effective-identity resolver (review round 23)**: the effective
 **Single source of truth for engine args (review round 24)**: the
+**Smoke request follows the engine (review round 25)**: the launcher
+passes the served-model-name EXPLICITLY to the smoke-request python
+(the shell assignment is not exported, so an os.environ lookup fell
+back to mimo-pro when only KVP_SERVED_MODEL_NAME was set). Regression
+tests cover that case plus a combined five-parameter conflict check
+(docker args + namespace + smoke body all carry the resolved values).
+
 resolved effective values are what the ENGINE IS STARTED WITH -- the
 docker args (--served-model-name/--kv-cache-dtype/--max-model-len/
 --tensor-parallel-size/--block-size), the smoke request and the gate

@@ -8,7 +8,7 @@
 
 实现已完成，离线测试全绿（155 个单元测试 + 19 个离线配置/文档测试 = 174 个离线收集，
 172 通过 + 2 跳过；共收集 189 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
-另有伴生仓库 `sikkatu/recipes` 314 通过 / 319 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
+另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
 上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
@@ -362,7 +362,7 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 的 bash 语法检查、所有模块的 py_compile。
 
 **测试计数**：此前的数字已过时。实际：155 个单元测试（153 通过 + 2 跳过），19 个离线配置/文档测试，
-174 个离线收集（172 通过 + 2 跳过），共收集 189 个（另有伴生仓库 `sikkatu/recipes` 314 通过 / 319 收集；
+174 个离线收集（172 通过 + 2 跳过），共收集 189 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -370,6 +370,11 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **TP 命名跨仓库一致性、且 TP != 4 未经测试（评审备注）**：`TP_SIZE`（配方）
 **共享的有效标识解析器（rev. 23）**：引擎的有效配置（auto -> 模型 dtype、
 **引擎参数的唯一事实来源（rev. 24）**：引擎以解析后的有效值启动——
+**Smoke 请求跟随引擎（rev. 25）**：启动器将 served-model-name 显式传给
+smoke 请求的 python（shell 赋值未导出，仅设置 KVP_SERVED_MODEL_NAME 时
+os.environ 查找会回退到 mimo-pro）。回归测试覆盖该场景以及五参数同时
+冲突的组合检查（docker 参数 + namespace + smoke 请求均使用解析值）。
+
 docker 参数、smoke 请求和门禁携带相同的值，因此冲突的 KVP_* 导出
 不再能让 namespace/门禁与运行中的引擎脱钩。内联回退与
 resolve_effective_identity 一致，优先取 KVP_*。smoke 请求通过 python3
