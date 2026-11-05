@@ -12,7 +12,7 @@ vLLM  (TP4 или другая параллельность, любая моде
    │  --kv-transfer-config: LMCacheMPConnector
    │  (kv_connector_module_path фиксирует коннектор из LMCache)
    ▼
-lmcache-сервер  (отдельный процесс; ZMQ-порт запросов 5555, HTTP-админ 8080)
+lmcache-сервер  (отдельный процесс; ZMQ-порт запросов 5555, HTTP-админ 8081)
    │  L1: буфер в RAM хоста (KVP_L1_SIZE_GB, по умолчанию 64 ГБ)
    ▼
 Постоянный уровень L2: nixl_store_dynamic / POSIX  →  NVMe (KVP_CACHE_ROOT)

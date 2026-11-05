@@ -20,7 +20,8 @@ a chat app (OpenAI-compatible client)
 vLLM  (TP4 or any parallelism, any served model; production recipe unchanged)
    │  KV connector: LMCacheMPConnector  (--kv-transfer-config)
    ▼
-LMCache server  (standalone process, MP mode; ZMQ request port 5555)
+LMCache server  (standalone process, MP mode; ZMQ request port 5555,
+   HTTP admin 8081)
    │  L1: host RAM buffer (configurable, ~64 GB)
    ▼
 L2 persistent tier:  nixl_store_dynamic / POSIX  →  NVMe

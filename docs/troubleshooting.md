@@ -80,11 +80,11 @@ files manually inside the cache root while the service runs.
 
 For a chat client on another machine, the ENGINE port (default 30007) must be allow-
 listed (e.g. ufw rule for your VPN subnet + `BIND`/`API_KEY` rules from the
-production recipe). The cache's HTTP frontend (8080) is deliberately loopback
+production recipe). The cache's HTTP frontend (8081) is deliberately loopback
 only — do NOT expose it; use SSH port forwarding for remote diagnostics:
 
 ```bash
-ssh -N -L 8080:127.0.0.1:8080 user@host     # inspect, do not publish
+ssh -N -L 8081:127.0.0.1:8081 user@host     # inspect, do not publish
 ```
 
 ## Eviction fires too aggressively

@@ -178,7 +178,7 @@ case "$PERMS" in
 esac
 # Listener check: lmcache request port and HTTP port must bind loopback only.
 if command -v ss >/dev/null 2>&1; then
-  for P in "${LMCACHE_PORT:-5555}" "${LMCACHE_HTTP_PORT:-8080}"; do
+  for P in "${LMCACHE_PORT:-5555}" "${LMCACHE_HTTP_PORT:-8081}"; do
     LISTEN="$(ss -ltnH 2>/dev/null | awk -v p=":$P" '$4 ~ p"$"' | head -1)"
     if [ -n "$LISTEN" ] && ! printf '%s' "$LISTEN" | grep -q '127.0.0.1\|::1\|localhost'; then
       warn "port $P appears bound to a non-loopback address ($LISTEN) -- cache management must stay local-only"

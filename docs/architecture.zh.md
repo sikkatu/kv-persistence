@@ -12,7 +12,7 @@ vLLM（TP4 或其他并行度，任意模型；生产配方不被修改）
    │  --kv-transfer-config：LMCacheMPConnector
    │  （kv_connector_module_path 固定使用 LMCache 提供的连接器）
    ▼
-lmcache 服务（独立进程；ZMQ 请求端口 5555，HTTP 管理 8080）
+lmcache 服务（独立进程；ZMQ 请求端口 5555，HTTP 管理 8081）
    │  L1：主机内存缓冲（KVP_L1_SIZE_GB，默认 64 GB）
    ▼
 L2 持久层：nixl_store_dynamic / POSIX → NVMe（KVP_CACHE_ROOT）
