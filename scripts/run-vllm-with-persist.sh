@@ -54,6 +54,15 @@ elif [ -d "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit" ];
 else
   RECIPE="$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"
 fi
+# Review fix (round 34, P2): verify this checkout is a COMPATIBLE version.
+KVP_COMPAT_EXPECTED="${KVP_COMPAT_VERSION:-1}"
+KVP_COMPAT_FOUND=""
+if [ -f "$ROOT/KVP_COMPAT_VERSION" ]; then
+  KVP_COMPAT_FOUND="$(head -1 "$ROOT/KVP_COMPAT_VERSION" | tr -d '[:space:]')"
+fi
+if [ "$KVP_COMPAT_FOUND" != "$KVP_COMPAT_EXPECTED" ]; then
+  die "kv-persistence compatibility check FAILED: expected KVP_COMPAT_VERSION=$KVP_COMPAT_EXPECTED, found '${KVP_COMPAT_FOUND:-<missing>}' at $ROOT/KVP_COMPAT_VERSION."
+fi
 . "$HERE/env.sh"
 _kvp_load_env "$ROOT"
 [ -d "$RECIPE" ] || die "production recipe not found at $RECIPE (set RECIPE_DIR)"

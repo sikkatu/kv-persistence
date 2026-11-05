@@ -8,7 +8,7 @@
 
 实现已完成，离线测试全绿（188 个单元测试 + 19 个离线配置/文档测试 = 207 个离线收集，
 205 通过 + 2 跳过；共收集 222 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
-另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
+另有伴生仓库 `sikkatu/recipes` 326 通过 + 5 跳过 / 331 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
 上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
@@ -362,7 +362,7 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 的 bash 语法检查、所有模块的 py_compile。
 
 **测试计数**：此前的数字已过时。实际：188 个单元测试（186 通过 + 2 跳过），19 个离线配置/文档测试，
-207 个离线收集（205 通过 + 2 跳过），共收集 222 个（另有伴生仓库 `sikkatu/recipes` 318 通过 / 323 收集；
+207 个离线收集（205 通过 + 2 跳过），共收集 222 个（另有伴生仓库 `sikkatu/recipes` 326 通过 + 5 跳过 / 331 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -378,6 +378,18 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **测试安全性 + 严格 env 格式（rev. 31）**：测试 fixture 现在会备份并恢复
 **仅 ASCII 名称 + 全字典一致性（rev. 32）**：python `str.isidentifier()`
 **HOME 展开一致性（rev. 33）**：`identity._read_env_config()` 完全不展开
+**recipe 启动器强制门禁 + 钉住兼容版本（rev. 34）**：recipe 启动器
+（`run-tp4-uva.sh`、`run-tp4-hotsplit.sh`）此前只打印提醒手动运行
+`verify-engine-identity.sh` —— vLLM 可以带着已连接的持久缓存启动而未经验证。
+两个启动器现在强制运行门禁（先加载 `live/kvp-effective-identity.env`，
+再执行 `verify-engine-identity.sh --check-config-only`）：MISMATCH（exit 4）
+或 INCONCLUSIVE（exit 5）阻止启动，缺少门禁脚本则 REFUSED —— 与
+`run-vllm-with-persist.sh` 完全相同的策略。另外，跨仓依赖钉住了版本：
+kv-persistence 根目录带有 `KVP_COMPAT_VERSION`（当前为 1），三个启动器
+都在启动前校验它，拒绝不兼容的克隆（不同版本可能以不同方式计算 identity）。
+测试：8 个新的 recipe 测试覆盖 MISMATCH / INCONCLUSIVE / 缺少门禁 /
+版本不兼容（每个都证明引擎不会启动）。
+
 `$HOME`/`${HOME}`，而 `config._parse_env_file` 和 bash `env.sh` 会展开——
 现在它与其他两个解析器完全一致地展开两种形式。所有三个解析器现在都在
 `$HOME` 之前展开 `${HOME}`（规范安全顺序；注意：由于大括号，`$HOME` 实际上

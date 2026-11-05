@@ -11,7 +11,7 @@ GitHub remote API).
 **Overall status: PARTIAL** — implementation complete, offline tests pass
 (188 unit tests + 19 more offline config/docs tests = 207 offline collected,
 205 passed + 2 skipped; 222 collected total including the live-`lmcache`
-integration (10) and recovery (5) tests; plus 318 passed of 323 collected
+integration (10) and recovery (5) tests; plus 326 passed + 5 skipped of 331 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
@@ -598,7 +598,7 @@ green with the new contract tests included).
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
 numbers, verified: 188 unit tests (`tests/unit`, 186 passed + 2 skipped),
 19 top-level offline tests, 207 offline collected (205 passed + 2 skipped),
-222 collected total (plus 318 passed of 323 collected in the
+222 collected total (plus 326 passed + 5 skipped of 331 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -614,6 +614,22 @@ Home (EN/RU/ZH).
 **Test safety + strict env format (review round 31)**: the test fixture
 **ASCII-only names + full-dict parity (review round 32)**: python
 **HOME expansion parity (review round 33)**: `identity._read_env_config()`
+**Mandatory gate in recipe launchers + pinned compat version (review
+round 34)**: the recipe launchers (`run-tp4-uva.sh`,
+`run-tp4-hotsplit.sh`) only PRINTED a reminder to run
+`verify-engine-identity.sh` by hand -- vLLM could start with the
+persistent cache attached and unverified. Both launchers now run the
+gate MANDATORY (sources `live/kvp-effective-identity.env`, then
+`verify-engine-identity.sh --check-config-only`): MISMATCH (exit 4) or
+INCONCLUSIVE (exit 5) BLOCK the launch, a missing gate script is
+REFUSED -- the same policy as `run-vllm-with-persist.sh`. Separately,
+the cross-repo dependency is version-pinned: the kv-persistence root
+carries `KVP_COMPAT_VERSION` (currently 1), and all three launchers
+verify it before launch, rejecting an incompatible checkout (different
+versions may compute identity differently). Tests: 8 new recipe tests
+cover gate MISMATCH / INCONCLUSIVE / missing gate / version mismatch
+(each proven to leave the engine unstarted).
+
 did not expand `$HOME`/`${HOME}` at all while `config._parse_env_file`
 and bash `env.sh` did -- it now expands both forms exactly like the
 other two parsers. All three parsers now expand `${HOME}` BEFORE
