@@ -70,12 +70,42 @@ IMAGE="${IMAGE:?IMAGE must be pinned with @sha256:<64 hex>}"
 printf '%s' "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$' || die "IMAGE must be pinned by digest"
 MODEL_DIR="${MODEL_DIR:?set MODEL_DIR to the local model directory}"
 [ -d "$MODEL_DIR" ] || die "MODEL_DIR not found: $MODEL_DIR"
+BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
 API_KEY="${API_KEY:-}"
 # Review fix: look up live/api_key under the REPO ROOT ($ROOT), not $PWD --
 # the launcher must work from any working directory, not only from the repo root.
 [ -f "$ROOT/live/api_key" ] && [ -z "$API_KEY" ] && API_KEY="$(head -n1 "$ROOT/live/api_key" | tr -d '[:space:]')"
-[ -n "$API_KEY" ] || die "API_KEY required (live/api_key under the repo root; non-loopback binds always need it)"
-BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
+# Review fix (install report): the key is AUTO-GENERATED on a loopback bind,
+# the same contract as the recipe launchers. A non-loopback bind always needs
+# an EXPLICIT key (fail-safe: a server on a routable address is always
+# authenticated). Loopback is strictly 127.0.0.1 or ::1.
+gen_key() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import secrets; print(secrets.token_hex(24))'
+  else
+    head -c 24 /dev/urandom | od -An -tx1 | tr -d '[:space:]'; echo
+  fi
+}
+LOOPBACK=0
+case "$BIND" in
+  127.0.0.1|\[::1\]|::1) LOOPBACK=1 ;;
+esac
+if [ -z "$API_KEY" ] && [ "$LOOPBACK" = "1" ]; then
+  API_KEY="$(gen_key)"
+  case "$API_KEY" in
+    *[!0-9a-f]*|'') die "failed to generate an API key (openssl/python3/urandom all unavailable)" ;;
+  esac
+  [ "${#API_KEY}" -ge 32 ] || die "generated API key is too short (${#API_KEY} chars)"
+  umask 077
+  mkdir -p "$ROOT/live"
+  printf '%s\n' "$API_KEY" > "$ROOT/live/api_key"
+  chmod 600 "$ROOT/live/api_key"
+  echo "API key auto-generated for the loopback server and saved to $ROOT/live/api_key"
+fi
+[ -n "$API_KEY" ] || die "API_KEY required for a non-loopback bind ($BIND) -- that is a public unauthenticated API.
+Set API_KEY explicitly (openssl rand -hex 24) or bind loopback (BIND=127.0.0.1)."
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # NOTE on REQUESTED settings from the task brief vs the VERIFIED recipe:
 #  KV_CACHE_DTYPE: BFLOAT16 is the effective dtype of this project. The value

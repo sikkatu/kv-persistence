@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(188 unit tests + 19 more offline config/docs tests = 207 offline collected,
-205 passed + 2 skipped; 222 collected total including the live-`lmcache`
+(191 unit tests + 19 more offline config/docs tests = 210 offline collected,
+208 passed + 2 skipped; 225 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 188 unit tests (`tests/unit`, 186 passed + 2 skipped),
-19 top-level offline tests, 207 offline collected (205 passed + 2 skipped),
-222 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 191 unit tests (`tests/unit`, 189 passed + 2 skipped),
+19 top-level offline tests, 210 offline collected (208 passed + 2 skipped),
+225 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -616,6 +616,22 @@ Home (EN/RU/ZH).
 **HOME expansion parity (review round 33)**: `identity._read_env_config()`
 **Mandatory gate in recipe launchers + pinned compat version (review
 **Post-launch full identity gate + kv-persistence is REQUIRED (review
+**Install fixes: openai dependency + auto-generated API key (review
+round 36)**: `lmcache server` crashed with
+`ModuleNotFoundError: No module named 'openai'` -- the pinned lmcache
+0.5.3 CLI imports `openai` while REGISTERING its bench subcommands, so
+even `lmcache server` cannot start without it. `openai>=1.40,<2` is now
+pinned in `requirements-lmcache.txt`, and `kvpersist.launch` reports a
+clear install command instead of a bare traceback. Second, the launcher
+now AUTO-GENERATES the API key on a loopback bind (saved to
+`live/api_key`, mode 600) -- the same contract as the recipe launchers;
+the wiki used to tell the operator to create it by hand. A non-loopback
+bind still requires an explicit key. Doc coherence: every install path
+now uses the canonical `~/sikkatu-recipes` recipes layout (was `~/recipes`
++ doubled `recipes/recipes`). Tests: 3 new (loopback auto-generation with
+0600 mode, non-loopback refusal without key generation, explicit key
+honoured).
+
 round 35)**: the round-34 gate ran only `--check-config-only`, which
 INTENTIONALLY skips engine_checks -- the real docker args
 (--kv-cache-dtype, --block-size, TP size), the attached

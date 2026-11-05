@@ -222,7 +222,7 @@ journalctl -u lmcache-server -f
 ## Откат (одна команда)
 
 ```bash
-bash "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh"
+bash "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh"
 ```
 
 Production-рецепт не изменён — его лаунчер работает в точности как раньше.

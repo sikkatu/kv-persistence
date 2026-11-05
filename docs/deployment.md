@@ -12,7 +12,7 @@ onto a GPU host. The host runs the production recipe from
   (`IMAGE` with `@sha256:` digest) and the model directory `MODEL_DIR`.
 * Local NVMe with at least `KVP_CACHE_BUDGET_GB` (default 1.5 TB) free on the
   pinned device — preflight checks this against `KVP_CACHE_DEVICE`.
-* Production recipe cloned read-only (e.g. `~/recipes`).
+* Production recipe cloned read-only (e.g. `~/sikkatu-recipes`).
 * Python 3.12 on the host (for `kvpersist` admin + scripts and the `lmcache`
   CLI). On Debian/Ubuntu (tested on Debian 12) the system Python is 3.11: install a 3.12 interpreter and
   `python3-venv` separately (e.g. from bookworm-backports or pyenv) and use
@@ -84,6 +84,10 @@ The LMCache version is **pinned** in `requirements-lmcache.txt` (`lmcache==X.Y.Z
 together with the documented vLLM image combination — an unpinned install can
 resolve to a release that changed the MP-connector protocol or the L2 adapter
 behaviour. Do not upgrade lmcache without replaying `scripts/test-recovery.sh`.
+**Note**: `openai` is pinned there too -- the lmcache 0.5.3 CLI imports it at
+startup (`ModuleNotFoundError: No module named 'openai'` otherwise), even for
+`lmcache server`. Install the requirements file into the SAME venv that
+provides the `lmcache` command.
 > LMCache must be the release channel matched to the pinned vLLM/PyTorch
 > runtime of the production image — see docs/compatibility.md. If plain pip
 > wheels mismatch the image ABI, run the `lmcache server` from the same image
@@ -234,7 +238,7 @@ journalctl -u lmcache-server -f
 ## Rollback (one command)
 
 ```bash
-bash $HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh
+bash $HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh
 ```
 
 The production recipe is unchanged; its launcher runs exactly as before.

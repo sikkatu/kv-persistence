@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（188 个单元测试 + 19 个离线配置/文档测试 = 207 个离线收集，
-205 通过 + 2 跳过；共收集 222 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（191 个单元测试 + 19 个离线配置/文档测试 = 210 个离线收集，
+208 通过 + 2 跳过；共收集 225 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：188 个单元测试（186 通过 + 2 跳过），19 个离线配置/文档测试，
-207 个离线收集（205 通过 + 2 跳过），共收集 222 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：191 个单元测试（189 通过 + 2 跳过），19 个离线配置/文档测试，
+210 个离线收集（208 通过 + 2 跳过），共收集 225 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -380,6 +380,17 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **HOME 展开一致性（rev. 33）**：`identity._read_env_config()` 完全不展开
 **recipe 启动器强制门禁 + 钉住兼容版本（rev. 34）**：recipe 启动器
 **启动后完整 identity 门禁 + kv-persistence 为必需依赖（rev. 35）**：
+**安装修复：openai 依赖 + API 密钥自动生成（rev. 36）**：`lmcache server`
+崩溃于 `ModuleNotFoundError: No module named 'openai'` —— 固定的 lmcache
+0.5.3 CLI 在注册 bench 子命令时导入 `openai`，因此连 `lmcache server`
+没有它也无法启动。`openai>=1.40,<2` 现已固定在 `requirements-lmcache.txt`，
+`kvpersist.launch` 打印清晰的安装命令而非裸 traceback。其二：启动器现在
+在回环地址上自动生成 API 密钥（保存到 `live/api_key`，mode 600）——与
+recipe 启动器相同的契约；wiki 之前要求手动创建密钥。非回环地址仍需显式
+密钥。文档一致性：所有安装路径现在使用规范的 `~/sikkatu-recipes` 布局
+（之前是 `~/recipes` + 重复的 `recipes/recipes`）。测试：3 个新增
+（回环自动生成且 0600 权限、非回环无密钥拒绝且不生成、显式密钥生效）。
+
 raund 34 的门禁只运行 `--check-config-only`，它有意跳过 engine_checks ——
 真实的 docker 参数（--kv-cache-dtype、--block-size、TP size）、已连接的
 LMCacheMPConnector 以及运行中 LMCache 服务器的 L2 编解码器均未被验证

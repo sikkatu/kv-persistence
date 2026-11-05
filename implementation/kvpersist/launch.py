@@ -91,9 +91,26 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    from lmcache.cli.main import main as lmc_main
-
-    lmc_main()
+    try:
+        from lmcache.cli.main import main as lmc_main
+        lmc_main()
+    except ModuleNotFoundError as exc:
+        # Review fix (install report): the lmcache CLI imports optional client
+        # packages (e.g. `openai`) while registering its subcommands -- a
+        # missing one crashed `lmcache server` with a bare traceback. Say
+        # exactly what to install instead.
+        print(
+            "[kvp] ERROR: the lmcache CLI cannot start -- missing python "
+            "package %r.\n"
+            "Install the pinned runtime into the SAME venv that provides the "
+            "`lmcache` command:\n"
+            "    ~/.venvs/lmcache/bin/pip install -r "
+            "requirements-lmcache.txt\n"
+            "(that file pins lmcache AND the packages its CLI imports at "
+            "startup, e.g. openai.)" % (exc.name or str(exc)),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

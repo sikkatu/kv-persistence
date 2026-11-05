@@ -178,7 +178,7 @@ journalctl -u lmcache-server -f
 ## 回滚（一条命令）
 
 ```bash
-bash "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh"
+bash "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/scripts/run-tp4-uva.sh"
 ```
 
 生产配方从未修改；NVMe 上的持久 KV 数据不删除，仅被忽略。显式清除：
