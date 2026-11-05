@@ -11,7 +11,7 @@ GitHub remote API).
 **Overall status: PARTIAL** — implementation complete, offline tests pass
 (188 unit tests + 19 more offline config/docs tests = 207 offline collected,
 205 passed + 2 skipped; 222 collected total including the live-`lmcache`
-integration (10) and recovery (5) tests; plus 326 passed + 5 skipped of 331 collected
+integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
@@ -598,7 +598,7 @@ green with the new contract tests included).
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
 numbers, verified: 188 unit tests (`tests/unit`, 186 passed + 2 skipped),
 19 top-level offline tests, 207 offline collected (205 passed + 2 skipped),
-222 collected total (plus 326 passed + 5 skipped of 331 collected in the
+222 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -615,6 +615,29 @@ Home (EN/RU/ZH).
 **ASCII-only names + full-dict parity (review round 32)**: python
 **HOME expansion parity (review round 33)**: `identity._read_env_config()`
 **Mandatory gate in recipe launchers + pinned compat version (review
+**Post-launch full identity gate + kv-persistence is REQUIRED (review
+round 35)**: the round-34 gate ran only `--check-config-only`, which
+INTENTIONALLY skips engine_checks -- the real docker args
+(--kv-cache-dtype, --block-size, TP size), the attached
+LMCacheMPConnector and the RUNNING LMCache server's L2 codec were NOT
+verified (a zstd server against a raw namespace would have passed).
+Both recipe launchers now run the FULL
+`verify-engine-identity.sh $CONTAINER` after server readiness and
+BEFORE the first smoke request -- MISMATCH (4)/INCONCLUSIVE (5) stops
+the container and fails the launch (the smoke request is never sent),
+the same contract as `run-vllm-with-persist.sh` post-launch. The
+fallback namespace hash is REMOVED as unreachable dead code:
+kv-persistence (with KVP_COMPAT_VERSION + the gate) is a REQUIRED
+dependency for KV_PERSIST=1. KVP_COMPAT_VERSION policy: it is an
+INTERFACE compatibility number -- bump it whenever the identity hash
+algorithm or the CLI interface changes, otherwise old checkouts with
+the same number would falsely pass. Tests: 6 new recipe tests
+(pre-PASS+post-MISMATCH stops the container and never sends the smoke
+request; pre-PASS+post-INCONCLUSIVE likewise; pre-PASS+post-PASS sends
+it and succeeds) on top of the existing real-gate tests in this repo
+(docker-args dtype mismatch -> exit 4, l2-adapter codec mismatch ->
+exit 4 -- these exercise the REAL gate, not a stub).
+
 round 34)**: the recipe launchers (`run-tp4-uva.sh`,
 `run-tp4-hotsplit.sh`) only PRINTED a reminder to run
 `verify-engine-identity.sh` by hand -- vLLM could start with the

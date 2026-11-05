@@ -8,7 +8,7 @@
 
 实现已完成，离线测试全绿（188 个单元测试 + 19 个离线配置/文档测试 = 207 个离线收集，
 205 通过 + 2 跳过；共收集 222 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
-另有伴生仓库 `sikkatu/recipes` 326 通过 + 5 跳过 / 331 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
+另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
 上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
@@ -362,7 +362,7 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 的 bash 语法检查、所有模块的 py_compile。
 
 **测试计数**：此前的数字已过时。实际：188 个单元测试（186 通过 + 2 跳过），19 个离线配置/文档测试，
-207 个离线收集（205 通过 + 2 跳过），共收集 222 个（另有伴生仓库 `sikkatu/recipes` 326 通过 + 5 跳过 / 331 收集；
+207 个离线收集（205 通过 + 2 跳过），共收集 222 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -379,6 +379,22 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **仅 ASCII 名称 + 全字典一致性（rev. 32）**：python `str.isidentifier()`
 **HOME 展开一致性（rev. 33）**：`identity._read_env_config()` 完全不展开
 **recipe 启动器强制门禁 + 钉住兼容版本（rev. 34）**：recipe 启动器
+**启动后完整 identity 门禁 + kv-persistence 为必需依赖（rev. 35）**：
+raund 34 的门禁只运行 `--check-config-only`，它有意跳过 engine_checks ——
+真实的 docker 参数（--kv-cache-dtype、--block-size、TP size）、已连接的
+LMCacheMPConnector 以及运行中 LMCache 服务器的 L2 编解码器均未被验证
+（zstd 服务器配 raw 命名空间本会通过）。两个 recipe 启动器现在在服务器就绪后、
+首个 smoke 请求之前运行完整的 `verify-engine-identity.sh $CONTAINER` ——
+MISMATCH（4）/INCONCLUSIVE（5）停止容器并使启动失败（smoke 请求从不发送），
+与 `run-vllm-with-persist.sh` 启动后契约完全一致。备用命名空间哈希作为不可达
+死代码已删除：kv-persistence（带 KVP_COMPAT_VERSION 和门禁）是 KV_PERSIST=1
+的必需依赖。KVP_COMPAT_VERSION 政策：这是接口兼容性编号——凡是 identity 哈希
+算法或 CLI 接口变更都必须提升它，否则相同编号的旧克隆会误判为兼容。
+测试：6 个新的 recipe 测试（pre-PASS+post-MISMATCH 停止容器且不发送 smoke
+请求；pre-PASS+post-INCONCLUSIVE 同理；pre-PASS+post-PASS 发送并成功），
+加上本仓库中现有的真实门禁测试（docker 参数 dtype 不匹配 -> exit 4、
+l2-adapter codec 不匹配 -> exit 4——它们驱动的是真实门禁而非存根）。
+
 （`run-tp4-uva.sh`、`run-tp4-hotsplit.sh`）此前只打印提醒手动运行
 `verify-engine-identity.sh` —— vLLM 可以带着已连接的持久缓存启动而未经验证。
 两个启动器现在强制运行门禁（先加载 `live/kvp-effective-identity.env`，
