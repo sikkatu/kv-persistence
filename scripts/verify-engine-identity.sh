@@ -88,11 +88,33 @@ print("KVP_TP_SIZE=%s" % pick("KVP_TP_SIZE", "TP_SIZE", default="4"))
 PYEFF
 )"
 fi
+# Review fix (round 37, HIGH): fold the effective value into the KVP_* name
+# ONLY when the operator actually set a source name -- otherwise the resolver's
+# synthesized default (TP_SIZE=4, KV_CACHE_DTYPE=auto->model dtype, ...) would
+# override the identity PIN in identity.env(.local) via the env-wins pass below
+# and a bare gate run reported a false MISMATCH (pin KVP_TP_SIZE=2 -> 4).
+# A recipe launch sets the operator names, so its effective values still fold
+# in (that is the round-23 intent); a bare run keeps the pins.
+_has_src() { # _has_src <KVP_NAME> <OP_NAME>...
+  [ -n "${!1:-}" ] && return 0
+  shift
+  local _n
+  for _n in "$@"; do
+    [ -n "${!_n:-}" ] && return 0
+  done
+  return 1
+}
 while IFS='=' read -r _eff_k _eff_v; do
+  [ -n "$_eff_v" ] || continue
   case "$_eff_k" in
-    KVP_SERVED_MODEL_NAME|KVP_KV_CACHE_DTYPE|KVP_MAX_MODEL_LEN|KVP_BLOCK_SIZE|KVP_TP_SIZE)
-      [ -n "$_eff_v" ] && export "$_eff_k=$_eff_v" ;;
+    KVP_SERVED_MODEL_NAME) _has_src KVP_SERVED_MODEL_NAME SERVED_MODEL_NAME || continue ;;
+    KVP_KV_CACHE_DTYPE)    _has_src KVP_KV_CACHE_DTYPE KV_CACHE_DTYPE        || continue ;;
+    KVP_MAX_MODEL_LEN)     _has_src KVP_MAX_MODEL_LEN MAX_MODEL_LEN          || continue ;;
+    KVP_BLOCK_SIZE)        _has_src KVP_BLOCK_SIZE KV_PERSIST_BLOCK_SIZE BLOCK_SIZE || continue ;;
+    KVP_TP_SIZE)           _has_src KVP_TP_SIZE TP_SIZE                      || continue ;;
+    *) continue ;;
   esac
+  export "$_eff_k=$_eff_v"
 done <<EOF
 $_eff_env
 EOF

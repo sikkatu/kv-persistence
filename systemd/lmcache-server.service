@@ -43,7 +43,6 @@ Type=simple
 # the template unit lmcache-server@.service (User=%i is valid only there).
 User=kvp
 Group=kvp
-EnvironmentFile=-/etc/kv-persistence.env
 Environment=PYTHONUNBUFFERED=1
 # Where the kv-persistence repo lives, so the wrapper can render the L2
 # adapter spec from configs/<KVP_MODEL_CONFIG>/l2-adapter.json.in when the
@@ -54,6 +53,7 @@ Environment=PYTHONUNBUFFERED=1
 # cache root in cache.env.local is honoured -- no silent 1.5 TB on the
 # system disk.
 Environment=KVP_REPO_ROOT=/home/kvp/kv-persistence
+EnvironmentFile=-/etc/kv-persistence.env
 # Review round 14: the service user (kvp) must own the cache root. For the
 # DEFAULT path StateDirectory= creates /var/lib/kv-persistence with the right
 # ownership; for a custom KVP_CACHE_ROOT run once:

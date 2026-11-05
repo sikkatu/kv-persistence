@@ -71,6 +71,12 @@ repo_cfg() { # repo_cfg <KEY> <default>
           | tail -1 | tr -d '\"' | sed 's/ *#.*//')"
     fi
   fi
+  # Review fix (round 37): expand $HOME/${HOME} in file values -- cache.env
+  # may pin paths like KVP_CACHE_ROOT=$HOME/nvme/kvp (identical to the
+  # shared env-file parsers, round 33).
+  v="${v:-}"
+  v="${v//\$\{HOME\}/$HOME}"
+  v="${v//\$HOME/$HOME}"
   echo "${!k:-${v:-$def}}"
 }
 
@@ -119,10 +125,13 @@ render_adapter() {
       echo "LMCACHE_L2_SERDE=$codec is LOSSY -- kv-persistence is lossless-only (none / zstd / lz4)" >&2; exit 1 ;;
     *) echo "LMCACHE_L2_SERDE=$codec not understood (use none / zstd / lz4)" >&2; exit 1 ;;
   esac
+  # Review fix (round 37): the JSON watermark and the server flag must come
+  # from the SAME source -- the flag uses repo_cfg, so must the JSON (the bare
+  # env default ignored an lmcache-server.env edit).
   sed -e "s|__KVP_CACHE_ROOT__|$root|" \
       -e "s|__KVP_CACHE_BUDGET_GB__|$budget|" \
-      -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${KVP_EVICT_TRIGGER_WATERMARK:-0.9}|" \
-      -e "s|__KVP_EVICT_RATIO__|${KVP_EVICT_RATIO:-0.1}|" \
+      -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|$(repo_cfg LMCACHE_EVICTION_TRIGGER_WATERMARK 0.9)|" \
+      -e "s|__KVP_EVICT_RATIO__|$(repo_cfg LMCACHE_EVICTION_RATIO 0.1)|" \
       -e "s|__KVP_L2_SERDE_JSON__|$serde_json|" \
       "$tmpl" \
     | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)'
@@ -170,6 +179,18 @@ else
 fi
 echo "$ADAPTER_JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
   || { echo "adapter spec is not valid JSON" >&2; exit 1; }
+# Review fix (round 37, HIGH): write the rendered adapter to the cache root
+# so the identity gate's l2_serde check can read it. Without this file the
+# mandatory post-launch gate in the recipe launchers always gets exit 5
+# (INCONCLUSIVE) when the cache runs under systemd -- scripts/start-cache.sh
+# writes it at line ~133 but this wrapper did not.
+_root_for_render="$(repo_cfg KVP_CACHE_ROOT /var/lib/kv-persistence/l2)"
+if [ -d "$_root_for_render" ] && [ -w "$_root_for_render" ]; then
+  printf '%s\n' "$ADAPTER_JSON" > "$_root_for_render/l2-adapter.rendered.json" 2>/dev/null \
+    || echo "WARNING: cannot write l2-adapter.rendered.json to $_root_for_render (gate will report INCONCLUSIVE)" >&2
+else
+  echo "WARNING: cache root $_root_for_render missing/not writable -- l2-adapter.rendered.json NOT written (gate will report INCONCLUSIVE)" >&2
+fi
 # Review round 14: the service user must be able to write the cache root.
 ensure_cache_root
 # Review round 15+: launch through the kv-persistence launcher (kvpersist.launch)
@@ -188,8 +209,20 @@ LMCACHE_LOG_LEVEL="${LMCACHE_LOG_LEVEL:-$(repo_cfg LMCACHE_LOG_LEVEL DEBUG)}"
 # defaults (5555 / 64 / 256) and KVP_* edits in cache.env(.local) were silently
 # ignored under systemd. repo_cfg precedence: process env > .local > base file
 # > the defaults here -- identical to scripts/env.sh.
+# Review fix (round 37): the loopback check is a SECURITY contract
+# (docs/security.md) -- scripts/start-cache.sh refuses 0.0.0.0 and so must
+# this wrapper. Also read HTTP/OTLP settings from the repo configs via
+# repo_cfg (start-cache.sh parity): bare env misses lmcache-server.env edits.
+_lm_host="$(repo_cfg LMCACHE_HOST 127.0.0.1)"
+case "$_lm_host" in
+  127.0.0.1|localhost|::1) : ;;
+  *) echo "LMCACHE_HOST must be loopback-only (127.0.0.1/localhost/::1), got '$_lm_host'" >&2; exit 1 ;;
+esac
+_lm_http_host="$(repo_cfg LMCACHE_HTTP_HOST 127.0.0.1)"
+_lm_http_port="$(repo_cfg LMCACHE_HTTP_PORT "")"
+_lm_otlp="$(repo_cfg LMCACHE_OTLP_ENDPOINT "")"
 exec python3 -m kvpersist.launch server \
-  --host "$(repo_cfg LMCACHE_HOST 127.0.0.1)" \
+  --host "$_lm_host" \
   --port "$(repo_cfg LMCACHE_PORT 5555)" \
   --l1-size-gb "$(repo_cfg LMCACHE_L1_SIZE_GB 64)" \
   --eviction-policy "$(repo_cfg LMCACHE_EVICTION_POLICY LRU)" \
@@ -197,7 +230,7 @@ exec python3 -m kvpersist.launch server \
   --eviction-ratio "$(repo_cfg LMCACHE_EVICTION_RATIO 0.1)" \
   --chunk-size "$(repo_cfg LMCACHE_CHUNK_SIZE 256)" \
   --l2-adapter "$ADAPTER_JSON" \
-  ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
-  ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
-  ${LMCACHE_OTLP_ENDPOINT:+--otlp-endpoint "$LMCACHE_OTLP_ENDPOINT"} \
-  ${LMCACHE_OTLP_ENDPOINT:+--enable-tracing}
+  ${_lm_http_port:+--http-host "$_lm_http_host"} \
+  ${_lm_http_port:+--http-port "$_lm_http_port"} \
+  ${_lm_otlp:+--otlp-endpoint "$_lm_otlp"} \
+  ${_lm_otlp:+--enable-tracing}

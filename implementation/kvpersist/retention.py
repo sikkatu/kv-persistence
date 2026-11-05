@@ -129,6 +129,7 @@ def select_victims(
             normal.append(e)
     victims: List[EntryStats] = []
     freed = 0
+    freed_nominal = 0
     for e in rank_for_eviction(normal, now) + rank_for_eviction(protected, now):
         if freed >= bytes_to_free:
             break
@@ -139,6 +140,13 @@ def select_victims(
         # mapping exists, effective_freed_bytes assumes the worst case for
         # shared entries (0 bytes freed) -- never overpromise reclaimed space.
         freed += e.bytes_on_disk if e.shared_refs <= 1 else 0
+        # Review fix (round 37): the STOP condition must use NOMINAL bytes --
+        # with the effective count a shared entry never advanced `freed`, so
+        # the loop kept going and evicted EVERY shared entry. The report still
+        # separates effective vs nominal (a shared object survives one ref).
+        freed_nominal += e.bytes_on_disk
+        if freed_nominal >= bytes_to_free:
+            break
     return victims
 
 

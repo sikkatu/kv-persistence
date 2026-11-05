@@ -103,7 +103,10 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
     out: Dict[str, str] = {}
     if not path.is_file():
         return out
-    for raw in path.read_text().splitlines():
+    # Review fix (round 37): split on \n ONLY -- str.splitlines() also
+    # splits on U+2028/U+2029 which bash and identity._read_env_config
+    # treat as ordinary characters (parser parity).
+    for raw in path.read_text().split("\n"):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -190,7 +193,15 @@ def load_config(repo_root: str, *, env_wins: bool = True, model_config: Optional
             if k.startswith("KVP_") or k.startswith("LMCACHE_") or k == "USE_LOSSLESS_SERDE":
                 merged[k] = os.environ[k]
         for _lm, _kv in _ALIAS_MAP.items():
-            if _kv in os.environ:
+            # Review fix (round 37): when BOTH spellings are exported the
+            # canonical LMCACHE_* one must WIN -- identity.py
+            # (env.get("LMCACHE_L2_SERDE") or env.get("KVP_L2_SERDE")) and
+            # scripts/env.sh (_kvp_resolve_l2_serde) check LMCACHE_* FIRST.
+            # The alias only FILLS a name the environment did not set; it must
+            # not overwrite an explicit LMCACHE_* env value (that desynced the
+            # namespace from the running server). File-layer alias precedence
+            # is unchanged (resolve_layered / _kvp_seed, round 28).
+            if _kv in os.environ and _lm not in os.environ:
                 merged[_lm] = os.environ[_kv]
     return merged
 

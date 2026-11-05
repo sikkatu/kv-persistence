@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(191 unit tests + 19 more offline config/docs tests = 210 offline collected,
-208 passed + 2 skipped; 225 collected total including the live-`lmcache`
+(197 unit tests + 19 more offline config/docs tests = 216 offline collected,
+214 passed + 2 skipped; 231 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 191 unit tests (`tests/unit`, 189 passed + 2 skipped),
-19 top-level offline tests, 210 offline collected (208 passed + 2 skipped),
-225 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 197 unit tests (`tests/unit`, 195 passed + 2 skipped),
+19 top-level offline tests, 216 offline collected (214 passed + 2 skipped),
+231 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -617,6 +617,48 @@ Home (EN/RU/ZH).
 **Mandatory gate in recipe launchers + pinned compat version (review
 **Post-launch full identity gate + kv-persistence is REQUIRED (review
 **Install fixes: openai dependency + auto-generated API key (review
+**Review batch round 37** (all items verified against the code first):
+* HIGH -- the systemd wrapper (`kvp-lmcache-server`) never wrote
+  `l2-adapter.rendered.json`, so the mandatory post-launch gate always
+  got exit 5 (INCONCLUSIVE) for systemd-started caches and the recipe
+  launchers failed; the wrapper now writes the rendered adapter
+  exactly like `start-cache.sh`.
+* HIGH -- a bare gate run replaced identity PINS with synthesized
+  defaults (pin `KVP_TP_SIZE=2` became 4 -> false MISMATCH); the
+  effective-identity export now folds a value only when the operator
+  actually set a source name. A manual run against
+  `identity.env.local` pins now passes (regression-tested).
+* HIGH -- `tmp_guard.register_write` crashed with TypeError when
+  `_proc_start_time` returned "unknown" (the write was never
+  registered, so purge could delete its .tmp file).
+* `salt_filename_patch.apply()` returned True when upstream renamed
+  the patched function (silent isolation loss) -- it now verifies the
+  target exists first (reviewer advised checking this first; real
+  lmcache still unavailable here, tested against a stub).
+* `start-cache.sh` refuses to start over a LIVE server (was: overwrote
+  the PID file and orphaned it); `stop-cache.sh` verifies
+  `/proc/<pid>/cmdline` before killing (stale PID never kills an
+  unrelated process).
+* systemd wrapper parity: loopback check for LMCACHE_HOST (0.0.0.0 was
+  accepted), HTTP/OTLP read from repo configs, $HOME expansion,
+  watermark in the adapter JSON and the server flag now share one
+  source (repo_cfg); template unit EnvironmentFile ordering fixed.
+* `purge --tmp`/`--all` no longer deletes valid entries whose name
+  merely contains `.tmp.` -- only the adapter crash-leftover pattern
+  `<final>.bin.tmp.<uuid>` is a target (safe MISS, no cache loss).
+* `retention.select_victims` stopped evicting ALL shared entries
+  (stop condition now uses nominal bytes); `budget.admit()` rejects
+  negative sizes; U+2028 line-splitting aligned across all three env
+  parsers; preflight accepts NVMe partition pins and no longer treats
+  `[fe80::1]` as loopback; benchmark.sh passes large prompts via a
+  temp file (env size limit).
+* `KVP_L2_SERDE` no longer overrides an exported `LMCACHE_L2_SERDE` in
+  `config.load_config` (matches identity.py and env.sh precedence).
+* Test counts: 197 unit / 216 offline / 231 total here. Recipes counts
+  vary by host (torch/lz4/zstd availability shifts skips; another
+  reviewer saw 330+7 vs our 332+5) -- the column notes count the SAME
+  collected set, only the skip split differs.
+
 round 36)**: `lmcache server` crashed with
 `ModuleNotFoundError: No module named 'openai'` -- the pinned lmcache
 0.5.3 CLI imports `openai` while REGISTERING its bench subcommands, so

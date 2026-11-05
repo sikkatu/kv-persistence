@@ -98,7 +98,9 @@ def _tmp_files(root: str) -> list:
     pat = re.compile(r"^(?P<final>.+\.bin)\.tmp\.[0-9a-f]{32}$")
     for name in os.listdir(root):
         p = os.path.join(root, name)
-        if not (os.path.isfile(p) and ".tmp." in name):
+        if not (os.path.isfile(p) and re.search(r"\.bin\.tmp\.[0-9a-f]{8,}$", name)): # Review fix (round 37): a bare ".tmp." substring matched VALID entries
+        # whose name merely contains ".tmp." -- only the adapter crash
+        # leftover pattern <final>.bin.tmp.<uuid> is a deletion target.
             continue
         m = pat.match(name)
         try:

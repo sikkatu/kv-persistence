@@ -179,9 +179,15 @@ def register_write(cache_root: str, final_name: str):
     try:
         os.makedirs(reg, exist_ok=True)
         start = _proc_start_time(os.getpid())
+        # Review fix (round 37): _proc_start_time may return "unknown" (str)
+        # when /proc is unreadable -- int formatting then raised TypeError and
+        # the in-flight write was NEVER registered (purge could delete its
+        # .tmp file). Treat any non-int result like None (record 0).
+        if not isinstance(start, int):
+            start = 0
         name = "%d-%d-%s.active" % (
             os.getpid(),
-            start if start is not None else 0,
+            start,
             uuid.uuid4().hex[:16],
         )
         path = os.path.join(reg, name)

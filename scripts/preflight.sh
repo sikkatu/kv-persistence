@@ -68,10 +68,26 @@ persistence guarantees require a POSIX local filesystem (ext4/xfs/btrfs).
 Move KVP_CACHE_ROOT to local storage or recovery cannot be trusted." ;;
   esac
   if [ -n "$TARGET_DEV" ]; then
-    case " $PARENT_DISK " in
-      *" $TARGET_DEV "*|*" ${TARGET_DEV%/}"[0-9]*" "*) note "cache root is on the expected NVMe device ($TARGET_DEV)" ;;
-      *) warn "cache root device ($PARENT_DISK) does not match KVP_CACHE_DEVICE=$TARGET_DEV -- wrong disk for a ${BUDGET_GB} GB budget" ;;
+    # Review fix (round 37): accept the partition relation in BOTH directions
+    # and for NVMe-style names -- the old glob matched only numeric suffixes
+    # (sda1), so a pin of /dev/nvme0n1p1 or a pin of the mounted partition
+    # itself was rejected as "wrong disk".
+    _dev_ok=0
+    [ "$TARGET_DEV" = "$PARENT_DISK" ] && _dev_ok=1
+    [ -n "${MOUNT_SRC:-}" ] && [ "$TARGET_DEV" = "${MOUNT_SRC%/}" ] && _dev_ok=1
+    # pin is the whole disk, cache sits on one of its partitions
+    case "$PARENT_DISK" in
+      "${TARGET_DEV%/}p"[0-9]*|"${TARGET_DEV%/}"[0-9]*) _dev_ok=1 ;;
     esac
+    # pin is a partition, parent disk of the mount matches
+    case "$TARGET_DEV" in
+      "${PARENT_DISK%/}p"[0-9]*|"${PARENT_DISK%/}"[0-9]*) _dev_ok=1 ;;
+    esac
+    if [ "$_dev_ok" = "1" ]; then
+      note "cache root is on the expected NVMe device ($TARGET_DEV)"
+    else
+      warn "cache root device ($PARENT_DISK) does not match KVP_CACHE_DEVICE=$TARGET_DEV -- wrong disk for a ${BUDGET_GB} GB budget"
+    fi
   else
     # Unset KVP_CACHE_DEVICE is an unproven claim, not a config error: preflight
     # itself does NOT fail on it (a Quick Start run without it must reach
@@ -180,7 +196,10 @@ esac
 if command -v ss >/dev/null 2>&1; then
   for P in "${LMCACHE_PORT:-5555}" "${LMCACHE_HTTP_PORT:-8081}"; do
     LISTEN="$(ss -ltnH 2>/dev/null | awk -v p=":$P" '$4 ~ p"$"' | head -1)"
-    if [ -n "$LISTEN" ] && ! printf '%s' "$LISTEN" | grep -q '127.0.0.1\|::1\|localhost'; then
+    # Review fix (round 37): match the ADDRESS COLUMN precisely -- a bare
+    # grep '::1' matched [fe80::1]:port too (fe80 is NOT loopback).
+    if [ -n "$LISTEN" ] && ! printf '%s' "$LISTEN" | awk '{print $4}' \
+        | grep -Eq '^(127\.0\.0\.1|localhost|\[::1\]|::1):'; then
       warn "port $P appears bound to a non-loopback address ($LISTEN) -- cache management must stay local-only"
     fi
   done

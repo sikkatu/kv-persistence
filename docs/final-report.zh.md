@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（191 个单元测试 + 19 个离线配置/文档测试 = 210 个离线收集，
-208 通过 + 2 跳过；共收集 225 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（197 个单元测试 + 19 个离线配置/文档测试 = 216 个离线收集，
+214 通过 + 2 跳过；共收集 231 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：191 个单元测试（189 通过 + 2 跳过），19 个离线配置/文档测试，
-210 个离线收集（208 通过 + 2 跳过），共收集 225 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：197 个单元测试（195 通过 + 2 跳过），19 个离线配置/文档测试，
+216 个离线收集（214 通过 + 2 跳过），共收集 231 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -381,6 +381,38 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **recipe 启动器强制门禁 + 钉住兼容版本（rev. 34）**：recipe 启动器
 **启动后完整 identity 门禁 + kv-persistence 为必需依赖（rev. 35）**：
 **安装修复：openai 依赖 + API 密钥自动生成（rev. 36）**：`lmcache server`
+**评审批次，第 37 轮**（每个问题都先对照代码核实）：
+* HIGH —— systemd 包装器（`kvp-lmcache-server`）从不写
+  `l2-adapter.rendered.json`，因此强制的启动后门禁对 systemd 启动的
+  缓存总是返回 exit 5（INCONCLUSIVE），recipe 启动器失败；包装器现在
+  与 `start-cache.sh` 完全一致地写入渲染后的适配器。
+* HIGH —— 手动运行门禁时用合成默认值替换 identity 的 PIN（`KVP_TP_SIZE=2`
+  变成 4 -> 误报 MISMATCH）；effective-identity 导出现在只在操作员真正
+  设置了源名称时才折叠值。按 `identity.env.local` 的 PIN 手动运行现在通过
+  （已用回归测试锁定）。
+* HIGH —— `_proc_start_time` 返回 "unknown" 时 `tmp_guard.register_write`
+  抛出 TypeError（写入从未注册，purge 可能删除其 .tmp 文件）。
+* `salt_filename_patch.apply()` 在 upstream 重命名被补丁的函数时返回 True
+  （静默丢失隔离）——现在先验证目标存在（评审者建议优先检查；真实的 lmcache
+  仍然无法获得，针对存根测试）。
+* `start-cache.sh` 拒绝在存活的服务器上启动（此前会覆盖 PID 文件并使其
+  变成孤儿）；`stop-cache.sh` 在终止前校验 `/proc/<pid>/cmdline`（过期 PID
+  绝不误杀无关进程）。
+* systemd 包装器对齐：LMCACHE_HOST 的回环检查（此前接受 0.0.0.0）、HTTP/OTLP
+  从仓库配置读取、$HOME 展开、适配器 JSON 中的水位线与服务器标志现在同源
+  （repo_cfg）；模板单元的 EnvironmentFile 顺序已修复。
+* `purge --tmp`/`--all` 不再删除名称仅含 `.tmp.` 的有效条目——只有适配器
+  崩溃残留模式 `<final>.bin.tmp.<uuid>` 是目标（安全 MISS，不丢缓存）。
+* `retention.select_victims` 不再逐出全部共享条目（停止条件改用名义字节）；
+  `budget.admit()` 拒绝负数；U+2028 分行在三个 env 解析器间对齐；preflight
+  接受 NVMe 分区 PIN，且不再把 `[fe80::1]` 视为回环；benchmark.sh 通过临时
+  文件传递大提示（env 大小限制）。
+* `KVP_L2_SERDE` 不再在 `config.load_config` 中覆盖已导出的
+  `LMCACHE_L2_SERDE`（与 identity.py 和 env.sh 的优先级一致）。
+* 测试计数：此处 197 unit / 216 offline / 231 共计。recipes 的计数因主机而异
+  （torch/lz4/zstd 影响跳过；另一位评审者看到 330+7 对比我们的 332+5）——
+  各栏统计的是同一个收集集合，只是 pass/skip 划分不同。
+
 崩溃于 `ModuleNotFoundError: No module named 'openai'` —— 固定的 lmcache
 0.5.3 CLI 在注册 bench 子命令时导入 `openai`，因此连 `lmcache server`
 没有它也无法启动。`openai>=1.40,<2` 现已固定在 `requirements-lmcache.txt`，

@@ -53,15 +53,30 @@ def patched_object_key_to_filename(key) -> str:
 
 
 def apply() -> bool:
-    """Install the patched filename mapping. Returns True when applied."""
+    """Install the patched filename mapping. Returns True when applied.
+
+    Review fix (round 37): assigning a NEW module attribute is not a patch --
+    if upstream renames ``_object_key_to_filename`` the assignment creates a
+    dead attribute, nothing calls it, and apply() used to return True while
+    the cache_salt isolation was silently lost. Verify the target EXISTS
+    first; a missing/renamed target must return False so the caller prints
+    the loud WARNING instead of claiming success.
+    """
     try:
         from lmcache.v1.distributed.l2_adapters import (
             nixl_store_dynamic_l2_adapter as mod,
         )
     except Exception:  # noqa: BLE001 - slim install / missing deps
         return False
+    # The adapter must expose the function we are about to replace -- a rename
+    # upstream means our mapping would never be called.
+    if not hasattr(mod, "_object_key_to_filename"):
+        return False
     mod._object_key_to_filename = patched_object_key_to_filename
-    return True
+    # Guard against the assignment landing on a module that re-exports the
+    # name but does not USE it for lookups: the patched callable must be in
+    # place after assignment.
+    return getattr(mod, "_object_key_to_filename", None) is patched_object_key_to_filename
 
 
 def main() -> None:

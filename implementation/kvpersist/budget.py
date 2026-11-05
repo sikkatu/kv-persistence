@@ -89,6 +89,8 @@ class BudgetLedger:
 
     def admit(self, namespace: str, nbytes: int) -> None:
         """Record a write; never exceeds the hard budget (raises instead)."""
+        if nbytes < 0:
+            raise ValueError(f"admit() requires a non-negative size, got {nbytes}")
         with self._lock:
             total = sum(self._usage.values())
             if total + nbytes > self.budget_bytes:

@@ -161,6 +161,26 @@ fi
 
 LOG="$ROOT_PATH/lmcache-server.log"
 PIDF="$ROOT_PATH/lmcache-server.pid"
+# Review fix (round 37): refuse to start when a server is ALREADY running --
+# the old behaviour overwrote this PID file and orphaned the live server
+# (stop-cache.sh then reported "already exited" for the stale PID).
+if [ -f "$PIDF" ]; then
+  _old_pid="$(cat "$PIDF" 2>/dev/null | tr -d '[:space:]')"
+  case "$_old_pid" in
+    ''|*[!0-9]*) : ;;  # unparsable pid file -- fall through
+    *)
+      if kill -0 "$_old_pid" 2>/dev/null; then
+        _old_cmd="$(tr '\0' ' ' < "/proc/$_old_pid/cmdline" 2>/dev/null || true)"
+        case "$_old_cmd" in
+          *lmcache*|*kvpersist*)
+            die "lmcache server already running (pid $_old_pid) -- stop it first:
+  bash scripts/stop-cache.sh
+(or inspect: tr '\\0' ' ' < /proc/$_old_pid/cmdline)" ;;
+        esac
+      fi
+      ;;
+  esac
+fi
 # setsid detaches the service from this shell's terminal -- closing the SSH
 # session or dropping the connection will NOT kill the cache service. nohup
 # additionally shields it from HUP. Both matter because the service is meant
