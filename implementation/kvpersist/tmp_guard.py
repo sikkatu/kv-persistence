@@ -291,57 +291,92 @@ def sweep_stale_markers(cache_root: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def install() -> bool:
-    """Wrap DynamicNixlStorageAgent.dynamic_store_file with the registry.
+def _agent_classes():
+    """Yield the concrete store classes of whichever lmcache layout is
+    installed. 0.5.6: the agent moved to
+    ``l2_adapters.nixl_store_agents`` and the store method is
+    ``dynamic_store(mem_indices, key)`` on the FILE agent; 0.5.3: the
+    adapter module exposes ``DynamicNixlStorageAgent.dynamic_store_file``.
+    Abstract bases are skipped -- abstract methods must not be wrapped
+    (subclasses override them, so a base-class wrapper would never run).
+    """
+    names = (
+        ("lmcache.v1.distributed.l2_adapters.nixl_store_agents"
+         ".file_dynamic_nixl_store_agent", "FileDynamicNixlStorageAgent"),
+        ("lmcache.v1.distributed.l2_adapters.nixl_store_dynamic_l2_adapter",
+         "DynamicNixlStorageAgent"),
+    )
+    import importlib
+    for mod_name, cls_name in names:
+        try:
+            mod = importlib.import_module(mod_name)
+            cls = getattr(mod, cls_name, None)
+        except Exception:  # noqa: BLE001 - slim install / missing deps
+            continue
+        if cls is not None:
+            yield cls
 
-    Returns True when installed. The wrapper:
+
+def install() -> bool:
+    """Wrap the store method with the registry. Returns True when at
+    least one class was wrapped. The wrapper:
       1. registers the FINAL file name before the store starts,
       2. heartbeats the marker while the store runs,
       3. unregisters in ``finally`` -- success and failure both clear the
          marker, so only crashed stores leave one behind.
+    Keeps the original call signature and derives the final name from
+    either the explicit ``file_path`` argument (0.5.3) or the ObjectKey
+    (0.5.6: the file name is derived from the key upstream).
     """
-    try:
-        from lmcache.v1.distributed.l2_adapters import (
-            nixl_store_dynamic_l2_adapter as mod,
-        )
-    except Exception:  # noqa: BLE001 - slim install / missing deps
-        return False
+    wrapped_any = False
+    for agent_cls in _agent_classes():
+        if getattr(agent_cls, "_kvp_tmp_guard_installed", False):
+            wrapped_any = True
+            continue
+        if hasattr(agent_cls, "dynamic_store_file"):
+            method = "dynamic_store_file"
+        elif hasattr(agent_cls, "dynamic_store"):
+            method = "dynamic_store"
+        else:
+            continue
+        if method in getattr(agent_cls, "__abstractmethods__", ()):
+            continue
+        orig = getattr(agent_cls, method)
 
-    agent_cls = getattr(mod, "DynamicNixlStorageAgent", None)
-    if agent_cls is None or getattr(agent_cls, "_kvp_tmp_guard_installed", False):
-        return bool(agent_cls)
-
-    orig = agent_cls.dynamic_store_file
-
-    async def guarded_store_file(self, mem_indices, file_path, page_size):
-        root = getattr(self, "file_path", None) or os.path.dirname(file_path)
-        marker = register_write(root, os.path.basename(file_path))
-        stop = threading.Event()
-
-        def _beat():
-            while not stop.wait(HEARTBEAT_SEC):
-                heartbeat(marker)
-
-        hb = threading.Thread(target=_beat, daemon=True) if marker else None
-        if hb:
-            hb.start()
-        try:
-            return await orig(self, mem_indices, file_path, page_size)
-        finally:
-            stop.set()
+        async def guarded_store(self, mem_indices, *args, __orig=orig, **kwargs):
+            file_path = kwargs.get("file_path")
+            if file_path is None and args and isinstance(args[0], str):
+                file_path = args[0]
+            if file_path is not None:
+                root = getattr(self, "file_path", None) or os.path.dirname(file_path)
+                final_name = os.path.basename(file_path)
+            else:
+                # 0.5.6: the name is derived from the ObjectKey argument.
+                root = getattr(self, "file_path", None) or "."
+                key = args[0] if args else None
+                try:
+                    from lmcache.v1.distributed.l2_adapters.nixl_store_agents \
+                        .dynamic_nixl_store_agent import _object_key_to_filename
+                    final_name = _object_key_to_filename(key)
+                except Exception:  # noqa: BLE001 - never break the store
+                    final_name = "unknown-%d.tmp" % os.getpid()
+            marker = register_write(root, final_name)
+            stop = threading.Event()
+            def _beat():
+                while not stop.wait(HEARTBEAT_SEC):
+                    heartbeat(marker)
+            hb = threading.Thread(target=_beat, daemon=True) if marker else None
             if hb:
-                hb.join(timeout=1)
-            unregister_write(marker)
+                hb.start()
+            try:
+                return await __orig(self, mem_indices, *args, **kwargs)
+            finally:
+                stop.set()
+                if hb:
+                    hb.join(timeout=1)
+                unregister_write(marker)
 
-    agent_cls.dynamic_store_file = guarded_store_file
-    agent_cls._kvp_tmp_guard_installed = True
-    return True
-
-
-def main() -> None:  # pragma: no cover - debugging helper
-    print("registry dir: %s" % REGISTRY_DIR, file=sys.stderr)
-    print("install() is applied by kvpersist.launch automatically.", file=sys.stderr)
-
-
-if __name__ == "__main__":
-    main()
+        setattr(agent_cls, method, guarded_store)
+        agent_cls._kvp_tmp_guard_installed = True
+        wrapped_any = True
+    return wrapped_any

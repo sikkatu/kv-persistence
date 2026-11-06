@@ -30,19 +30,27 @@ def main() -> None:
     """Apply every patch, then delegate to the lmcache CLI entry point."""
     from . import compress_serde, salt_filename_patch, tmp_guard
 
-    salt_applied = salt_filename_patch.apply()
-    if salt_applied:
+    # Round 43: version-aware install. On LMCache 0.5.6+ upstream already
+    # embeds cache_salt in the L2 file name (the leak is fixed upstream) --
+    # nothing to patch there. The legacy '_'-suffix mapping is installed
+    # ONLY when the rendered adapter opts into it (compat for old files).
+    if salt_filename_patch.upstream_active():
+        _salt_status = "upstream"
+    else:
+        _salt_status = salt_filename_patch.install()
+    if _salt_status == "upstream":
+        print(
+            "[kvp] cache_salt included in L2 file names by upstream LMCache "
+            "(0.5.6+ native '@'-suffix) -- no patch needed",
+            file=sys.stderr,
+        )
+    elif _salt_status == "patched":
         print(
             "[kvp] cache_salt included in L2 file names "
             "(nixl_store_dynamic filename patch active)",
             file=sys.stderr,
         )
     else:
-        # Review fix (round 42): a FAILED patch is FATAL when the adapter
-        # actually uses cache_salt -- without the patch the salt is silently
-        # dropped from the L2 file name and cross-tenant isolation is lost
-        # (the measured data leak in rounds 12-15). Only warn (and continue)
-        # when there is genuinely no salt in the rendered adapter.
         import json as _json
         import os as _os
         _root = _os.environ.get("KVP_CACHE_ROOT", "/var/lib/kv-persistence/l2")
@@ -69,7 +77,6 @@ def main() -> None:
             "behaviour (see docs/final-report.md)",
             file=sys.stderr,
         )
-
     # Active-write registry: `purge --tmp` never deletes a tmp file whose
     # store is still in flight (see kvpersist.tmp_guard). Inert without the
     # adapter module.

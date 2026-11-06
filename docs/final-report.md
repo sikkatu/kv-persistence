@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(212 unit tests + 19 more offline config/docs tests = 231 offline collected,
-229 passed + 2 skipped; 246 collected total including the live-`lmcache`
+(218 unit tests + 19 more offline config/docs tests = 237 offline collected,
+235 passed + 2 skipped; 252 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 212 unit tests (`tests/unit`, 210 passed + 2 skipped),
-19 top-level offline tests, 231 offline collected (229 passed + 2 skipped),
-246 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 218 unit tests (`tests/unit`, 216 passed + 2 skipped),
+19 top-level offline tests, 237 offline collected (235 passed + 2 skipped),
+252 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -623,6 +623,25 @@ Home (EN/RU/ZH).
 **Round 40 (install-run findings)**:
 **Round 41 (pre-flight before docker run)**: the install run lost 24
 **Round 42 (LMCache version alignment)**: the second install run died
+**Round 43 (LMCache 0.5.6 API drift)**: after the version alignment
+the cache server crashed at startup -- `AttributeError:
+DynamicNixlStorageAgent has no attribute 'dynamic_store_file'`.
+LMCache 0.5.6 restructured the L2 adapter: the agent moved to
+`l2_adapters.nixl_store_agents` and the store method was renamed
+`dynamic_store(mem_indices, key)`. Worse, 0.5.6 FIXED the salt leak
+upstream -- its `_object_key_to_filename` now appends `@salt`.
+Both patches are now version-aware:
+* `salt_filename_patch.install()` returns `upstream` on 0.5.6+ (no
+  patch needed -- upstream isolates), `patched` on 0.5.3. The
+  legacy `_`-suffix naming is available via `legacy_salt_suffix`
+  in the rendered adapter (migration aid only);
+* `tmp_guard.install()` wraps `dynamic_store` on the CONCRETE
+  `FileDynamicNixlStorageAgent` (not the ABC's abstract method) and
+  keeps the 0.5.3 `dynamic_store_file` fallback;
+* `launch.py` prints "cache_salt included in L2 file names by
+  upstream LMCache (0.5.6+ native '@'-suffix) -- no patch needed".
+6 tests (218 unit / 237 offline / 252 total).
+
 at `register_kv_caches` again -- the root cause is a version split:
 the pinned vLLM image ships lmcache **0.5.6** (the CLIENT inside the
 container) while the host venv served lmcache **0.5.3** (the SERVER).

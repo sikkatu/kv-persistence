@@ -16,6 +16,7 @@ Nothing here is claimed working without its marker.
 | `LMCacheMPConnector` in image | `kv_connector_module_path` supported | VERIFIED (source) |
 | LMCache | **0.5.6** (matches the pinned vLLM image; pinned in `requirements-lmcache.txt`) | NEEDS TESTING on host |
 | MP-protocol fit (lmcache ↔ vLLM) | ZMQ request channel | NEEDS TESTING on host |
+| L2 `cache_salt` isolation | **native in 0.5.6+** (`@`-suffix in the file name); our patch is a compat shim for 0.5.3-era files | VERIFIED (source) |
 | L2 `nixl_store_dynamic` persistence | persist_enabled + lazy index rebuild | NEEDS TESTING on host |
 | Restore after vLLM restart | acceptance requirement | NEEDS TESTING on host |
 | Restore after both restarts | acceptance requirement | NEEDS TESTING on host |
