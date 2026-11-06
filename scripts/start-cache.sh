@@ -291,3 +291,15 @@ done
 [ "$READY" = 1 ] || { echo "ERROR: request port $LMCACHE_HOST:$LMCACHE_PORT not listening after 30s -- the service is up but not accepting connections." >&2; tail -n 20 "$LOG" >&2 || true; exit 1; }
 echo "cache service READY: process alive, no adapter errors, port $LMCACHE_PORT listening"
 echo "NOTE: the HTTP frontend is intentionally loopback-only; do not proxy it without auth."
+# Review fix (round 43): the [kvp] patch-status lines printed by
+# kvpersist.launch go to the server log (stderr of the daemon), never to
+# this terminal -- on success the operator could not see whether the
+# cache_salt filename mapping and the active-write registry are actually
+# installed. Surface the fresh portion of the log here.
+_kvp_log_tail="$(tail -c "+$((LOG_START_BYTES + 1))" "$LOG" 2>/dev/null || true)"
+if printf '%s' "$_kvp_log_tail" | grep -q '\[kvp\]'; then
+  printf '%s\n' "$_kvp_log_tail" | grep '\[kvp\]' | sed 's/^/  /'
+else
+  echo "  [kvp] patch status not found in the server log yet -- if the"
+  echo "        service behaves oddly, check: grep '\[kvp\]' $LOG"
+fi
