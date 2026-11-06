@@ -49,6 +49,12 @@ else
   LMCACHE_HELP="$("${LAUNCH[@]}" server --help 2>&1 || true)"
 fi
 case "$LMCACHE_HELP" in *--http-host*) : ;; *) unset LMCACHE_HTTP_HOST ;; esac
+# Review fix (round 38): the HTTP admin frontend binds loopback ONLY
+# (docs/security.md) -- LMCACHE_HTTP_HOST=0.0.0.0 was accepted silently.
+case "${LMCACHE_HTTP_HOST:-}" in
+  ""|127.0.0.1|localhost|::1) : ;;
+  *) die "LMCACHE_HTTP_HOST must be loopback-only (127.0.0.1/localhost/::1), got '$LMCACHE_HTTP_HOST'" ;;
+esac
 case "$LMCACHE_HELP" in *--http-port*) : ;; *) unset LMCACHE_HTTP_PORT ;; esac
 # OTLP push for the observability stack (scripts/start-observability.sh).
 # Off by default: the cache must start and work WITHOUT the monitoring stack.
@@ -129,36 +135,6 @@ Install it (pip install ${LMCACHE_L2_SERDE/zstd/zstandard}) or fall back to LMCA
   echo "codec check: $LMCACHE_L2_SERDE bindings present"
 fi
 
-# Render the L2 adapter spec from the single source of truth.
-ADAPTER_JSON="$ROOT_PATH/l2-adapter.rendered.json"
-sed -e "s|__KVP_CACHE_ROOT__|$ROOT_PATH|" \
-    -e "s|__KVP_CACHE_BUDGET_GB__|$BUDGET_GB|" \
-    -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${KVP_EVICT_TRIGGER_WATERMARK:-0.9}|" \
-    -e "s|__KVP_EVICT_RATIO__|${KVP_EVICT_RATIO:-0.1}|" \
-    -e "s|__KVP_L2_SERDE_JSON__|$SERDE_JSON|" \
-    "$ROOT/configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in" \
-  | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)' \
-  > "$ADAPTER_JSON" || die "L2 adapter JSON is invalid after render — check configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in"
-echo "L2 adapter rendered: $ADAPTER_JSON"
-echo "  tier   : nixl_store_dynamic / POSIX  persist=${KVP_PERSIST_ENABLED:-true}"
-echo "  path   : $ROOT_PATH"
-echo "  budget : ${BUDGET_GB} GB hard, soft-watermark ${KVP_EVICT_TRIGGER_WATERMARK:-0.9}"
-echo "  codec  : ${LMCACHE_L2_SERDE} $([ -n "$SERDE_JSON" ] && echo '(lossless serde active)' || echo '(lossless raw, byte-exact)')"
-echo "  otlp   : ${LMCACHE_OTLP_ENDPOINT:-<disabled>} (metrics/traces push)"
-
-if [ "${KVP_PERSIST_ENABLED:-true}" != "true" ]; then
-  die "KVP_PERSIST_ENABLED=${KVP_PERSIST_ENABLED:-} is not supported: it contradicts the persistence
-requirement (data would be deleted on shutdown) and the L2 template is
-persist_enabled=true. To discard cache data, purge explicitly:
-  bash scripts/budget-report.sh purge --all --yes"
-fi
-
-# Never wipe on startup: only report what is already there.
-if [ -d "$ROOT_PATH" ]; then
-  EXISTING="$(du -sh "$ROOT_PATH" 2>/dev/null | cut -f1)"
-  echo "existing cache data preserved: $EXISTING (automatic wipe on start is disabled by design)"
-fi
-
 LOG="$ROOT_PATH/lmcache-server.log"
 PIDF="$ROOT_PATH/lmcache-server.pid"
 # Review fix (round 37): refuse to start when a server is ALREADY running --
@@ -181,6 +157,42 @@ if [ -f "$PIDF" ]; then
       ;;
   esac
 fi
+
+# Render the L2 adapter spec from the single source of truth.
+ADAPTER_JSON="$ROOT_PATH/l2-adapter.rendered.json"
+# Review fix (round 38): ONE watermark source for the rendered JSON, the
+# summary line and the server flag -- the sed used the bare env name while
+# the flag used the resolved LMCACHE_* value (JSON 0.9 vs server 0.8).
+EFFECTIVE_WM="${LMCACHE_EVICTION_TRIGGER_WATERMARK:-${KVP_EVICT_TRIGGER_WATERMARK:-0.9}}"
+EFFECTIVE_RATIO="${LMCACHE_EVICTION_RATIO:-${KVP_EVICT_RATIO:-0.1}}"
+sed -e "s|__KVP_CACHE_ROOT__|$ROOT_PATH|" \
+    -e "s|__KVP_CACHE_BUDGET_GB__|$BUDGET_GB|" \
+    -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|$EFFECTIVE_WM|" \
+    -e "s|__KVP_EVICT_RATIO__|$EFFECTIVE_RATIO|" \
+    -e "s|__KVP_L2_SERDE_JSON__|$SERDE_JSON|" \
+    "$ROOT/configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in" \
+  | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)' \
+  > "$ADAPTER_JSON" || die "L2 adapter JSON is invalid after render — check configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in"
+echo "L2 adapter rendered: $ADAPTER_JSON"
+echo "  tier   : nixl_store_dynamic / POSIX  persist=${KVP_PERSIST_ENABLED:-true}"
+echo "  path   : $ROOT_PATH"
+echo "  budget : ${BUDGET_GB} GB hard, soft-watermark $EFFECTIVE_WM"
+echo "  codec  : ${LMCACHE_L2_SERDE} $([ -n "$SERDE_JSON" ] && echo '(lossless serde active)' || echo '(lossless raw, byte-exact)')"
+echo "  otlp   : ${LMCACHE_OTLP_ENDPOINT:-<disabled>} (metrics/traces push)"
+
+if [ "${KVP_PERSIST_ENABLED:-true}" != "true" ]; then
+  die "KVP_PERSIST_ENABLED=${KVP_PERSIST_ENABLED:-} is not supported: it contradicts the persistence
+requirement (data would be deleted on shutdown) and the L2 template is
+persist_enabled=true. To discard cache data, purge explicitly:
+  bash scripts/budget-report.sh purge --all --yes"
+fi
+
+# Never wipe on startup: only report what is already there.
+if [ -d "$ROOT_PATH" ]; then
+  EXISTING="$(du -sh "$ROOT_PATH" 2>/dev/null | cut -f1)"
+  echo "existing cache data preserved: $EXISTING (automatic wipe on start is disabled by design)"
+fi
+
 # setsid detaches the service from this shell's terminal -- closing the SSH
 # session or dropping the connection will NOT kill the cache service. nohup
 # additionally shields it from HUP. Both matter because the service is meant
@@ -215,8 +227,8 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     --host 0.0.0.0 --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
     --eviction-policy "$LMCACHE_EVICTION_POLICY" \
-    --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
-    --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
+    --eviction-trigger-watermark "$EFFECTIVE_WM" \
+    --eviction-ratio "$EFFECTIVE_RATIO" \
     --chunk-size "$LMCACHE_CHUNK_SIZE" \
     --l2-adapter "$ADAPTER_JSON_ARGS" \
     ${LMCACHE_HTTP_HOST:+--http-host 0.0.0.0} \
@@ -229,8 +241,8 @@ else
     --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
     --eviction-policy "$LMCACHE_EVICTION_POLICY" \
-    --eviction-trigger-watermark "$LMCACHE_EVICTION_TRIGGER_WATERMARK" \
-    --eviction-ratio "$LMCACHE_EVICTION_RATIO" \
+    --eviction-trigger-watermark "$EFFECTIVE_WM" \
+    --eviction-ratio "$EFFECTIVE_RATIO" \
     --chunk-size "$LMCACHE_CHUNK_SIZE" \
     --l2-adapter "$ADAPTER_JSON_ARGS" \
     ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \

@@ -128,25 +128,23 @@ def select_victims(
         else:
             normal.append(e)
     victims: List[EntryStats] = []
-    freed = 0
+    freed_effective = 0
     freed_nominal = 0
-    for e in rank_for_eviction(normal, now) + rank_for_eviction(protected, now):
-        if freed >= bytes_to_free:
-            break
-        victims.append(e)
-        # Count EFFECTIVE bytes freed: a shared object (shared_refs > 1) only
-        # frees its bytes when the LAST reference goes away. Until a reliable
-        # cross-namespace refcount aligned with LMCache's actual key->object
-        # mapping exists, effective_freed_bytes assumes the worst case for
-        # shared entries (0 bytes freed) -- never overpromise reclaimed space.
-        freed += e.bytes_on_disk if e.shared_refs <= 1 else 0
-        # Review fix (round 37): the STOP condition must use NOMINAL bytes --
-        # with the effective count a shared entry never advanced `freed`, so
-        # the loop kept going and evicted EVERY shared entry. The report still
-        # separates effective vs nominal (a shared object survives one ref).
-        freed_nominal += e.bytes_on_disk
+    # Review fix (round 38): rank UNSHARED entries FIRST (they free real
+    # bytes) -- a shared entry frees 0 effective bytes (the object survives
+    # until the LAST ref), so ranking one first let it skip a fitting normal
+    # candidate (the reviewer over-freeing complaint). Then stop on NOMINAL
+    # bytes: the shared tail is picked only up to the nominal gap, never
+    # wholesale (the round-37 over-deletion complaint).
+    ranked = rank_for_eviction(normal, now) + rank_for_eviction(protected, now)
+    ranked = [e for e in ranked if e.shared_refs <= 1] + \
+             [e for e in ranked if e.shared_refs > 1]
+    for e in ranked:
         if freed_nominal >= bytes_to_free:
             break
+        victims.append(e)
+        freed_effective += e.bytes_on_disk if e.shared_refs <= 1 else 0
+        freed_nominal += e.bytes_on_disk
     return victims
 
 

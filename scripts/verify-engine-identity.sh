@@ -280,7 +280,11 @@ elif kvd in ("auto", "MISSING"):
     resolved = model_cfg("torch_dtype")
     if resolved == "MISSING":
         resolved = model_cfg("dtype")
-    if resolved == "MISSING":
+    # Review fix (round 38): UNAVAILABLE (no MODEL_DIR / config.json) is a
+    # MISSING source, not a value -- comparing "unavailable" against the pin
+    # produced a false MISMATCH (exit 4) where the verdict must be
+    # INCONCLUSIVE (exit 5): we cannot prove the dtype either way.
+    if resolved in ("MISSING", "UNAVAILABLE"):
         kvd_seen = "MISSING"
     else:
         kvd_seen = str(resolved).lower()

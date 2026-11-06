@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（197 个单元测试 + 19 个离线配置/文档测试 = 216 个离线收集，
-214 通过 + 2 跳过；共收集 231 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（203 个单元测试 + 19 个离线配置/文档测试 = 222 个离线收集，
+220 通过 + 2 跳过；共收集 237 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：197 个单元测试（195 通过 + 2 跳过），19 个离线配置/文档测试，
-216 个离线收集（214 通过 + 2 跳过），共收集 231 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：203 个单元测试（201 通过 + 2 跳过），19 个离线配置/文档测试，
+222 个离线收集（220 通过 + 2 跳过），共收集 237 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -382,6 +382,24 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **启动后完整 identity 门禁 + kv-persistence 为必需依赖（rev. 35）**：
 **安装修复：openai 依赖 + API 密钥自动生成（rev. 36）**：`lmcache server`
 **评审批次，第 37 轮**（每个问题都先对照代码核实）：
+**第 38 轮补充**（第 37 轮修复需要完善）：
+* systemd 包装器：`ensure_cache_root` 现在在写入渲染适配器之前运行——首次
+  启动时缓存目录尚不存在，见证文件被静默跳过（门禁 exit 5 直到服务重启）。
+* `LMCACHE_HTTP_HOST=0.0.0.0` 现在在 start-cache.sh 和 systemd 包装器中都被
+  拒绝（此前只检查 LMCACHE_HOST 的回环，HTTP 管理前端可以绑定任意地址）。
+* start-cache.sh 的水位线：渲染的 JSON、摘要行和服务器标志现在共享同一个
+  解析变量（此前 JSON 0.9 vs 服务器 0.8）。
+* start-cache.sh："已在运行"守卫现在在适配器渲染之前执行——被拒绝的第二次
+  启动曾经用新运行的值覆盖见证文件（评审者测得 kvp-zstd/1 覆盖在存活的
+  zstd=none/1500 服务器上）。
+* 门禁：没有 MODEL_DIR 的 `--kv-cache-dtype auto` 现在返回 INCONCLUSIVE
+  （exit 5），而非误报 MISMATCH（exit 4）——model_cfg 返回 "UNAVAILABLE"，
+  但代码只检查了 "MISSING"。
+* select_victims（r37 修复曾引入回归）：非共享条目优先排名（它们释放真实
+  字节），按名义字节停止——既无批量逐出（r37a），也无释放不足（r37b）。
+* requirements-lmcache.txt：openai 固定块被复制了两次——保留一份。
+* 测试：6 个新回归测试（203 unit / 222 offline / 237 共计）。
+
 * HIGH —— systemd 包装器（`kvp-lmcache-server`）从不写
   `l2-adapter.rendered.json`，因此强制的启动后门禁对 systemd 启动的
   缓存总是返回 exit 5（INCONCLUSIVE），recipe 启动器失败；包装器现在

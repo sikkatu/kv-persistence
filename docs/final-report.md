@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(197 unit tests + 19 more offline config/docs tests = 216 offline collected,
-214 passed + 2 skipped; 231 collected total including the live-`lmcache`
+(203 unit tests + 19 more offline config/docs tests = 222 offline collected,
+220 passed + 2 skipped; 237 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 197 unit tests (`tests/unit`, 195 passed + 2 skipped),
-19 top-level offline tests, 216 offline collected (214 passed + 2 skipped),
-231 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 203 unit tests (`tests/unit`, 201 passed + 2 skipped),
+19 top-level offline tests, 222 offline collected (220 passed + 2 skipped),
+237 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -618,6 +618,31 @@ Home (EN/RU/ZH).
 **Post-launch full identity gate + kv-persistence is REQUIRED (review
 **Install fixes: openai dependency + auto-generated API key (review
 **Review batch round 37** (all items verified against the code first):
+**Round 38 follow-ups** (the round-37 fixes needed completions):
+* systemd wrapper: `ensure_cache_root` now runs BEFORE the adapter
+  render write -- on a first start the cache dir did not exist yet
+  and the witness file was silently skipped (gate exit 5 until a
+  service restart).
+* `LMCACHE_HTTP_HOST=0.0.0.0` is now refused in BOTH start-cache.sh
+  and the systemd wrapper (was: only LMCACHE_HOST was loopback-
+  checked, the HTTP admin frontend could bind anywhere).
+* start-cache.sh watermark: the rendered JSON, the summary line and
+  the server flag now share ONE resolved variable (was JSON 0.9 vs
+  server 0.8).
+* start-cache.sh: the already-running guard now runs BEFORE the
+  adapter render -- a refused second start used to overwrite the
+  witness file with the new run's values (the reviewer measured
+  kvp-zstd/1 over a live zstd=none/1500 server).
+* gate: `--kv-cache-dtype auto` without MODEL_DIR is now INCONCLUSIVE
+  (exit 5), not a false MISMATCH (exit 4) -- model_cfg returned
+  "UNAVAILABLE" and the code only checked "MISSING".
+* select_victims (the r37 fix regressed): unshared entries are ranked
+  FIRST (they free real bytes) and the stop is on nominal bytes --
+  neither over-eviction (r37a) nor under-freeing (r37b).
+* requirements-lmcache.txt: the openai pin block was copy-pasted
+  twice -- kept once.
+* Tests: 6 new regression tests (203 unit / 222 offline / 237 total).
+
 * HIGH -- the systemd wrapper (`kvp-lmcache-server`) never wrote
   `l2-adapter.rendered.json`, so the mandatory post-launch gate always
   got exit 5 (INCONCLUSIVE) for systemd-started caches and the recipe

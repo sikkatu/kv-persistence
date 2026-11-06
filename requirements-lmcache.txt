@@ -31,17 +31,6 @@ lmcache==0.5.3
 # stable 1.x surface; the CLI only needs the `OpenAI` class to exist.
 openai>=1.40,<2
 
-# The lmcache CLI imports `openai` while REGISTERING its bench subcommands
-# (lmcache/cli/commands/bench/engine_bench/config.py -> `from openai import
-# OpenAI`) -- this happens at CLI startup, so even `lmcache server` dies with
-# `ModuleNotFoundError: No module named 'openai'` without it (real deployment
-# report). It is a CLI-wide dependency of lmcache 0.5.3, not just of the
-# benchmark, so it is pinned here. Install this file into the SAME venv that
-# provides the `lmcache` command.
-# Range pin (not a single version): `openai` is a pure client library with a
-# stable 1.x surface; the CLI only needs the `OpenAI` class to exist.
-openai>=1.40,<2
-
 # The nixl_store_dynamic L2 adapter imports the top-level `nixl` module at
 # runtime (lmcache/v1/distributed/l2_adapters/nixl_store_dynamic_l2_adapter.py).
 # Note: the pip extra `lmcache[nixl]` exists upstream and would satisfy this

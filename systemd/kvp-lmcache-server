@@ -184,6 +184,11 @@ echo "$ADAPTER_JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev
 # mandatory post-launch gate in the recipe launchers always gets exit 5
 # (INCONCLUSIVE) when the cache runs under systemd -- scripts/start-cache.sh
 # writes it at line ~133 but this wrapper did not.
+# Review fix (round 38): ensure_cache_root BEFORE the render write -- on a
+# first start the cache dir does not exist yet and the old order silently
+# skipped the write (the gate then reported INCONCLUSIVE until a service
+# restart). ensure_cache_root also enforces the 0700 security contract.
+ensure_cache_root
 _root_for_render="$(repo_cfg KVP_CACHE_ROOT /var/lib/kv-persistence/l2)"
 if [ -d "$_root_for_render" ] && [ -w "$_root_for_render" ]; then
   printf '%s\n' "$ADAPTER_JSON" > "$_root_for_render/l2-adapter.rendered.json" 2>/dev/null \
@@ -192,7 +197,7 @@ else
   echo "WARNING: cache root $_root_for_render missing/not writable -- l2-adapter.rendered.json NOT written (gate will report INCONCLUSIVE)" >&2
 fi
 # Review round 14: the service user must be able to write the cache root.
-ensure_cache_root
+# (round 38: ensure_cache_root moved BEFORE the adapter render -- see above.)
 # Review round 15+: launch through the kv-persistence launcher (kvpersist.launch)
 # which applies BOTH runtime patches: the cache_salt filename fix AND the
 # lossless compression serde registration (see kvpersist/launch.py).
@@ -219,6 +224,13 @@ case "$_lm_host" in
   *) echo "LMCACHE_HOST must be loopback-only (127.0.0.1/localhost/::1), got '$_lm_host'" >&2; exit 1 ;;
 esac
 _lm_http_host="$(repo_cfg LMCACHE_HTTP_HOST 127.0.0.1)"
+# Review fix (round 38): the HTTP admin frontend binds loopback ONLY
+# (docs/security.md) -- 0.0.0.0 was silently accepted here and in
+# start-cache.sh.
+case "$_lm_http_host" in
+  127.0.0.1|localhost|::1) : ;;
+  *) echo "LMCACHE_HTTP_HOST must be loopback-only (127.0.0.1/localhost/::1), got '$_lm_http_host'" >&2; exit 1 ;;
+esac
 _lm_http_port="$(repo_cfg LMCACHE_HTTP_PORT "")"
 _lm_otlp="$(repo_cfg LMCACHE_OTLP_ENDPOINT "")"
 exec python3 -m kvpersist.launch server \
