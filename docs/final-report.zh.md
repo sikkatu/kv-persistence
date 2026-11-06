@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（230 个单元测试 + 19 个离线配置/文档测试 = 249 个离线收集，
-247 通过 + 2 跳过；共收集 264 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（233 个单元测试 + 19 个离线配置/文档测试 = 252 个离线收集，
+250 通过 + 2 跳过；共收集 267 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：230 个单元测试（228 通过 + 2 跳过），19 个离线配置/文档测试，
-249 个离线收集（247 通过 + 2 跳过），共收集 264 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：233 个单元测试（231 通过 + 2 跳过），19 个离线配置/文档测试，
+252 个离线收集（250 通过 + 2 跳过），共收集 267 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -403,9 +403,11 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 * 诊断现在优先显示 `Error handling operation` 异常（此前：30 行 eviction
   噪声掩盖了它），并从尾部过滤 `skipping eviction`。
 * 等待循环在服务器端新错误时立即失败（不再浪费 300 秒注册超时）。
+* `ipc-test.sh` 现在自行从 recipe 解析 IMAGE——命令就是
+  `bash scripts/ipc-test.sh`，无需填写占位符。
 * Docker 模式：`start-cache.sh` 警告缓存文件属主为 root（purge/budget
   需 sudo）；`purge` 在 PermissionError 时打印原因和修复方法，而非仅错误。
-4 个测试（230 unit / 249 offline / 264 共计）。
+7 个测试（233 unit / 252 offline / 267 共计）。
 
 `register_kv_caches` 死掉（300 秒超时）——而 TCP 预检通过了。套接字开着，
 但 RPC 通道已死：TCP 可达性不能证明 lmcache 消息协议正常。修复：

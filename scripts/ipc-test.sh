@@ -11,9 +11,10 @@
 # tensor and hands over its IPC handle; the consumer opens it.
 #
 # Usage:
-#   IMAGE=<the pinned vLLM image> bash scripts/ipc-test.sh
-#   CONSUMER=host-root  IMAGE=... bash scripts/ipc-test.sh   (sudo consumer)
-#   CONSUMER=container  IMAGE=... bash scripts/ipc-test.sh   (2nd container)
+#   bash scripts/ipc-test.sh            (IMAGE auto-resolved from the recipe)
+#   IMAGE=<pinned @sha256:...> bash scripts/ipc-test.sh   (explicit override)
+#   CONSUMER=host-root  bash scripts/ipc-test.sh   (sudo consumer)
+#   CONSUMER=container  bash scripts/ipc-test.sh   (2nd container)
 # Env: HOST_PY (default ~/.venvs/lmcache/bin/python), GPU_IDX (default 0).
 #
 # Result:
@@ -23,7 +24,31 @@
 #
 # Nothing is written outside /tmp/kvp-ipc-test.
 set -Eeuo pipefail
-: "${IMAGE:?set IMAGE=... (the pinned vLLM image from the recipes)}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# IMAGE is OPTIONAL: without it, resolve the recipe the same way the
+# launcher does and extract the pinned digest from tp4.env.example
+# (print-recipe-image.sh). The command is then simply:
+#   bash scripts/ipc-test.sh
+if [ -z "${IMAGE:-}" ]; then
+  if [ -n "${RECIPE_DIR:-}" ]; then RECIPE="$RECIPE_DIR"
+  elif [ -d "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit" ]; then
+    RECIPE="$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"
+  else
+    RECIPE="$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"
+  fi
+  if [ -f "$HERE/print-recipe-image.sh" ]; then
+    IMAGE="$(bash "$HERE/print-recipe-image.sh" "$RECIPE" 2>/dev/null)" || IMAGE=""
+  fi
+  if [ -z "$IMAGE" ]; then
+    echo "ERROR: IMAGE not set and could not be resolved from the recipe." >&2
+    echo "  Looked in: $RECIPE (tp4.env.example)" >&2
+    echo "  Fix one of:" >&2
+    echo "    - run from the recipes checkout, or set RECIPE_DIR=<recipe dir>" >&2
+    echo "    - or set IMAGE explicitly: IMAGE=<pinned @sha256:...> bash scripts/ipc-test.sh" >&2
+    exit 2
+  fi
+  echo "image resolved from $RECIPE: $IMAGE"
+fi
 HOST_PY="${HOST_PY:-$HOME/.venvs/lmcache/bin/python}"
 GPU_IDX="${GPU_IDX:-0}"
 CONSUMER="${CONSUMER:-host}"
@@ -118,7 +143,7 @@ case $rc in
     echo "        - run the cache server in the container too:"
     echo "          KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh"
     echo "        - or run the cache server as root (same user as the engine container)"
-    echo "      Then rerun: CONSUMER=host-root IMAGE=... bash scripts/ipc-test.sh" ;;
+    echo "      Then rerun: CONSUMER=host-root bash scripts/ipc-test.sh" ;;
   1)
     echo "FAIL: the consumer opened the memory but the data does not match."
     echo "      The IPC path transfers data incorrectly -- check GPU drivers / ECC." ;;

@@ -508,7 +508,7 @@ for _ in $(seq 1 300); do
       echo "Fix (CUDA IPC boundary, review round 45): run the cache server in the same" >&2
       echo "environment as the engine (root/container):" >&2
       echo "  KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
-      echo "or test the boundary first: IMAGE=$IMAGE bash scripts/ipc-test.sh" >&2
+      echo "or test the boundary first: bash scripts/ipc-test.sh" >&2
       exit 1
     fi
   fi

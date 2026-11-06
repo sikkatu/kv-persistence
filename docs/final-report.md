@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(230 unit tests + 19 more offline config/docs tests = 249 offline collected,
-247 passed + 2 skipped; 264 collected total including the live-`lmcache`
+(233 unit tests + 19 more offline config/docs tests = 252 offline collected,
+250 passed + 2 skipped; 267 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 230 unit tests (`tests/unit`, 228 passed + 2 skipped),
-19 top-level offline tests, 249 offline collected (247 passed + 2 skipped),
-264 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 233 unit tests (`tests/unit`, 231 passed + 2 skipped),
+19 top-level offline tests, 252 offline collected (250 passed + 2 skipped),
+267 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -646,10 +646,12 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * The wait loop fails FAST on a fresh server-side handler error
   (no more burning the 300s register timeout when the server
   already failed).
+* `ipc-test.sh` now resolves IMAGE itself from the recipe -- the
+  command is simply `bash scripts/ipc-test.sh`, no placeholders.
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-4 tests (230 unit / 249 offline / 264 total).
+7 tests (233 unit / 252 offline / 267 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight
