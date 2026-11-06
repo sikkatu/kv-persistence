@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（221 个单元测试 + 19 个离线配置/文档测试 = 240 个离线收集，
-238 通过 + 2 跳过；共收集 255 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（226 个单元测试 + 19 个离线配置/文档测试 = 245 个离线收集，
+243 通过 + 2 跳过；共收集 260 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：221 个单元测试（219 通过 + 2 跳过），19 个离线配置/文档测试，
-240 个离线收集（238 通过 + 2 跳过），共收集 255 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：226 个单元测试（224 通过 + 2 跳过），19 个离线配置/文档测试，
+245 个离线收集（243 通过 + 2 跳过），共收集 260 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -388,6 +388,21 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **第 41 轮（docker run 之前的预检）**：安装运行损失了 24 分钟——identity
 **第 42 轮（LMCache 版本对齐）**：第二次安装运行再次在
 **第 43 轮（LMCache 0.5.6 API 漂移）**：版本对齐后缓存服务器启动即崩溃——
+**第 44 轮（RPC ping + 服务器自动诊断）**：版本对齐和 API 修复后引擎仍在
+`register_kv_caches` 死掉（300 秒超时）——而 TCP 预检通过了。套接字开着，
+但 RPC 通道已死：TCP 可达性不能证明 lmcache 消息协议正常。修复：
+* 新增 `kvpersist.mp_ping`——协议级探针，构建与 vLLM 连接器相同的
+  RequestClient 并发送 `ping`（无需注册）。接入启动器预检：接受 TCP
+  却不回应 RPC 的服务器在 docker run 之前被拒绝——错误信息中给出确切的
+  修复命令；
+* 当引擎容器退出时，`run-vllm-with-persist.sh` 现在自动打印缓存服务器
+  诊断（进程存活、日志新鲜度、最后 30 行日志、[kvp] 状态）——故障后不再
+  需要手动取证；
+* `start-cache.sh` 以 PYTHONFAULTHANDLER=1 启动服务器（两个分支）：
+  挂起的线程在 SIGABRT 时倾倒所有线程堆栈——挂起可通过堆栈识别，而不是
+  靠沉默。
+5 个测试（226 unit / 245 offline / 260 共计）。
+
 `AttributeError: DynamicNixlStorageAgent has no attribute
 'dynamic_store_file'`。LMCache 0.5.6 重构了 L2 适配器：代理移至
 `l2_adapters.nixl_store_agents`，存储方法改名为 `dynamic_store(mem_indices,

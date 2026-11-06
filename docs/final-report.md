@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(221 unit tests + 19 more offline config/docs tests = 240 offline collected,
-238 passed + 2 skipped; 255 collected total including the live-`lmcache`
+(226 unit tests + 19 more offline config/docs tests = 245 offline collected,
+243 passed + 2 skipped; 260 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 221 unit tests (`tests/unit`, 219 passed + 2 skipped),
-19 top-level offline tests, 240 offline collected (238 passed + 2 skipped),
-255 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 226 unit tests (`tests/unit`, 224 passed + 2 skipped),
+19 top-level offline tests, 245 offline collected (243 passed + 2 skipped),
+260 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -624,6 +624,26 @@ Home (EN/RU/ZH).
 **Round 41 (pre-flight before docker run)**: the install run lost 24
 **Round 42 (LMCache version alignment)**: the second install run died
 **Round 43 (LMCache 0.5.6 API drift)**: after the version alignment
+**Round 44 (RPC ping + automatic server diagnostics)**: after the
+version alignment and the API fixes the engine STILL died at
+`register_kv_caches` (300s timeout) -- while the TCP pre-flight
+passed. The socket was open but the RPC channel was dead: TCP
+reachability proves nothing about the lmcache message protocol.
+Fixes:
+* new `kvpersist.mp_ping` -- a protocol-level probe that builds the
+  SAME RequestClient the vLLM connector uses and issues `ping`
+  (no registration needed). Wired into the launcher pre-flight:
+  a server that accepts TCP but never answers RPC is refused
+  BEFORE docker run, with the exact fix commands in the error;
+* when the engine container dies, `run-vllm-with-persist.sh` now
+  prints automatic cache-server diagnostics (pid liveness, log
+  freshness, last 30 log lines, [kvp] status) -- no more manual
+  forensics after a failure;
+* `start-cache.sh` launches the server with PYTHONFAULTHANDLER=1
+  (both branches): a hung thread dumps every thread stack on
+  SIGABRT, so a hang is identifiable by stack, not by silence.
+5 tests (226 unit / 245 offline / 260 total).
+
 the cache server crashed at startup -- `AttributeError:
 DynamicNixlStorageAgent has no attribute 'dynamic_store_file'`.
 LMCache 0.5.6 restructured the L2 adapter: the agent moved to

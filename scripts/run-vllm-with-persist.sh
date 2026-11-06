@@ -317,6 +317,27 @@ the container. Align both sides to the SAME version:
   else
     echo "NOTE: could not determine lmcache version (host=$_host_lmcache, image=$_img_lmcache) -- skipping version check"
   fi
+  # Review fix (round 44): the TCP probe proves only that a socket is
+  # open. The failing handshake (register_kv_caches) rides the lmcache RPC
+  # protocol -- so probe THAT protocol here, via kvpersist.mp_ping (the
+  # same RequestClient the vLLM connector uses). A server that accepts
+  # TCP but never answers RPC is refused BEFORE docker run.
+  _ping_out="$(PYTHONPATH="$ROOT/implementation" python3 -m kvpersist.mp_ping "$LMCACHE_HOST" "$LMCACHE_PORT" 10 2>&1)" || _ping_rc=$?
+  _ping_rc="${_ping_rc:-0}"
+  case "$_ping_rc" in
+    0)
+      echo "  $_ping_out" ;;
+    3)
+      echo "  $_ping_out"
+      echo "  NOTE: lmcache not importable on the host python -- protocol ping skipped" ;;
+    *)
+      echo "ERROR: the cache server did not answer the RPC ping (register_kv_caches would hang):" >&2
+      echo "  $_ping_out" >&2
+      echo "  The server accepted TCP on $LMCACHE_HOST:$LMCACHE_PORT but its RPC channel is dead." >&2
+      echo "  Fix: restart the cache service (bash scripts/stop-cache.sh && bash scripts/start-cache.sh)" >&2
+      echo "       and check its log: tail -40 ${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log" >&2
+      exit 1 ;;
+  esac
 else
   echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
 fi
@@ -441,7 +462,39 @@ LOG_SHOWN=0; START_TS=$(date +%s)
 for _ in $(seq 1 300); do
   STATE="$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "$CONTAINER" 2>/dev/null || echo gone)"
   case "$STATE" in running*) : ;; *)
-    echo "ERROR: container not running ($STATE)"; docker logs --tail 100 "$CONTAINER" >&2; exit 1 ;; esac
+    echo "ERROR: container not running ($STATE)"; docker logs --tail 100 "$CONTAINER" >&2
+    # Review fix (round 44): the register_kv_caches timeout gives no clue
+    # WHERE the handshake stuck. Dump the cache server's state right here:
+    # alive? serving? what did it log? This replaces manual forensics.
+    _kvp_diag="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
+    echo "" >&2
+    echo "---- cache server diagnostics (automatic) ----" >&2
+    _kvp_pidf="$_kvp_diag/lmcache-server.pid"
+    if [ -f "$_kvp_pidf" ]; then
+      _kvp_pid="$(tr -d '[:space:]' < "$_kvp_pidf")"
+      if kill -0 "$_kvp_pid" 2>/dev/null; then
+        echo "server process: ALIVE (pid $_kvp_pid)" >&2
+        echo "server cmdline: $(tr '\0' ' ' < "/proc/$_kvp_pid/cmdline" 2>/dev/null | head -c 300)" >&2
+      else
+        echo "server process: DEAD (stale pid file, pid $_kvp_pid)" >&2
+      fi
+    else
+      echo "server process: no pid file at $_kvp_pidf" >&2
+    fi
+    _kvp_log="$_kvp_diag/lmcache-server.log"
+    if [ -f "$_kvp_log" ]; then
+      _kvp_lines=$(wc -l < "$_kvp_log")
+      _kvp_fresh=$(find "$_kvp_log" -newermt '-5 minutes' 2>/dev/null | wc -l)
+      echo "server log: $_kvp_log ($_kvp_lines lines, $([ "$_kvp_fresh" -gt 0 ] && echo 'written within 5 min' || echo 'NO writes in the last 5 min'))" >&2
+      echo "--- last 30 server log lines ---" >&2
+      tail -n 30 "$_kvp_log" >&2 || true
+      echo "--- [kvp] status lines ---" >&2
+      grep '\[kvp\]' "$_kvp_log" | tail -n 5 >&2 || echo "(none)" >&2
+    else
+      echo "server log: missing ($_kvp_log)" >&2
+    fi
+    echo "---- end cache server diagnostics ----" >&2
+    exit 1 ;; esac
   LOG_ALL="$(docker logs "$CONTAINER" 2>&1)"; LOG_TOTAL=$(printf '%s\n' "$LOG_ALL" | wc -l)
   if [ "$LOG_TOTAL" -gt "$LOG_SHOWN" ]; then
     printf '[%3ds] %d new log line(s)\n' "$(( $(date +%s) - START_TS ))" "$(( LOG_TOTAL - LOG_SHOWN ))"

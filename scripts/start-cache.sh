@@ -223,6 +223,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     -v "$ROOT/implementation:/kvp-impl:ro" \
     -e PYTHONPATH=/kvp-impl \
     -e "LMCACHE_LOG_LEVEL=${LMCACHE_LOG_LEVEL:-DEBUG}" \
+    -e PYTHONFAULTHANDLER=1 \
     "$DOCKER_IMAGE" python3 -m kvpersist.launch server \
     --host 0.0.0.0 --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
@@ -237,7 +238,10 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     ${LMCACHE_OTLP_ENDPOINT:+--enable-tracing} \
     >>"$LOG" 2>&1 &
 else
-  setsid nohup "${LAUNCH[@]}" server \
+  # PYTHONFAULTHANDLER=1 (round 44): if a server thread hangs, SIGABRT dumps
+  # every thread stack to the log -- a hang becomes identifiable by stack,
+  # not by silence (the register_kv_caches timeout gave no clue).
+  PYTHONFAULTHANDLER=1 setsid nohup "${LAUNCH[@]}" server \
     --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
     --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
     --eviction-policy "$LMCACHE_EVICTION_POLICY" \
