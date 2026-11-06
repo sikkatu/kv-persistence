@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(207 unit tests + 19 more offline config/docs tests = 226 offline collected,
-224 passed + 2 skipped; 241 collected total including the live-`lmcache`
+(210 unit tests + 19 more offline config/docs tests = 229 offline collected,
+227 passed + 2 skipped; 244 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 207 unit tests (`tests/unit`, 205 passed + 2 skipped),
-19 top-level offline tests, 226 offline collected (224 passed + 2 skipped),
-241 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 210 unit tests (`tests/unit`, 208 passed + 2 skipped),
+19 top-level offline tests, 229 offline collected (227 passed + 2 skipped),
+244 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -621,6 +621,17 @@ Home (EN/RU/ZH).
 **Round 38 follow-ups** (the round-37 fixes needed completions):
 **Round 39**: `ensure_cache_root` (systemd wrapper) must NOT chmod 700
 **Round 40 (install-run findings)**:
+**Round 41 (pre-flight before docker run)**: the install run lost 24
+minutes -- the identity gate passed, vLLM started loading, and only
+at `register_kv_caches` (300s timeout) it died with "LMCache server
+did not respond". `run-vllm-with-persist.sh` now checks BEFORE
+`docker run`: (1) the L2 codec matches the RUNNING server's
+`l2-adapter.rendered.json` (a mismatch aborts instantly with the
+exact fix), and (2) the cache server actually ANSWERS on the request
+port -- a TCP probe replaces the bare PID test (a live PID is not a
+working server, which is exactly what the install run showed).
+3 tests (210 unit / 229 offline / 244 total).
+
 * `setup-identity.sh` now fills the KV GEOMETRY
   (`KVP_NUM_KV_HEADS` / `KVP_HEAD_DIM`) from the model's config.json.
   The shipped template hard-codes head_dim=128 but MiMo-V2.6-Pro

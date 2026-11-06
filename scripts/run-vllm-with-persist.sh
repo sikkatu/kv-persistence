@@ -191,8 +191,14 @@ if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
   read -r -a VLLM_EXTRA_ARGS_ARR <<< "$VLLM_EXTRA_ARGS"
 fi
 PIDF="$KVP_CACHE_ROOT/lmcache-server.pid"
-[ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null \
-  || die "lmcache server not running -- start it first: bash scripts/start-cache.sh"
+# Review fix (round 41): a LIVE pid is not a WORKING server -- in the install
+# run the pid file checked out fine but the server never answered
+# register_kv_caches (300s wasted inside the container). Real liveness is a
+# TCP connect to the request port; the pid file stays as a fast negative
+# filter for the "not started at all" case.
+if [ ! -f "$PIDF" ] || ! kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; then
+  die "lmcache server not running -- start it first: bash scripts/start-cache.sh"
+fi
 # Review fix (round 13): the identity gate inspects the RUNNING container. On a
 # first run there is no container yet -- gate AFTER launch instead of failing
 # with INCONCLUSIVE. On reruns the gate checks the container that is about to
@@ -236,6 +242,57 @@ if [ "$PERSIST" = "true" ]; then
   # chunks are readable. Both read the same LMCACHE_L2_SERDE (folded from
   # USE_LOSSLESS_SERDE by scripts/env.sh), so just report it.
   echo "L2 codec: ${LMCACHE_L2_SERDE:-none} (lossless; expected in the cache server too)"
+  # Review fix (round 41): PRE-FLIGHT before docker run -- both failures used
+  # to surface only AFTER the 13-minute model load (install run: 24 min lost
+  # to "LMCache server did not respond to register_kv_caches within 300s").
+  # 1) the codec must match the RUNNING server's rendered adapter;
+  # 2) the cache server must be REACHABLE at all.
+  _pre_root="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
+  _pre_adapter="$_pre_root/l2-adapter.rendered.json"
+  _pre_expect="$(printf '%s' "${LMCACHE_L2_SERDE:-none}" | tr '[:upper:]' '[:lower:]')"
+  case "$_pre_expect" in raw|"") _pre_expect=none ;; esac
+  if [ -f "$_pre_adapter" ]; then
+    _pre_seen="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("serde") or {}; print((s.get("type") or "none").replace("kvp-",""))' "$_pre_adapter" 2>/dev/null || echo UNREADABLE)"
+    case "$_pre_seen" in raw|"") _pre_seen=none ;; esac
+    if [ "$_pre_seen" = "UNREADABLE" ]; then
+      echo "WARNING: $_pre_adapter exists but is not valid JSON -- cannot pre-check the server codec" >&2
+    elif [ "$_pre_seen" != "$_pre_expect" ]; then
+      die "L2 CODEC MISMATCH (pre-flight): this launch would use '$_pre_expect' but the RUNNING
+cache server stores '$_pre_seen' (see $_pre_adapter). The codec is part of the cache
+identity -- the engine and the server would disagree about which chunks are readable.
+Fix ONE side to match the other and rerun:
+  server on zstd:    USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+  launch on zstd:    USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+  or restart the server WITHOUT the switch (raw/none) and relaunch plain."
+    else
+      echo "pre-flight: L2 codec matches the running server ($_pre_seen)"
+    fi
+  else
+    echo "NOTE: no $_pre_adapter -- the cache server may not be started yet (the post-launch gate will insist on it)"
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    if ! python3 - "$LMCACHE_HOST" "$LMCACHE_PORT" <<'PYEOF'
+import socket, sys
+host, port = sys.argv[1], int(sys.argv[2])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(3)
+try:
+    s.connect((host, port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    s.close()
+PYEOF
+    then
+      die "LMCache cache server is NOT reachable at $LMCACHE_HOST:$LMCACHE_PORT (pre-flight).
+Starting vLLM now would waste a 13-minute model load and then fail with
+'LMCache server did not respond to register_kv_caches within 300s'.
+Start the cache service first:
+  bash scripts/start-cache.sh
+(and USE_LOSSLESS_SERDE=1 on BOTH sides if you want lossless compression)."
+    fi
+    echo "pre-flight: cache server is listening at $LMCACHE_HOST:$LMCACHE_PORT"
+  fi
 else
   echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
 fi

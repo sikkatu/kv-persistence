@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（207 个单元测试 + 19 个离线配置/文档测试 = 226 个离线收集，
-224 通过 + 2 跳过；共收集 241 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（210 个单元测试 + 19 个离线配置/文档测试 = 229 个离线收集，
+227 通过 + 2 跳过；共收集 244 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：207 个单元测试（205 通过 + 2 跳过），19 个离线配置/文档测试，
-226 个离线收集（224 通过 + 2 跳过），共收集 241 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：210 个单元测试（208 通过 + 2 跳过），19 个离线配置/文档测试，
+229 个离线收集（227 通过 + 2 跳过），共收集 244 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -385,6 +385,15 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **第 38 轮补充**（第 37 轮修复需要完善）：
 **第 39 轮**：`ensure_cache_root`（systemd 包装器）不应 chmod 700 自定义
 **第 40 轮（真实安装中发现的问题）**：
+**第 41 轮（docker run 之前的预检）**：安装运行损失了 24 分钟——identity
+门禁通过、vLLM 开始加载，直到 `register_kv_caches`（300 秒超时）才因
+"LMCache server did not respond" 失败。`run-vllm-with-persist.sh` 现在
+在 `docker run` 之前检查：(1) L2 编解码器与运行中服务器的
+`l2-adapter.rendered.json` 一致（不匹配立即中止并给出确切修复方法），
+(2) 缓存服务器在请求端口上确实能应答——TCP 探测取代了单纯的 PID 检查
+（活 PID 不等于可工作的服务器，安装运行正是如此）。3 个测试
+（210 unit / 229 offline / 244 共计）。
+
 * `setup-identity.sh` 现在从模型的 config.json 填充 KV 几何
   （`KVP_NUM_KV_HEADS` / `KVP_HEAD_DIM`）。模板硬编码 head_dim=128，
   而 MiMo-V2.6-Pro 实际为 192——全新 setup 产生的 PIN 随后被门禁对真实
