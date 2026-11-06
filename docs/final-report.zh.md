@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（226 个单元测试 + 19 个离线配置/文档测试 = 245 个离线收集，
-243 通过 + 2 跳过；共收集 260 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（230 个单元测试 + 19 个离线配置/文档测试 = 249 个离线收集，
+247 通过 + 2 跳过；共收集 264 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：226 个单元测试（224 通过 + 2 跳过），19 个离线配置/文档测试，
-245 个离线收集（243 通过 + 2 跳过），共收集 260 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：230 个单元测试（228 通过 + 2 跳过），19 个离线配置/文档测试，
+249 个离线收集（247 通过 + 2 跳过），共收集 264 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -389,6 +389,24 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **第 42 轮（LMCache 版本对齐）**：第二次安装运行再次在
 **第 43 轮（LMCache 0.5.6 API 漂移）**：版本对齐后缓存服务器启动即崩溃——
 **第 44 轮（RPC ping + 服务器自动诊断）**：版本对齐和 API 修复后引擎仍在
+**第 45 轮（CUDA IPC 根本原因）**：服务器日志终于揭示了真正的故障——
+`Error handling operation register_kv_cache` ->
+`torch.AcceleratorError: CUDA error: mapping of buffer object failed`
+/ `cuIpcOpenEventHandle` 返回 `CUDA_ERROR_MAP_FAILED`。缓存服务器（主机，
+用户 `de`）无法打开 vLLM 容器（root）创建的 CUDA IPC 内存。处理函数无响应
+死亡——vLLM 等了 300 秒。不是版本问题，也不是 RPC 协议（ping 通过）。修复：
+* 新增 `scripts/ipc-test.sh`——约 1 分钟内、无需加载模型即可复现恰好失败的
+  步骤：容器内 producer 创建 GPU 张量，consumer（host / host-root /
+  container）通过 IPC 打开。接入预检：损坏的边界在 docker run 之前被拒绝
+  ——附修复命令（在容器中或以 root 运行缓存服务器）。可通过
+  `KVP_SKIP_IPC_TEST=1` 跳过（不推荐）。
+* 诊断现在优先显示 `Error handling operation` 异常（此前：30 行 eviction
+  噪声掩盖了它），并从尾部过滤 `skipping eviction`。
+* 等待循环在服务器端新错误时立即失败（不再浪费 300 秒注册超时）。
+* Docker 模式：`start-cache.sh` 警告缓存文件属主为 root（purge/budget
+  需 sudo）；`purge` 在 PermissionError 时打印原因和修复方法，而非仅错误。
+4 个测试（230 unit / 249 offline / 264 共计）。
+
 `register_kv_caches` 死掉（300 秒超时）——而 TCP 预检通过了。套接字开着，
 但 RPC 通道已死：TCP 可达性不能证明 lmcache 消息协议正常。修复：
 * 新增 `kvpersist.mp_ping`——协议级探针，构建与 vLLM 连接器相同的

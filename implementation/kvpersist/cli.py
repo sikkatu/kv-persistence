@@ -286,6 +286,16 @@ def cmd_purge(args) -> int:
                 freed += os.path.getsize(p)
                 os.remove(p)
                 targets.append(p)
+            except PermissionError as exc:
+                # Review fix (round 45): root-owned cache files (docker mode)
+                # -- name the WHY and the HOW, not just the error.
+                print(
+                    f"warning: could not delete {p}: {exc}\n"
+                    "  The file is likely owned by root (KVP_LAUNCH_MODE=docker).\n"
+                    "  Fix: rerun purge with sudo, or start the cache server with\n"
+                    "  KVP_LAUNCH_MODE=host as the same user as the engine.",
+                    file=sys.stderr,
+                )
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
         # Crash leftovers: sweep them too on --all (upstream only does this on
@@ -297,6 +307,16 @@ def cmd_purge(args) -> int:
                 freed += os.path.getsize(p)
                 os.remove(p)
                 targets.append(p)
+            except PermissionError as exc:
+                # Review fix (round 45): root-owned cache files (docker mode)
+                # -- name the WHY and the HOW, not just the error.
+                print(
+                    f"warning: could not delete {p}: {exc}\n"
+                    "  The file is likely owned by root (KVP_LAUNCH_MODE=docker).\n"
+                    "  Fix: rerun purge with sudo, or start the cache server with\n"
+                    "  KVP_LAUNCH_MODE=host as the same user as the engine.",
+                    file=sys.stderr,
+                )
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
         try:
@@ -334,6 +354,16 @@ def cmd_purge(args) -> int:
                 freed += os.path.getsize(p)
                 os.remove(p)
                 targets.append(p)
+            except PermissionError as exc:
+                # Review fix (round 45): root-owned cache files (docker mode)
+                # -- name the WHY and the HOW, not just the error.
+                print(
+                    f"warning: could not delete {p}: {exc}\n"
+                    "  The file is likely owned by root (KVP_LAUNCH_MODE=docker).\n"
+                    "  Fix: rerun purge with sudo, or start the cache server with\n"
+                    "  KVP_LAUNCH_MODE=host as the same user as the engine.",
+                    file=sys.stderr,
+                )
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
         skipped_active = len(_tmp_files(root)) - len(_tmp_files_safe_to_delete(root))
@@ -360,6 +390,16 @@ def cmd_purge(args) -> int:
                 os.remove(p)
                 targets.append(p)
                 found = True
+            except PermissionError as exc:
+                # Review fix (round 45): root-owned cache files (docker mode)
+                # -- name the WHY and the HOW, not just the error.
+                print(
+                    f"warning: could not delete {p}: {exc}\n"
+                    "  The file is likely owned by root (KVP_LAUNCH_MODE=docker).\n"
+                    "  Fix: rerun purge with sudo, or start the cache server with\n"
+                    "  KVP_LAUNCH_MODE=host as the same user as the engine.",
+                    file=sys.stderr,
+                )
             except OSError as exc:
                 print(f"warning: could not delete {p}: {exc}", file=sys.stderr)
         if ns.startswith(_NS_PREFIX):

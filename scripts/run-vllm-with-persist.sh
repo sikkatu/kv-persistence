@@ -338,6 +338,34 @@ the container. Align both sides to the SAME version:
       echo "       and check its log: tail -40 ${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log" >&2
       exit 1 ;;
   esac
+  # Review fix (round 45): the RPC ping does NOT prove the CUDA IPC
+  # boundary -- register_kv_caches died on cuIpcOpenEventHandle
+  # (CUDA_ERROR_MAP_FAILED: the host could not map GPU memory created in
+  # the container). Reproduce EXACTLY that step here, before the model
+  # load. Consumer mode matches how the cache server runs.
+  if [ "${KVP_SKIP_IPC_TEST:-0}" = "1" ]; then
+    echo "pre-flight: CUDA IPC test SKIPPED (KVP_SKIP_IPC_TEST=1)"
+  elif [ -x "$HERE/ipc-test.sh" ]; then
+    _ipc_mode=host; case "${KVP_LAUNCH_MODE:-host}" in docker) _ipc_mode=container ;; esac
+    echo "pre-flight: CUDA IPC boundary test (consumer=$_ipc_mode) -- can the cache"
+    echo "            server open GPU memory created in the container? (~1 min)"
+    if IMAGE="$IMAGE" CONSUMER="$_ipc_mode" bash "$HERE/ipc-test.sh"; then
+      echo "pre-flight: CUDA IPC boundary OK (consumer=$_ipc_mode)"
+    else
+      die "CUDA IPC BOUNDARY FAILED (pre-flight): the cache server cannot open
+GPU memory created in the container -- this is the EXACT step that killed
+register_kv_caches (CUDA_ERROR_MAP_FAILED). The model load would waste 20
+minutes and fail the same way. Fix the boundary FIRST:
+  - run the cache server in the container (same user/root as the engine):
+      KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+    then rerun with KVP_LAUNCH_MODE=docker so this test uses the container consumer;
+  - or run the cache server as root (same user as the engine container).
+Isolate the blocker: CONSUMER=host-root vs CONSUMER=container in ipc-test.sh.
+To bypass this check: KVP_SKIP_IPC_TEST=1 (NOT recommended -- the failure returns)."
+    fi
+  else
+    echo "NOTE: scripts/ipc-test.sh not found -- CUDA IPC boundary test skipped"
+  fi
 else
   echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
 fi
@@ -459,7 +487,31 @@ fi
 echo "launched; model load takes ~13-16 min. progress every 10s:"
 URLHOST=127.0.0.1; case "$BIND" in 0.0.0.0) URLHOST=127.0.0.1 ;; *:*) URLHOST="[$BIND]" ;; *) URLHOST="$BIND" ;; esac
 LOG_SHOWN=0; START_TS=$(date +%s)
+# Review fix (round 45): fail fast. The engine waits 300s for
+# register_kv_caches, but the server may have ALREADY failed with
+# 'Error handling operation' (e.g. CUDA_ERROR_MAP_FAILED) -- waiting out
+# the timeout cannot fix it. Track the server log size BEFORE the wait and
+# scan only the FRESH part each tick.
+_kvp_slog="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log"
+_kvp_slog_before=0
+if [ -f "$_kvp_slog" ]; then _kvp_slog_before=$(wc -c < "$_kvp_slog"); fi
 for _ in $(seq 1 300); do
+  # fail fast (round 45): a fresh server-side handler error is fatal
+  if [ -f "$_kvp_slog" ]; then
+    _kvp_serr="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" 2>/dev/null | grep -m1 'Error handling operation' || true)"
+    if [ -n "$_kvp_serr" ]; then
+      echo "" >&2
+      echo "ERROR: the cache server FAILED to handle a request (round 45 fail-fast):" >&2
+      tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | grep -A20 'Error handling operation' | head -25 >&2
+      echo "" >&2
+      echo "This is the root cause -- waiting 300s cannot fix it. See the exception above." >&2
+      echo "Fix (CUDA IPC boundary, review round 45): run the cache server in the same" >&2
+      echo "environment as the engine (root/container):" >&2
+      echo "  KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
+      echo "or test the boundary first: IMAGE=$IMAGE bash scripts/ipc-test.sh" >&2
+      exit 1
+    fi
+  fi
   STATE="$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "$CONTAINER" 2>/dev/null || echo gone)"
   case "$STATE" in running*) : ;; *)
     echo "ERROR: container not running ($STATE)"; docker logs --tail 100 "$CONTAINER" >&2
@@ -486,8 +538,18 @@ for _ in $(seq 1 300); do
       _kvp_lines=$(wc -l < "$_kvp_log")
       _kvp_fresh=$(find "$_kvp_log" -newermt '-5 minutes' 2>/dev/null | wc -l)
       echo "server log: $_kvp_log ($_kvp_lines lines, $([ "$_kvp_fresh" -gt 0 ] && echo 'written within 5 min' || echo 'NO writes in the last 5 min'))" >&2
-      echo "--- last 30 server log lines ---" >&2
-      tail -n 30 "$_kvp_log" >&2 || true
+      # Review fix (round 45): show the server ERROR first -- the previous
+      # "last 30 lines" was eviction noise that hid the real exception.
+      _kvp_err="$(grep -n 'Error handling operation' "$_kvp_log" | tail -n 1 || true)"
+      if [ -n "$_kvp_err" ]; then
+        echo "--- server ERROR (root cause) ---" >&2
+        _kvp_errline="${_kvp_err%%:*}"
+        sed -n "${_kvp_errline},$(( _kvp_errline + 25 ))p" "$_kvp_log" >&2 || true
+      else
+        echo "--- no 'Error handling operation' in the server log ---" >&2
+      fi
+      echo "--- last 30 server log lines (filtered) ---" >&2
+      grep -v 'skipping eviction' "$_kvp_log" | tail -n 30 >&2 || true
       echo "--- [kvp] status lines ---" >&2
       grep '\[kvp\]' "$_kvp_log" | tail -n 5 >&2 || echo "(none)" >&2
     else

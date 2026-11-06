@@ -190,7 +190,16 @@ fi
 # Never wipe on startup: only report what is already there.
 if [ -d "$ROOT_PATH" ]; then
   EXISTING="$(du -sh "$ROOT_PATH" 2>/dev/null | cut -f1)"
-  echo "existing cache data preserved: $EXISTING (automatic wipe on start is disabled by design)"
+  # Review fix (round 45): in docker mode the cache files are written by
+# root (the container user). Scripts run as the operator user (e.g. 'de')
+# may then hit PermissionError on purge/budget-report -- say so up front.
+if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+  echo "NOTE (docker mode): cache files under $ROOT_PATH are written by ROOT"
+  echo "      (the container user). If purge/budget-report.sh fails with"
+  echo "      Permission denied, run them with sudo -- or use KVP_LAUNCH_MODE=host"
+  echo "      with the cache server as the same user as the engine."
+fi
+echo "existing cache data preserved: $EXISTING (automatic wipe on start is disabled by design)"
 fi
 
 # setsid detaches the service from this shell's terminal -- closing the SSH

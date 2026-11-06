@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(226 unit tests + 19 more offline config/docs tests = 245 offline collected,
-243 passed + 2 skipped; 260 collected total including the live-`lmcache`
+(230 unit tests + 19 more offline config/docs tests = 249 offline collected,
+247 passed + 2 skipped; 264 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 226 unit tests (`tests/unit`, 224 passed + 2 skipped),
-19 top-level offline tests, 245 offline collected (243 passed + 2 skipped),
-260 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 230 unit tests (`tests/unit`, 228 passed + 2 skipped),
+19 top-level offline tests, 249 offline collected (247 passed + 2 skipped),
+264 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -625,6 +625,32 @@ Home (EN/RU/ZH).
 **Round 42 (LMCache version alignment)**: the second install run died
 **Round 43 (LMCache 0.5.6 API drift)**: after the version alignment
 **Round 44 (RPC ping + automatic server diagnostics)**: after the
+**Round 45 (CUDA IPC root cause)**: the server log finally revealed
+the real failure -- `Error handling operation register_kv_cache` ->
+`torch.AcceleratorError: CUDA error: mapping of buffer object
+failed` / `CUDA_ERROR_MAP_FAILED` from `cuIpcOpenEventHandle`. The
+cache server (host, user `de`) could NOT open the CUDA IPC memory
+created by the vLLM container (root). The handler died without a
+reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
+(ping passed). Fixes:
+* NEW `scripts/ipc-test.sh` -- reproduces EXACTLY the failing step
+  in ~1 min WITHOUT the model load: a producer in the container
+  creates a GPU tensor, the consumer (host / host-root / container)
+  opens it via IPC. Wired into the pre-flight: a broken boundary
+  is refused BEFORE docker run, with the fix commands (run the
+  cache server in the container or as root). Skippable via
+  `KVP_SKIP_IPC_TEST=1` (not recommended).
+* Diagnostics now show the `Error handling operation` exception
+  first (was: 30 lines of eviction noise that hid it) and filter
+  `skipping eviction` out of the tail.
+* The wait loop fails FAST on a fresh server-side handler error
+  (no more burning the 300s register timeout when the server
+  already failed).
+* Docker mode: `start-cache.sh` warns that cache files are
+  root-owned (purge/budget need sudo); `purge` prints the WHY and
+  the HOW on PermissionError, not just the error.
+4 tests (230 unit / 249 offline / 264 total).
+
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight
 passed. The socket was open but the RPC channel was dead: TCP
