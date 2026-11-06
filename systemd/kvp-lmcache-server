@@ -163,12 +163,20 @@ ensure_cache_root() {
   # documented threat model.
   chmod 700 "$root" 2>/dev/null \
     || { echo "cannot chmod 700 $root -- KV data would be readable by other local users; refusing to start (see docs/security.md)" >&2; exit 1; }
-  # Also tighten the parent (StateDirectory default) if we own it.
+  # Review fix (round 39): tighten the parent ONLY for the StateDirectory
+  # default. An unconditional chmod 700 on dirname(KVP_CACHE_ROOT) closed an
+  # arbitrary shared parent (e.g. /data with KVP_CACHE_ROOT=/data/kvc) to
+  # every other user on the host (reviewer measured this). For a custom
+  # cache root the parent is not ours to restrict.
   local parent
   parent="$(dirname "$root")"
-  if [ -d "$parent" ] && [ -w "$parent" ]; then
-    chmod 700 "$parent" 2>/dev/null || true
-  fi
+  case "$parent" in
+    /var/lib/kv-persistence)
+      if [ -d "$parent" ] && [ -w "$parent" ]; then
+        chmod 700 "$parent" 2>/dev/null || true
+      fi
+      ;;
+  esac
 }
 
 if [ -n "$ADAPTER_FILE" ] && [ -f "$ADAPTER_FILE" ]; then

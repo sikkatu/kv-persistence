@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(203 unit tests + 19 more offline config/docs tests = 222 offline collected,
-220 passed + 2 skipped; 237 collected total including the live-`lmcache`
+(204 unit tests + 19 more offline config/docs tests = 223 offline collected,
+221 passed + 2 skipped; 238 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 203 unit tests (`tests/unit`, 201 passed + 2 skipped),
-19 top-level offline tests, 222 offline collected (220 passed + 2 skipped),
-237 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 204 unit tests (`tests/unit`, 202 passed + 2 skipped),
+19 top-level offline tests, 223 offline collected (221 passed + 2 skipped),
+238 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -619,6 +619,16 @@ Home (EN/RU/ZH).
 **Install fixes: openai dependency + auto-generated API key (review
 **Review batch round 37** (all items verified against the code first):
 **Round 38 follow-ups** (the round-37 fixes needed completions):
+**Round 39**: `ensure_cache_root` (systemd wrapper) must NOT chmod 700
+an arbitrary parent of a custom `KVP_CACHE_ROOT` -- with
+`KVP_CACHE_ROOT=<shared>/kvc` the parent (e.g. `/data`, 755) became
+700 and was locked away from every other user on the host (reviewer
+measured this on an old-code path). The parent tightening is now
+scoped to the StateDirectory default `/var/lib/kv-persistence` only;
+for a custom cache root the parent is not ours to restrict. The
+cache ROOT itself keeps its 0700 security contract (docs/security.md).
+1 regression test (204 unit / 223 offline / 238 total).
+
 * systemd wrapper: `ensure_cache_root` now runs BEFORE the adapter
   render write -- on a first start the cache dir did not exist yet
   and the witness file was silently skipped (gate exit 5 until a

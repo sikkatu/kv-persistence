@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（203 个单元测试 + 19 个离线配置/文档测试 = 222 个离线收集，
-220 通过 + 2 跳过；共收集 237 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（204 个单元测试 + 19 个离线配置/文档测试 = 223 个离线收集，
+221 通过 + 2 跳过；共收集 238 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：203 个单元测试（201 通过 + 2 跳过），19 个离线配置/文档测试，
-222 个离线收集（220 通过 + 2 跳过），共收集 237 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：204 个单元测试（202 通过 + 2 跳过），19 个离线配置/文档测试，
+223 个离线收集（221 通过 + 2 跳过），共收集 238 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -383,6 +383,14 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **安装修复：openai 依赖 + API 密钥自动生成（rev. 36）**：`lmcache server`
 **评审批次，第 37 轮**（每个问题都先对照代码核实）：
 **第 38 轮补充**（第 37 轮修复需要完善）：
+**第 39 轮**：`ensure_cache_root`（systemd 包装器）不应 chmod 700 自定义
+`KVP_CACHE_ROOT` 的任意父目录——当 `KVP_CACHE_ROOT=<共享>/kvc` 时，父目录
+（如 `/data`，755）变成 700，主机上其他用户全部被挡在外面（评审者在旧代码
+路径上实测确认）。父目录收紧现在仅限于 StateDirectory 默认路径
+`/var/lib/kv-persistence`；自定义缓存根的父目录不属于我们的管辖范围。
+缓存根目录本身保持 0700 安全契约（docs/security.md）。1 个回归测试
+（204 unit / 223 offline / 238 共计）。
+
 * systemd 包装器：`ensure_cache_root` 现在在写入渲染适配器之前运行——首次
   启动时缓存目录尚不存在，见证文件被静默跳过（门禁 exit 5 直到服务重启）。
 * `LMCACHE_HTTP_HOST=0.0.0.0` 现在在 start-cache.sh 和 systemd 包装器中都被
