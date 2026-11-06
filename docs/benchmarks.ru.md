@@ -21,7 +21,8 @@
 Этот тест доказывает, что **сам LMCache** может восстановить данные из L2-яруса
 после полного рестарта сервера. vLLM, модель и GPU не нужны.
 
-* **Закреплённая версия / API**: LMCache **0.5.3** (пин в `requirements-lmcache.txt`).
+* **Закреплённая версия / API**: LMCache **0.5.6** (пин в `requirements-lmcache.txt`,
+  соответствует закреплённому образу vLLM; заметки о механизме ниже проверены на 0.5.3).
   Тест управляет реальным MP-протоколом сервера через закреплённый CLI
   `lmcache bench server` (`--mode cpu --transfer-mode engine_driven`):
   `REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT`, `LOOKUP`,
@@ -34,7 +35,7 @@
   Внимание: `--l2-adapter` принимает спецификацию адаптера как JSON-**строку**,
   а не путь к файлу (0.5.3 `add_l2_adapters_args`).
 * **Зависимости**: Python 3.12, Linux с POSIX SHM (`/dev/shm`), закреплённый
-  `lmcache==0.5.3` плюс `nixl==1.5.2` (L2-адаптер `nixl_store_dynamic` импортирует
+  `lmcache==0.5.6` плюс `nixl==1.5.2` (L2-адаптер `nixl_store_dynamic` импортирует
   `nixl`), torch (достаточно CPU-сборки), pytest. GPU, CUDA и vLLM НЕ нужны.
 * **Команда**:
   ```bash

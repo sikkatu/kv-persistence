@@ -13,7 +13,7 @@
 | vLLM 提交 | `8e2beaa3bff595577a069d49d96bde9074294ec2`（2026-10-21） | VERIFIED |
 | Python | 3.12 | VERIFIED |
 | 镜像中的 `LMCacheMPConnector` | 支持 `kv_connector_module_path` | VERIFIED（据源码） |
-| LMCache | **0.5.3**，固定于 `requirements-lmcache.txt` | 目标主机 NEEDS TESTING |
+| LMCache | **0.5.6**（与固定 vLLM 镜像匹配；固定于 `requirements-lmcache.txt`） | 目标主机 NEEDS TESTING |
 | MP 协议兼容（lmcache ↔ vLLM） | ZMQ 请求通道 | 目标主机 NEEDS TESTING |
 | L2 `nixl_store_dynamic` 持久化 | persist_enabled + 惰性索引重建 | 目标主机 NEEDS TESTING |
 | vLLM 重启后恢复 | 验收要求 | 目标主机 NEEDS TESTING |

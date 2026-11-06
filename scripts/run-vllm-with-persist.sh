@@ -246,7 +246,10 @@ if [ "$PERSIST" = "true" ]; then
   # to surface only AFTER the 13-minute model load (install run: 24 min lost
   # to "LMCache server did not respond to register_kv_caches within 300s").
   # 1) the codec must match the RUNNING server's rendered adapter;
-  # 2) the cache server must be REACHABLE at all.
+  # 2) the cache server must be REACHABLE at all;
+  # 3) the lmcache version inside the image must match the host's (round 42:
+  #    the image ships 0.5.6 while the pinned host venv has 0.5.3 -- mixed
+  #    minor versions break the MP protocol silently at register_kv_caches).
   _pre_root="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
   _pre_adapter="$_pre_root/l2-adapter.rendered.json"
   _pre_expect="$(printf '%s' "${LMCACHE_L2_SERDE:-none}" | tr '[:upper:]' '[:lower:]')"
@@ -292,6 +295,27 @@ Start the cache service first:
 (and USE_LOSSLESS_SERDE=1 on BOTH sides if you want lossless compression)."
     fi
     echo "pre-flight: cache server is listening at $LMCACHE_HOST:$LMCACHE_PORT"
+  fi
+  # Review fix (round 42): the MP-connector protocol is version-sensitive.
+  # The CLIENT lives inside the vLLM image; the SERVER runs from the host
+  # venv (requirements-lmcache.txt). A minor-version mismatch makes
+  # register_kv_caches silently time out after 300s inside the container.
+  _host_lmcache="$(python3 -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
+  _img_lmcache="$(docker run --rm --entrypoint python3 "$IMAGE" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
+  if [ "$_host_lmcache" != "UNKNOWN" ] && [ "$_img_lmcache" != "UNKNOWN" ]; then
+    if [ "$_host_lmcache" != "$_img_lmcache" ]; then
+      die "LMCACHE VERSION MISMATCH (pre-flight): the host serves lmcache $_host_lmcache
+but the vLLM image ships lmcache $_img_lmcache. Mixed minor versions break the
+MP-connector protocol -- register_kv_caches will silently time out (300s) inside
+the container. Align both sides to the SAME version:
+  host (server):  ~/.venvs/lmcache/bin/pip install lmcache==$_img_lmcache
+  or pin the image to one that ships lmcache==$_host_lmcache.
+  (requirements-lmcache.txt pins the host side; check docs/compatibility.md.)"
+    else
+      echo "pre-flight: lmcache version matches on both sides ($_host_lmcache)"
+    fi
+  else
+    echo "NOTE: could not determine lmcache version (host=$_host_lmcache, image=$_img_lmcache) -- skipping version check"
   fi
 else
   echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"

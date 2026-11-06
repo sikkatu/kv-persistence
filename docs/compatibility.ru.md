@@ -14,7 +14,7 @@
 | Коммит vLLM | `8e2beaa3bff595577a069d49d96bde9074294ec2` (2026-10-21) | VERIFIED |
 | Python | 3.12 | VERIFIED |
 | `LMCacheMPConnector` в образе | поддерживается `kv_connector_module_path` | VERIFIED (по исходникам) |
-| LMCache | **0.5.3**, закреплён в `requirements-lmcache.txt` | NEEDS TESTING на целевом хосте |
+| LMCache | **0.5.6** (соответствует закреплённому образу vLLM; закреплён в `requirements-lmcache.txt`) | NEEDS TESTING на целевом хосте |
 | Совместимость MP-протокола (lmcache ↔ vLLM) | ZMQ-канал запросов | NEEDS TESTING на целевом хосте |
 | Персист L2 `nixl_store_dynamic` | persist_enabled + ленивая перестройка индекса | NEEDS TESTING на целевом хосте |
 | Восстановление после рестарта vLLM | приёмочное требование | NEEDS TESTING на целевом хосте |

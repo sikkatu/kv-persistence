@@ -14,7 +14,7 @@ Nothing here is claimed working without its marker.
 | vLLM commit | `8e2beaa3bff595577a069d49d96bde9074294ec2` (2026-10-21) | VERIFIED |
 | Python | 3.12 | VERIFIED |
 | `LMCacheMPConnector` in image | `kv_connector_module_path` supported | VERIFIED (source) |
-| LMCache | **0.5.3**, pinned in `requirements-lmcache.txt` | NEEDS TESTING on host |
+| LMCache | **0.5.6** (matches the pinned vLLM image; pinned in `requirements-lmcache.txt`) | NEEDS TESTING on host |
 | MP-protocol fit (lmcache ↔ vLLM) | ZMQ request channel | NEEDS TESTING on host |
 | L2 `nixl_store_dynamic` persistence | persist_enabled + lazy index rebuild | NEEDS TESTING on host |
 | Restore after vLLM restart | acceptance requirement | NEEDS TESTING on host |

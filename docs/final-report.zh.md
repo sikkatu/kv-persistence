@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（210 个单元测试 + 19 个离线配置/文档测试 = 229 个离线收集，
-227 通过 + 2 跳过；共收集 244 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（212 个单元测试 + 19 个离线配置/文档测试 = 231 个离线收集，
+229 通过 + 2 跳过；共收集 246 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：210 个单元测试（208 通过 + 2 跳过），19 个离线配置/文档测试，
-229 个离线收集（227 通过 + 2 跳过），共收集 244 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：212 个单元测试（210 通过 + 2 跳过），19 个离线配置/文档测试，
+231 个离线收集（229 通过 + 2 跳过），共收集 246 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -386,6 +386,20 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **第 39 轮**：`ensure_cache_root`（systemd 包装器）不应 chmod 700 自定义
 **第 40 轮（真实安装中发现的问题）**：
 **第 41 轮（docker run 之前的预检）**：安装运行损失了 24 分钟——identity
+**第 42 轮（LMCache 版本对齐）**：第二次安装运行再次在
+`register_kv_caches` 失败——根本原因是版本分裂：固定的 vLLM 镜像自带
+lmcache **0.5.6**（容器内的客户端），而主机 venv 提供 lmcache **0.5.3**
+（服务器）。混用小版本会静默破坏 MP 协议。修复：
+* `requirements-lmcache.txt` 现在固定 `lmcache==0.5.6`——镜像是唯一
+  真相来源（其连接器即客户端）；
+* 启动器预检提取两侧版本（主机 venv + 镜像），不匹配则拒绝启动——在
+  docker run 之前；
+* 当渲染适配器使用 `cache_salt` 时，`salt_filename_patch` 失败现在是
+  致命错误（此前是静默警告——lmcache 升级重命名被打补丁的函数时，跨租户
+  隔离会悄悄失效）；
+* `docs/compatibility.md`（EN/RU/ZH）：LMCache 行更新为 0.5.6。
+2 个测试（212 unit / 231 offline / 246 共计）。
+
 门禁通过、vLLM 开始加载，直到 `register_kv_caches`（300 秒超时）才因
 "LMCache server did not respond" 失败。`run-vllm-with-persist.sh` 现在
 在 `docker run` 之前检查：(1) L2 编解码器与运行中服务器的

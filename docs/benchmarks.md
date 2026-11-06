@@ -21,7 +21,8 @@ Three levels are kept strictly separate — never read one as another (review P1
 This is the test that proves that **LMCache itself** can recover data from the
 L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
 
-* **Pinned version / API**: LMCache **0.5.3** (pin in `requirements-lmcache.txt`).
+* **Pinned version / API**: LMCache **0.5.6** (pin in `requirements-lmcache.txt`,
+  matches the pinned vLLM image; mechanism notes below were verified on 0.5.3).
   The test drives the real MP server protocol through the pinned CLI
   `lmcache bench server` (`--mode cpu --transfer-mode engine_driven`):
   `REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT`, `LOOKUP`,
@@ -33,7 +34,7 @@ L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
   `CHECKSUM: <digest> (N chunks)`. Note: `--l2-adapter` takes the adapter spec
   as a JSON **string**, not a file path (0.5.3 `add_l2_adapters_args`).
 * **Dependencies**: Python 3.12, Linux with POSIX SHM (`/dev/shm`), the pinned
-  `lmcache==0.5.3` plus `nixl==1.5.2` (the `nixl_store_dynamic` L2 adapter
+  `lmcache==0.5.6` plus `nixl==1.5.2` (the `nixl_store_dynamic` L2 adapter
   imports `nixl`), torch (CPU build is enough), pytest. GPU, CUDA and vLLM are
   NOT required.
 * **Command**:

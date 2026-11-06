@@ -164,7 +164,8 @@ cd observability && docker compose up -d
 
 **Dashboard/version honesty note (review round 18):** the dashboards are the
 *official* LMCache assets, but they were authored against a NEWER LMCache than
-the pinned **0.5.3** this repo runs. Static comparison against the 0.5.3 source
+the pinned **0.5.6** this repo runs (the dashboard audit below was
+performed against the 0.5.3 source). Static comparison against the 0.5.3 source
 (`lmcache/v1/mp_observability/`) shows most panels map to real 0.5.3 metrics
 (L1/L2 usage gauges, store/prefetch pipelines, eviction loop, event-bus,
 throughput histograms), but **4 of 28 panels** referenced metrics 0.5.3 never

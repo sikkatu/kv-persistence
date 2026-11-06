@@ -147,7 +147,7 @@ bash scripts/start-observability.sh
 不用 `scripts/start-cache.sh`（`setsid nohup`）时，缓存服务可作为 systemd
 单元运行——可跨重启存活、失败自动重启、日志进 journald。单元调用
 `kvp-lmcache-server` 包装脚本，以 JSON 字符串传入 L2 适配器规格（锁定的
-LMCache 0.5.3 CLI 的 `--l2-adapter` 接受 JSON 字符串，而非文件路径）。
+LMCache 0.5.6 CLI 的 `--l2-adapter` 接受 JSON 字符串，而非文件路径）。
 
 ```bash
 sudo install -m 0755 systemd/kvp-lmcache-server /usr/local/sbin/kvp-lmcache-server

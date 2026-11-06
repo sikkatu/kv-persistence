@@ -84,7 +84,7 @@ The LMCache version is **pinned** in `requirements-lmcache.txt` (`lmcache==X.Y.Z
 together with the documented vLLM image combination — an unpinned install can
 resolve to a release that changed the MP-connector protocol or the L2 adapter
 behaviour. Do not upgrade lmcache without replaying `scripts/test-recovery.sh`.
-**Note**: `openai` is pinned there too -- the lmcache 0.5.3 CLI imports it at
+**Note**: `openai` is pinned there too -- the lmcache 0.5.6 CLI imports it at
 startup (`ModuleNotFoundError: No module named 'openai'` otherwise), even for
 `lmcache server`. Install the requirements file into the SAME venv that
 provides the `lmcache` command.
@@ -94,7 +94,7 @@ provides the `lmcache` command.
 > (`docker run --rm --entrypoint lmcache "$IMAGE" server …`) and adapt
 > `scripts/start-cache.sh`; the arguments stay identical.
 
-**Note for the pinned 0.5.3 CLI**: `lmcache server --l2-adapter` takes the
+**Note for the pinned 0.5.6 CLI**: `lmcache server --l2-adapter` takes the
 adapter spec as a JSON **string**, not a path to a JSON file. `start-cache.sh`
 handles this automatically (it inlines the rendered spec), but if you start the
 server by hand, pass `--l2-adapter "$(cat l2-adapter.rendered.json)"` rather
@@ -198,7 +198,7 @@ stack. Details and the panel list are in `observability/README.md`.
 Instead of `scripts/start-cache.sh` (which detaches via `setsid nohup`), the
 cache service can run as a systemd unit — survives reboot, restarts on
 failure, logs in journald. The unit calls a small wrapper that inlines the L2
-adapter JSON (the pinned LMCache 0.5.3 CLI takes `--l2-adapter` as a JSON
+adapter JSON (the pinned LMCache 0.5.6 CLI takes `--l2-adapter` as a JSON
 STRING, not a file path).
 
 ```bash

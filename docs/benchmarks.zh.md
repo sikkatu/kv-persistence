@@ -20,7 +20,8 @@
 该测试证明 **LMCache 本身**能在服务器完全重启后从 L2 层恢复数据。
 不需要 vLLM、模型或 GPU。
 
-* **固定版本 / API**：LMCache **0.5.3**（固定于 `requirements-lmcache.txt`）。
+* **固定版本 / API**：LMCache **0.5.6**（固定于 `requirements-lmcache.txt`，
+  与固定 vLLM 镜像匹配；下述机制说明基于 0.5.3 验证）。
   测试通过固定 CLI `lmcache bench server`（`--mode cpu --transfer-mode
   engine_driven`）驱动真实 MP 服务器协议：`REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT`、
   `LOOKUP`、`QUERY_PREFETCH_STATUS`、`PREPARE_STORE`/`COMMIT_STORE`、
@@ -30,7 +31,7 @@
   以 `CHECKSUM: <digest> (N chunks)` 输出。注意：`--l2-adapter` 接收
   JSON **字符串**形式的适配器规格，而非文件路径（0.5.3 `add_l2_adapters_args`）。
 * **依赖**：Python 3.12、支持 POSIX SHM 的 Linux（`/dev/shm`）、固定的
-  `lmcache==0.5.3` 加 `nixl==1.5.2`（`nixl_store_dynamic` L2 适配器导入
+  `lmcache==0.5.6` 加 `nixl==1.5.2`（`nixl_store_dynamic` L2 适配器导入
   `nixl`）、torch（CPU 构建即可）、pytest。**不需要** GPU、CUDA 和 vLLM。
 * **命令**：
   ```bash

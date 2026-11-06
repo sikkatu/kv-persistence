@@ -9,7 +9,7 @@
 # Verified combination (update ONLY with a hardware-tested run):
 #   vLLM image: vllm/vllm-openai:nightly-8e2beaa3bff...@sha256:167ccd86...
 #               commit 8e2beaa3bff595577a069d49d96bde9074294ec2 (2026-10-21)
-#   lmcache:    0.5.3   (pin below)
+#   lmcache:    0.5.6   (pin below -- matches the vLLM image)
 #   python:     3.12
 #
 # The exact wheel variant must match the image's PyTorch/CUDA ABI.
@@ -18,13 +18,13 @@
 # docs/troubleshooting.md). Status of the pin until the hardware acceptance run
 # completes: NEEDS TESTING -- labelled honestly in docs/final-report.md.
 
-lmcache==0.5.3
+lmcache==0.5.6
 
 # The lmcache CLI imports `openai` while REGISTERING its bench subcommands
 # (lmcache/cli/commands/bench/engine_bench/config.py -> `from openai import
 # OpenAI`) -- this happens at CLI startup, so even `lmcache server` dies with
 # `ModuleNotFoundError: No module named 'openai'` without it (real deployment
-# report). It is a CLI-wide dependency of lmcache 0.5.3, not just of the
+# report). It is a CLI-wide dependency of lmcache 0.5.6, not just of the
 # benchmark, so it is pinned here. Install this file into the SAME venv that
 # provides the `lmcache` command.
 # Range pin (not a single version): `openai` is a pure client library with a

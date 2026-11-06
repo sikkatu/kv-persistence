@@ -38,6 +38,31 @@ def main() -> None:
             file=sys.stderr,
         )
     else:
+        # Review fix (round 42): a FAILED patch is FATAL when the adapter
+        # actually uses cache_salt -- without the patch the salt is silently
+        # dropped from the L2 file name and cross-tenant isolation is lost
+        # (the measured data leak in rounds 12-15). Only warn (and continue)
+        # when there is genuinely no salt in the rendered adapter.
+        import json as _json
+        import os as _os
+        _root = _os.environ.get("KVP_CACHE_ROOT", "/var/lib/kv-persistence/l2")
+        _adapter_path = _os.path.join(_root, "l2-adapter.rendered.json")
+        _uses_salt = False
+        try:
+            with open(_adapter_path) as _fh:
+                _uses_salt = bool(_json.load(_fh).get("cache_salt"))
+        except Exception:
+            pass
+        if _uses_salt:
+            print(
+                "[kvp] FATAL: cache_salt is configured but the filename patch "
+                "could NOT be applied (adapter module renamed upstream?) -- "
+                "cross-tenant L2 isolation is BROKEN. Refusing to start. "
+                "Update kvpersist.salt_filename_patch for this lmcache "
+                "version (check docs/compatibility.md).",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         print(
             "[kvp] WARNING: filename patch NOT applied (adapter module "
             "unavailable) -- cache_salt isolation on L2 is the upstream "

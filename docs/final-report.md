@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(210 unit tests + 19 more offline config/docs tests = 229 offline collected,
-227 passed + 2 skipped; 244 collected total including the live-`lmcache`
+(212 unit tests + 19 more offline config/docs tests = 231 offline collected,
+229 passed + 2 skipped; 246 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 210 unit tests (`tests/unit`, 208 passed + 2 skipped),
-19 top-level offline tests, 229 offline collected (227 passed + 2 skipped),
-244 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 212 unit tests (`tests/unit`, 210 passed + 2 skipped),
+19 top-level offline tests, 231 offline collected (229 passed + 2 skipped),
+246 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -622,6 +622,22 @@ Home (EN/RU/ZH).
 **Round 39**: `ensure_cache_root` (systemd wrapper) must NOT chmod 700
 **Round 40 (install-run findings)**:
 **Round 41 (pre-flight before docker run)**: the install run lost 24
+**Round 42 (LMCache version alignment)**: the second install run died
+at `register_kv_caches` again -- the root cause is a version split:
+the pinned vLLM image ships lmcache **0.5.6** (the CLIENT inside the
+container) while the host venv served lmcache **0.5.3** (the SERVER).
+Mixed minor versions break the MP protocol silently. Fixes:
+* `requirements-lmcache.txt` now pins `lmcache==0.5.6` -- the image
+  is the single source of truth (its connector is the client);
+* the launcher pre-flight extracts BOTH versions (host venv + image)
+  and refuses to start on a mismatch, before docker run;
+* a FAILED `salt_filename_patch` is now FATAL when the rendered
+  adapter uses `cache_salt` (was: silent warning -- cross-tenant
+  isolation would break on an lmcache upgrade that renames the
+  patched function);
+* `docs/compatibility.md` (EN/RU/ZH): LMCache row updated to 0.5.6.
+2 tests (212 unit / 231 offline / 246 total).
+
 minutes -- the identity gate passed, vLLM started loading, and only
 at `register_kv_caches` (300s timeout) it died with "LMCache server
 did not respond". `run-vllm-with-persist.sh` now checks BEFORE

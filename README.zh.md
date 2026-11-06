@@ -130,7 +130,8 @@ cd observability && docker compose up -d
   *LMCache* 与 *LMCache Coordinator* 仪表盘会自动导入。
 
 **仪表盘版本说明（第 18 轮）：** 这些仪表盘是 LMCache 的*官方*资产，但它们针对的是
-比本仓库固定的 **0.5.3** 更新的 LMCache 版本编写的。与 0.5.3 源码
+比本仓库固定的 **0.5.6** 更新的 LMCache 版本编写的（下述仪表盘审计基于
+0.5.3 源码）。与 0.5.3 源码
 （`lmcache/v1/mp_observability/`）静态对比表明：多数面板映射到真实的 0.5.3 指标
 （L1/L2 用量 gauge、store/prefetch 流水线、淘汰循环、事件总线、吞吐直方图），但
 **28 个面板中有 4 个**引用了 0.5.3 从不输出的指标（lookup 的 prompt/request-hit
