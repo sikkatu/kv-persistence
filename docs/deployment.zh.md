@@ -175,6 +175,18 @@ journalctl -u lmcache-server -f
   包装脚本在启动时也会检查可写性，若目录不可写则打印这条命令。
 * 不要同时运行单元和 `start-cache.sh`——会争夺同一缓存目录和端口。
 
+## 停止（引擎与缓存服务）
+引擎和缓存服务是不同的进程，请分别显式停止：
+
+* **vLLM 引擎**（`run-vllm-with-persist.sh` 启动的容器）：
+  `bash scripts/stop-engine.sh`（或 `docker rm -f mimo-pro-tp4-kvp`）。
+  在启动器运行中按 Ctrl-C 只会停止启动器本身——容器会继续运行；
+  之后请执行 `stop-engine.sh`。
+* **缓存服务**（lmcache 服务器）：`bash scripts/stop-cache.sh`
+  （优雅 SIGTERM，数据文件保留）。
+
+停止任意一个都不会删除磁盘上的持久缓存数据。
+
 ## 回滚（一条命令）
 
 ```bash

@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(219 unit tests + 19 more offline config/docs tests = 238 offline collected,
-236 passed + 2 skipped; 253 collected total including the live-`lmcache`
+(221 unit tests + 19 more offline config/docs tests = 240 offline collected,
+238 passed + 2 skipped; 255 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 219 unit tests (`tests/unit`, 217 passed + 2 skipped),
-19 top-level offline tests, 238 offline collected (236 passed + 2 skipped),
-253 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 221 unit tests (`tests/unit`, 219 passed + 2 skipped),
+19 top-level offline tests, 240 offline collected (238 passed + 2 skipped),
+255 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -640,7 +640,7 @@ Both patches are now version-aware:
   keeps the 0.5.3 `dynamic_store_file` fallback;
 * `launch.py` prints "cache_salt included in L2 file names by
   upstream LMCache (0.5.6+ native '@'-suffix) -- no patch needed".
-7 tests (219 unit / 238 offline / 253 total).
+9 tests (221 unit / 240 offline / 255 total).
 
 at `register_kv_caches` again -- the root cause is a version split:
 the pinned vLLM image ships lmcache **0.5.6** (the CLIENT inside the

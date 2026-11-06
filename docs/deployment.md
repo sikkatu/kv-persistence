@@ -235,6 +235,19 @@ journalctl -u lmcache-server -f
 * Do NOT run both the unit and `start-cache.sh` at the same time: they would
   fight over the same cache root and ports.
 
+## Stopping (engine vs cache service)
+The engine and the cache service are SEPARATE processes; stop each one
+explicitly:
+
+* **vLLM engine** (the container started by `run-vllm-with-persist.sh`):
+  `bash scripts/stop-engine.sh` (or `docker rm -f mimo-pro-tp4-kvp` if the
+  script is unavailable). Ctrl-C during the launcher only stops the
+  LAUNCHER -- the container keeps running; run `stop-engine.sh` after it.
+* **Cache service** (lmcache server): `bash scripts/stop-cache.sh`
+  (graceful SIGTERM, data files are KEPT).
+
+Stopping either one never deletes persistent cache data on disk.
+
 ## Rollback (one command)
 
 ```bash
