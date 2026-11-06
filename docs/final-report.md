@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(237 unit tests + 19 more offline config/docs tests = 256 offline collected,
-254 passed + 2 skipped; 271 collected total including the live-`lmcache`
+(240 unit tests + 19 more offline config/docs tests = 259 offline collected,
+257 passed + 2 skipped; 274 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 237 unit tests (`tests/unit`, 235 passed + 2 skipped),
-19 top-level offline tests, 256 offline collected (254 passed + 2 skipped),
-271 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 240 unit tests (`tests/unit`, 238 passed + 2 skipped),
+19 top-level offline tests, 259 offline collected (257 passed + 2 skipped),
+274 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -659,10 +659,18 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
   (root -> host-root). Documented launch:
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh` then
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`.
+* **Same-UID probe (round 45g)**: `ipc-test.sh` now supports
+  `PRODUCER_USER=$(id -u):$(id -g)` -- the producer container runs
+  with the SAME UID as the host consumer. PASS would mean the
+  transfer works WITHOUT root at the GPU level, but the engine
+  launcher still needs `--user`/`-e HOME=...`/path fixes (HF cache
+  is mounted at /root/.cache/huggingface; triton and flashinfer
+  expect /root) -- that path is NOT wired into
+  `run-vllm-with-persist.sh` and the verdict says so honestly.
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-11 tests (237 unit / 256 offline / 271 total).
+14 tests (240 unit / 259 offline / 274 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight

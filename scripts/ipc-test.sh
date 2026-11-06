@@ -15,7 +15,10 @@
 #   IMAGE=<pinned @sha256:...> bash scripts/ipc-test.sh   (explicit override)
 #   CONSUMER=host-root  bash scripts/ipc-test.sh   (sudo consumer)
 #   CONSUMER=container  bash scripts/ipc-test.sh   (2nd container)
-# Env: HOST_PY (default ~/.venvs/lmcache/bin/python), GPU_IDX (default 0).
+# Env: HOST_PY (default ~/.venvs/lmcache/bin/python), GPU_IDX (default 0),
+#     PRODUCER_USER -- run the producer container with this UID:GID
+#     (e.g. PRODUCER_USER=$(id -u):$(id -g) to test the SAME-UID path:
+#     PASS means the transfer works WITHOUT root).
 #
 # Result:
 #   PASS  = GPU memory crosses container -> consumer. If the server still
@@ -93,8 +96,13 @@ PY
 python3 -m py_compile "$D/producer.py" "$D/consumer.py" || die "generated test scripts do not compile"
 
 echo "-- producer in container (GPU $GPU_IDX, --ipc host, same image as the engine)"
+PRODUCER_USER="${PRODUCER_USER:-}"
+if [ -n "$PRODUCER_USER" ]; then
+  echo "   producer UID:GID = $PRODUCER_USER (same-UID test -- no root)"
+fi
 docker rm -f kvp-ipc-test >/dev/null 2>&1 || true
 docker run -d --rm --name kvp-ipc-test --gpus all --ipc host -e GPU_IDX="$GPU_IDX" \
+  ${PRODUCER_USER:+--user "$PRODUCER_USER"} \
   -v "$D:/ipc" --entrypoint python3 "$IMAGE" /ipc/producer.py >/dev/null \
   || die "docker run failed for $IMAGE"
 
@@ -135,7 +143,14 @@ case $rc in
   0)
     echo "PASS: the consumer opened GPU memory created in the container."
     echo "      The CUDA IPC boundary works for CONSUMER=$CONSUMER -- if the cache"
-    echo "      server still fails, the cause is elsewhere (check the server log)." ;;
+    echo "      server still fails, the cause is elsewhere (check the server log)."
+    if [ -n "$PRODUCER_USER" ]; then
+      echo "      SAME-UID result: PASS -- the transfer works WITHOUT root."
+      echo "      Next: add --user \$(id -u):\$(id -g) + -e HOME=... to the engine"
+      echo "      launcher (HF cache is at /root/.cache/huggingface; triton and"
+      echo "      flashinfer expect /root). This path is NOT yet wired into"
+      echo "      run-vllm-with-persist.sh -- test it manually first."
+    fi ;;
   124)
     echo "TIMEOUT: the consumer hung while opening GPU memory from the container."
     echo "      This REPRODUCES the register_kv_caches failure."
@@ -151,12 +166,15 @@ case $rc in
     echo "FAIL (exit $rc): the consumer could not open GPU memory created in the"
     echo "      container. This REPRODUCES the register_kv_caches failure"
     echo "      (CUDA_ERROR_MAP_FAILED). Fix options:"
-    echo "        - run the cache server in the container too:"
+    echo "        - run the cache server as root (proven by CONSUMER=host-root):"
+    echo "          sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh"
+    echo "        - or run the cache server in the container too:"
     echo "          KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh"
-    echo "        - or run the cache server as root (same user as the engine container)"
-    echo "      Compare modes: CONSUMER=host-root / CONSUMER=container to isolate"
-    echo "      whether the blocker is the user (host-root PASS) or the host"
-    echo "      environment (container PASS)."
+    if [ -n "$PRODUCER_USER" ]; then
+      echo "      SAME-UID result: FAIL -- even matching UIDs is not enough here."
+    else
+      echo "      To test the same-UID path: PRODUCER_USER=\$(id -u):\$(id -g) bash scripts/ipc-test.sh"
+    fi
     echo "      Last consumer output is above." ;;
 esac
 exit $rc

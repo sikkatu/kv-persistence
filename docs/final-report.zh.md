@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（237 个单元测试 + 19 个离线配置/文档测试 = 256 个离线收集，
-254 通过 + 2 跳过；共收集 271 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（240 个单元测试 + 19 个离线配置/文档测试 = 259 个离线收集，
+257 通过 + 2 跳过；共收集 274 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：237 个单元测试（235 通过 + 2 跳过），19 个离线配置/文档测试，
-256 个离线收集（254 通过 + 2 跳过），共收集 271 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：240 个单元测试（238 通过 + 2 跳过），19 个离线配置/文档测试，
+259 个离线收集（257 通过 + 2 跳过），共收集 274 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -414,9 +414,15 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
   （root -> host-root）。文档化的启动：
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh` 然后
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`。
+* **Same-UID 探针（round 45g）**：`ipc-test.sh` 现在支持
+  `PRODUCER_USER=$(id -u):$(id -g)`——producer 容器以与主机 consumer
+  相同的 UID 运行。PASS 意味着 GPU 级传输无需 root，但引擎启动器仍需
+  `--user`/`-e HOME=...`/路径修复（HF 缓存挂载于 /root/.cache/huggingface；
+  triton 和 flashinfer 期待 /root）——该路径尚未接入
+  `run-vllm-with-persist.sh`，verdict 会如实说明。
 * Docker 模式：`start-cache.sh` 警告缓存文件属主为 root（purge/budget
   需 sudo）；`purge` 在 PermissionError 时打印原因和修复方法，而非仅错误。
-11 个测试（237 unit / 256 offline / 271 共计）。
+14 个测试（240 unit / 259 offline / 274 共计）。
 
 `register_kv_caches` 死掉（300 秒超时）——而 TCP 预检通过了。套接字开着，
 但 RPC 通道已死：TCP 可达性不能证明 lmcache 消息协议正常。修复：
