@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(204 unit tests + 19 more offline config/docs tests = 223 offline collected,
-221 passed + 2 skipped; 238 collected total including the live-`lmcache`
+(207 unit tests + 19 more offline config/docs tests = 226 offline collected,
+224 passed + 2 skipped; 241 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 204 unit tests (`tests/unit`, 202 passed + 2 skipped),
-19 top-level offline tests, 223 offline collected (221 passed + 2 skipped),
-238 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 207 unit tests (`tests/unit`, 205 passed + 2 skipped),
+19 top-level offline tests, 226 offline collected (224 passed + 2 skipped),
+241 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -620,6 +620,26 @@ Home (EN/RU/ZH).
 **Review batch round 37** (all items verified against the code first):
 **Round 38 follow-ups** (the round-37 fixes needed completions):
 **Round 39**: `ensure_cache_root` (systemd wrapper) must NOT chmod 700
+**Round 40 (install-run findings)**:
+* `setup-identity.sh` now fills the KV GEOMETRY
+  (`KVP_NUM_KV_HEADS` / `KVP_HEAD_DIM`) from the model's config.json.
+  The shipped template hard-codes head_dim=128 but MiMo-V2.6-Pro
+  serves 192 -- a fresh setup run produced a pin the gate then
+  MISMATCHed against the real engine. The template comment now says
+  the values are examples overwritten by setup-identity.sh.
+* The gate's MISMATCH output now carries actionable hints: for
+  `l2_serde` it names the codec-switch fix (same
+  `USE_LOSSLESS_SERDE` on server and launch, or restart raw); for
+  `head_dim`/`num_kv_heads` it points at rerunning
+  `setup-identity.sh`. (The gate itself worked as designed -- the
+  review run's two mismatches were real desyncs, but the message
+  left the operator guessing.)
+* `start-observability.sh`: the Grafana wait printed an IDENTICAL
+  line every 2s (reads as a hang) and 60s is too short for a cold
+  first start -- now it prints changing progress (container states)
+  at most every 10s and waits up to 180s.
+* Tests: 3 new (207 unit / 226 offline / 241 total).
+
 an arbitrary parent of a custom `KVP_CACHE_ROOT` -- with
 `KVP_CACHE_ROOT=<shared>/kvc` the parent (e.g. `/data`, 755) became
 700 and was locked away from every other user on the host (reviewer

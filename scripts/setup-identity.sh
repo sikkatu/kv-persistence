@@ -184,6 +184,39 @@ else
   printf '%s' "$TOK_REV" | grep -Eq '^[0-9a-f]{40}$' || die "KVP_TOKENIZER_REVISION not 40-hex: '$TOK_REV'"
 fi
 
+# --- 1b. KV geometry from the model's config.json -----------------------
+# Review fix (round 40): the shipped template hard-codes KVP_HEAD_DIM=128,
+# but MiMo-V2.6-Pro serves head_dim=192 -- the gate then MISMATCHed the real
+# engine against the stale pin. Fill the geometry from config.json exactly
+# like the revisions above, so the pin always matches the served model.
+GEO="$(python3 - "$MODEL_DIR" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+try:
+    cfg = json.load(open(os.path.join(d, "config.json")))
+except Exception:
+    cfg = {}
+def pick(*names):
+    for n in names:
+        v = cfg.get(n)
+        if isinstance(v, int) and v > 0:
+            return v
+    return 0
+nkvh = pick("num_key_value_heads")
+hd = pick("head_dim")
+if hd == 0:
+    hidden = pick("hidden_size")
+    nqh = pick("num_attention_heads")
+    hd = hidden // nqh if hidden and nqh else 0
+print(f"{nkvh} {hd}")
+PY
+)" || die "cannot read KV geometry from $MODEL_DIR/config.json"
+set -- $GEO
+GEO_NKV="$1"; GEO_HD="$2"
+[ -n "$GEO_NKV" ] && [ "$GEO_NKV" != "0" ] || die "config.json has no num_key_value_heads -- refusing to guess the KV geometry"
+[ -n "$GEO_HD" ] && [ "$GEO_HD" != "0" ] || die "config.json has no head_dim (and hidden_size/num_attention_heads missing) -- refusing to guess"
+echo "  KV geometry from config.json: num_key_value_heads=$GEO_NKV head_dim=$GEO_HD"
+
 # --- 2. chat-template digest (single documented algorithm) --------------
 DIG="$(python3 - "$MODEL_DIR" "$ROOT/implementation" <<'PY'
 import sys
@@ -202,9 +235,9 @@ echo "  digest: $DIGEST"
 # shell-safe as-is. Quoted values would later be read verbatim (with the quotes)
 # by the verification step and by config parsers -- the round-trip bug this
 # script used to have ("got '\"76ce...\"'").
-python3 - "$CONFIG" "$REV" "$TOK_REV" "$DIGEST" <<'PY'
+python3 - "$CONFIG" "$REV" "$TOK_REV" "$DIGEST" "$GEO_NKV" "$GEO_HD" <<'PY'
 import re, sys
-path, rev, tokrev, digest = sys.argv[1:5]
+path, rev, tokrev, digest, geo_nkv, geo_hd = sys.argv[1:7]
 text = open(path).read()
 def setvar(name, value):
     global text
@@ -216,8 +249,12 @@ def setvar(name, value):
 setvar("KVP_MODEL_REVISION", rev)
 setvar("KVP_TOKENIZER_REVISION", tokrev)
 setvar("KVP_CHAT_TEMPLATE_DIGEST", digest)
+# Review fix (round 40): the KV geometry comes from config.json -- the
+# template's KVP_HEAD_DIM=128 is wrong for models like MiMo-V2.6-Pro (192).
+setvar("KVP_NUM_KV_HEADS", geo_nkv)
+setvar("KVP_HEAD_DIM", geo_hd)
 open(path, "w").write(text)
-print("written: KVP_MODEL_REVISION, KVP_TOKENIZER_REVISION, KVP_CHAT_TEMPLATE_DIGEST")
+print("written: KVP_MODEL_REVISION, KVP_TOKENIZER_REVISION, KVP_CHAT_TEMPLATE_DIGEST, KVP_NUM_KV_HEADS, KVP_HEAD_DIM")
 PY
 
 # --- 4. verify what we just wrote --------------------------------------

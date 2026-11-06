@@ -477,6 +477,23 @@ if bad:
     print("\nENGINE IDENTITY MISMATCH -- cache reuse is FORBIDDEN:")
     for b in bad:
         print("  !!! " + b)
+    # Review fix (round 40): name the concrete fix for the two common causes
+    # instead of a generic "fix identity.env" -- an l2_serde mismatch means
+    # the SERVER and the LAUNCH ran with different codec switches, and a
+    # head_dim/num_kv_heads mismatch means the template geometry does not
+    # match the served model.
+    _bad_labels = [b.split(":", 1)[0] for b in bad]
+    if "l2_serde" in _bad_labels:
+        print("HINT (l2_serde): the RUNNING cache server and this launch disagree")
+        print("  about the lossless codec. Use the SAME switch on both sides:")
+        print("    USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh   # server on zstd")
+        print("    USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh")
+        print("  or restart the server WITHOUT the switch (raw/none) and relaunch.")
+        print("  (The codec is part of the cache identity -- a change is a safe MISS.)")
+    if any(l in _bad_labels for l in ("head_dim", "num_kv_heads")):
+        print("HINT (KV geometry): the identity pins do not match the served model.")
+        print("  Rerun: bash scripts/setup-identity.sh \"$MODEL_DIR\"")
+        print("  (it now fills KVP_NUM_KV_HEADS / KVP_HEAD_DIM from config.json).")
     print("Fix configs/*/identity.env(.local) (scripts/setup-identity.sh), rerun.")
     sys.exit(4)
 if inconc:

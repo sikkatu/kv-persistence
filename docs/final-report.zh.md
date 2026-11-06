@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（204 个单元测试 + 19 个离线配置/文档测试 = 223 个离线收集，
-221 通过 + 2 跳过；共收集 238 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（207 个单元测试 + 19 个离线配置/文档测试 = 226 个离线收集，
+224 通过 + 2 跳过；共收集 241 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：204 个单元测试（202 通过 + 2 跳过），19 个离线配置/文档测试，
-223 个离线收集（221 通过 + 2 跳过），共收集 238 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：207 个单元测试（205 通过 + 2 跳过），19 个离线配置/文档测试，
+226 个离线收集（224 通过 + 2 跳过），共收集 241 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -384,6 +384,22 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 **评审批次，第 37 轮**（每个问题都先对照代码核实）：
 **第 38 轮补充**（第 37 轮修复需要完善）：
 **第 39 轮**：`ensure_cache_root`（systemd 包装器）不应 chmod 700 自定义
+**第 40 轮（真实安装中发现的问题）**：
+* `setup-identity.sh` 现在从模型的 config.json 填充 KV 几何
+  （`KVP_NUM_KV_HEADS` / `KVP_HEAD_DIM`）。模板硬编码 head_dim=128，
+  而 MiMo-V2.6-Pro 实际为 192——全新 setup 产生的 PIN 随后被门禁对真实
+  引擎判为 MISMATCH。模板注释现在说明这些值只是示例、会被
+  setup-identity.sh 覆写。
+* 门禁的 MISMATCH 输出现在带有可操作提示：`l2_serde` 给出编解码开关
+  修复（服务器与启动用同一 `USE_LOSSLESS_SERDE`，或不带压缩重启）；
+  `head_dim`/`num_kv_heads` 指向重跑 `setup-identity.sh`。（门禁本身
+  工作正常——评审运行中的两个不匹配是真实的失步，但消息让操作员无从
+  下手。）
+* `start-observability.sh`：Grafana 等待每 2 秒打印相同行（看似卡死），
+  且冷启动 60 秒太短——现在最多每 10 秒打印变化的进度（容器状态），
+  等待上限 180 秒。
+* 测试：3 个新增（207 unit / 226 offline / 241 共计）。
+
 `KVP_CACHE_ROOT` 的任意父目录——当 `KVP_CACHE_ROOT=<共享>/kvc` 时，父目录
 （如 `/data`，755）变成 700，主机上其他用户全部被挡在外面（评审者在旧代码
 路径上实测确认）。父目录收紧现在仅限于 StateDirectory 默认路径

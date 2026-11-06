@@ -28,23 +28,35 @@ echo "-- starting the observability stack (OTel Collector, Tempo, Prometheus, Gr
 ( cd "$OBS_DIR" && docker compose up -d )
 
 echo
-echo "Waiting for Grafana to answer on :3000 (up to ~60s) ..."
+echo "Waiting for Grafana to answer on :3000 (up to 180s) ..."
 START_TS=$(date +%s)
 READY=0
-for _ in $(seq 1 30); do
+LAST_LINE=""
+for _ in $(seq 1 90); do
   if curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:3000/api/health 2>/dev/null; then
     READY=1
     break
   fi
   ELAPSED=$(( $(date +%s) - START_TS ))
-  printf '[%3ds] grafana not ready yet ...\n' "$ELAPSED"
+  # Review fix (round 40): print CHANGING progress only -- an identical line
+  # every 2s read as a hang (user output rule: real progress, no repeats).
+  # Every 10s show the stack's container states so the operator sees life.
+  if [ $(( ELAPSED % 10 )) -lt 2 ]; then
+    STATES="$(docker ps -a --filter name=obs_ --format '{{.Names}}={{.State}}' 2>/dev/null | paste -sd, -)"
+    LINE="[$ELAPSED s] grafana starting (containers: ${STATES:-none})"
+    if [ "$LINE" != "$LAST_LINE" ]; then
+      printf '%s\n' "$LINE"
+      LAST_LINE="$LINE"
+    fi
+  fi
   sleep 2
 done
 echo
 if [ "$READY" = 1 ]; then
-  echo "=== observability stack is UP ==="
+  echo "=== observability stack is UP (after $(( $(date +%s) - START_TS ))s) ==="
 else
-  echo "WARNING: Grafana did not answer within 60s -- check: docker logs obs_grafana" >&2
+  echo "WARNING: Grafana did not answer within 180s -- check: docker logs obs_grafana" >&2
+  docker ps -a --filter name=obs_ --format '{{.Names}} {{.State}} {{.Status}}' 2>/dev/null || true
 fi
 echo
 echo "  Grafana     : http://localhost:3000   (anonymous Admin, no login)"
