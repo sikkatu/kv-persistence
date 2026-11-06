@@ -346,7 +346,19 @@ the container. Align both sides to the SAME version:
   if [ "${KVP_SKIP_IPC_TEST:-0}" = "1" ]; then
     echo "pre-flight: CUDA IPC test SKIPPED (KVP_SKIP_IPC_TEST=1)"
   elif [ -x "$HERE/ipc-test.sh" ]; then
-    _ipc_mode=host; case "${KVP_LAUNCH_MODE:-host}" in docker) _ipc_mode=container ;; esac
+    # Round 45f: the consumer must match the SERVER PROCESS user, not just
+    # KVP_LAUNCH_MODE -- a sudo-started host server runs as root and needs
+    # the host-root consumer (the ipc-test proved root is the fix).
+    _ipc_mode=host
+    _ipc_pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
+    if [ -f "$_ipc_pidf" ]; then
+      _ipc_pid="$(tr -d '[:space:]' < "$_ipc_pidf")"
+      _ipc_uid="$(awk '/^Uid:/{print $2}' "/proc/$_ipc_pid/status" 2>/dev/null || echo '')"
+      if [ "$_ipc_uid" = "0" ]; then
+        _ipc_mode=host-root
+      fi
+    fi
+    if [ "${KVP_LAUNCH_MODE:-host}" = "docker" ]; then _ipc_mode=container; fi
     echo "pre-flight: CUDA IPC boundary test (consumer=$_ipc_mode) -- can the cache"
     echo "            server open GPU memory created in the container? (~1 min)"
     if IMAGE="$IMAGE" CONSUMER="$_ipc_mode" bash "$HERE/ipc-test.sh"; then

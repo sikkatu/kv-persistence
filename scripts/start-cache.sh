@@ -40,7 +40,11 @@ esac
 # filename fix AND the lossless compression serde registration. The probe must
 # run through the same launcher to match the actual server.
 export PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}"
-LAUNCH=(python3 -m kvpersist.launch)
+# Round 45f: resolve the lmcache venv python even under sudo (the cache
+# server runs as root to open CUDA IPC memory; sudo resets HOME/PATH).
+KVP_PY="$(_kvp_python)"
+echo "python: $KVP_PY"
+LAUNCH=("$KVP_PY" -m kvpersist.launch)
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   LMCACHE_HELP="$(docker run --rm -v "$ROOT/implementation:/kvp-impl:ro" \
     -e PYTHONPATH=/kvp-impl --entrypoint python3 "$DOCKER_IMAGE" \
@@ -128,7 +132,7 @@ $CODEC_PROBE
 Either install the codec into the image, or fall back to LMCACHE_L2_SERDE=none."
   else
     PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}" \
-      python3 -c "from kvpersist.compress_serde import check_codec_available; check_codec_available('$LMCACHE_L2_SERDE')" 2>&1 \
+      "$KVP_PY" -c "from kvpersist.compress_serde import check_codec_available; check_codec_available('$LMCACHE_L2_SERDE')" 2>&1 \
       || die "lossless codec '$LMCACHE_L2_SERDE' is not available in this python.
 Install it (pip install ${LMCACHE_L2_SERDE/zstd/zstandard}) or fall back to LMCACHE_L2_SERDE=none."
   fi

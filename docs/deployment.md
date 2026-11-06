@@ -136,7 +136,24 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 
 or permanently in `configs/generic/lmcache-server.env(.local)`:
 
+```
+### The cache server MUST run as root (round 45)
+
+The CUDA IPC boundary test (`bash scripts/ipc-test.sh`) proved on the
+target host: the engine container (root) creates GPU memory that only
+ROOT on the host can open. A non-root cache server fails at
+`register_kv_caches` with `CUDA_ERROR_MAP_FAILED`. Start BOTH services
+with sudo:
+
 ```bash
+sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+`start-cache.sh` resolves the lmcache venv python under sudo
+automatically (`SUDO_UID`/`SUDO_USER` -- no manual export needed).
+Cache files will be root-owned: run `budget-report.sh` / `purge` with
+sudo as well.bash
 LMCACHE_L2_SERDE=zstd     # or lz4, or none
 ```
 

@@ -126,7 +126,23 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 
 или постоянно в `configs/generic/lmcache-server.env(.local)`:
 
+```
+### Кэш-сервер ОБЯЗАН работать под root (round 45)
+
+Тест CUDA IPC границы (`bash scripts/ipc-test.sh`) доказал на целевом
+хосте: контейнер движка (root) создаёт GPU-память, которую может открыть
+только ROOT на хосте. Кэш-сервер не под root падает на
+`register_kv_caches` с `CUDA_ERROR_MAP_FAILED`. Запускайте ОБА сервиса
+через sudo:
+
 ```bash
+sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+`start-cache.sh` сам находит python venv lmcache под sudo
+(`SUDO_UID`/`SUDO_USER` -- ручные export не нужны). Файлы кэша будут
+принадлежать root: `budget-report.sh` / `purge` тоже запускайте с sudo.bash
 LMCACHE_L2_SERDE=zstd     # или lz4, или none
 ```
 

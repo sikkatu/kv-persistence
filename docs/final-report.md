@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(233 unit tests + 19 more offline config/docs tests = 252 offline collected,
-250 passed + 2 skipped; 267 collected total including the live-`lmcache`
+(237 unit tests + 19 more offline config/docs tests = 256 offline collected,
+254 passed + 2 skipped; 271 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 233 unit tests (`tests/unit`, 231 passed + 2 skipped),
-19 top-level offline tests, 252 offline collected (250 passed + 2 skipped),
-267 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 237 unit tests (`tests/unit`, 235 passed + 2 skipped),
+19 top-level offline tests, 256 offline collected (254 passed + 2 skipped),
+271 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -648,10 +648,21 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
   already failed).
 * `ipc-test.sh` now resolves IMAGE itself from the recipe -- the
   command is simply `bash scripts/ipc-test.sh`, no placeholders.
+* **ipc-test verdict (2026-11-07, real GPU host)**: `host` FAIL
+  (MAP_FAILED), `host-root` **PASS** (sum matched), `container`
+  FAIL (INVALID_CONTEXT -- a test artifact). CONCLUSION: the cache
+  server MUST run as root (same user as the engine container).
+  `start-cache.sh` is now sudo-safe: `_kvp_python` in env.sh
+  resolves the original user's venv python under sudo
+  (SUDO_UID/SUDO_USER), LAUNCH and the codec probe use it; the
+  pre-flight IPC consumer mode follows the server PROCESS user
+  (root -> host-root). Documented launch:
+  `sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh` then
+  `sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`.
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-7 tests (233 unit / 252 offline / 267 total).
+11 tests (237 unit / 256 offline / 271 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight

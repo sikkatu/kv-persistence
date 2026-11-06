@@ -97,7 +97,22 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 
 或在 `configs/generic/lmcache-server.env(.local)` 中永久设置：
 
+```
+### 缓存服务器必须以 root 运行（round 45）
+
+CUDA IPC 边界测试（`bash scripts/ipc-test.sh`）在目标主机上证实：引擎容器
+（root）创建的 GPU 内存只有主机上的 ROOT 能打开。非 root 的缓存服务器会在
+`register_kv_caches` 处以 `CUDA_ERROR_MAP_FAILED` 失败。请用 sudo 启动两个
+服务：
+
 ```bash
+sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+`start-cache.sh` 在 sudo 下自动解析 lmcache venv 的 python
+（`SUDO_UID`/`SUDO_USER`——无需手动 export）。缓存文件将属 root：
+`budget-report.sh` / `purge` 也请用 sudo 运行。bash
 LMCACHE_L2_SERDE=zstd     # 或 lz4，或 none
 ```
 

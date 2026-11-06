@@ -132,6 +132,30 @@ _kvp_resolve_l2_serde(){
   return 0
 }
 
+# Round 45f: resolve the lmcache venv python EVEN UNDER SUDO. `sudo` resets
+# HOME and PATH, so `python3` would miss ~/.venvs/lmcache -- and the cache
+# server must be able to run as root (the ipc-test proved root is required
+# to open CUDA IPC memory created by the engine container). Under sudo we
+# derive the ORIGINAL user's home from SUDO_USER/SUDO_UID; otherwise $HOME
+# is used. Prints the python path; falls back to plain python3.
+_kvp_python(){
+  local _home="$HOME" _py
+  if [ -n "${SUDO_UID:-}" ] && [ "${SUDO_UID}" != "0" ]; then
+    _home="$(getent passwd "${SUDO_UID}" 2>/dev/null | cut -d: -f6)"
+    [ -n "$_home" ] || _home="$HOME"
+  elif [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    _home="$(getent passwd "${SUDO_USER}" 2>/dev/null | cut -d: -f6)"
+    [ -n "$_home" ] || _home="$HOME"
+  fi
+  for _py in "$_home/.venvs/lmcache/bin/python" "$_home/.venvs/lmcache/bin/python3"; do
+    if [ -x "$_py" ]; then
+      printf '%s' "$_py"
+      return 0
+    fi
+  done
+  command -v python3 2>/dev/null || echo python3
+}
+
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
   # Remember whether LMCACHE_L2_SERDE / KVP_L2_SERDE were pre-exported in the
