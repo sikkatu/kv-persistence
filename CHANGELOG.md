@@ -8,6 +8,15 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 53 (cold baseline waits for the API)
+
+* `test-recovery.sh` cold baseline fired its first HTTP request
+  immediately and died with a raw Python traceback (Connection refused)
+  when the engine was still loading or had been stopped. It now waits via
+  `api_ready` exactly like scenarios A/B, and a refused connection prints
+  a short actionable message instead of a traceback.
+* `api_ready` announces what it is waiting for (no silent 30-min loop).
+
 ## Round 52 (scenario B: honest failure reporting)
 
 * `test-recovery.sh` scenario B: `docker stop` no longer swallows its

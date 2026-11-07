@@ -7,6 +7,14 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 53 轮（cold baseline 等待 API）
+
+* `test-recovery.sh` 的 cold baseline 立即发送第一个 HTTP 请求，若引擎仍在
+  加载或已停止则以原始 Python traceback（Connection refused）失败。现在它
+  像场景 A/B 一样通过 `api_ready` 等待，连接被拒时打印简短可操作的消息，
+  而非 traceback。
+* `api_ready` 会说明正在等待什么（不再有静默的 30 分钟循环）。
+
 ## 第 52 轮（场景 B：诚实的错误报告）
 
 * `test-recovery.sh` 场景 B：`docker stop` 不再吞掉错误输出

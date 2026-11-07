@@ -87,7 +87,7 @@ l2_retrievals(){ # read-from-L2 events appended after the scenario's log mark
 l2_stored(){ # write-to-L2 events appended after the scenario's log mark
   new_log "$1" | grep -cE 'L2 store completed: adapter [0-9]+, [1-9][0-9]* succeeded' || true
 }
-api_ready(){ for i in $(seq 1 180); do
+api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 min)"; for i in $(seq 1 180); do
     # Review fix (round 46): the loop used to wait 20 min on a DEAD container
     # (the engine crashed with code 1 minutes after restart). Check the
     # container state and abort as soon as it is not running.
@@ -148,15 +148,22 @@ body=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"message
 req=urllib.request.Request(api+"/v1/chat/completions",data=body,
   headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
 ttft=None;usage={}
-with urllib.request.urlopen(req,timeout=1800) as r:
-  for raw in r:
-    line=raw.decode().strip()
-    if not line.startswith("data: "): continue
-    p=line[6:]
-    if p=="[DONE]": break
-    o=json.loads(p)
-    if o.get("choices") and o["choices"][0].get("delta",{}).get("content") and ttft is None: ttft=time.time()
-    if o.get("usage"): usage=o["usage"]
+# Review fix (round 53): a refused connection used to dump a raw Python
+# traceback at the operator. Print a short actionable message instead.
+try:
+  with urllib.request.urlopen(req,timeout=1800) as r:
+    for raw in r:
+      line=raw.decode().strip()
+      if not line.startswith("data: "): continue
+      p=line[6:]
+      if p=="[DONE]": break
+      o=json.loads(p)
+      if o.get("choices") and o["choices"][0].get("delta",{}).get("content") and ttft is None: ttft=time.time()
+      if o.get("usage"): usage=o["usage"]
+except urllib.error.URLError as e:
+  print(f"REQUEST FAILED: cannot reach the engine at {api}: {e}", file=sys.stderr)
+  print("  engine still loading, or it is not running -- check: docker ps / docker logs " + os.environ.get("CONTAINER","mimo-pro-tp4-kvp"), file=sys.stderr)
+  sys.exit(3)
 json.dump({"ttft_abs":ttft,"usage":usage},open(out,"w"),indent=2)
 PYEOF
   t1=$(date +%s.%N)
@@ -205,6 +212,11 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 echo "== COLD baseline (no cache reuse expected) =="
+# Review fix (round 53): the cold request used to fire IMMEDIATELY. If the
+# engine was still loading (or stopped after a previous run) the request
+# died with Connection refused and the operator saw a raw Python traceback.
+# Wait for the API exactly like scenarios A/B do.
+api_ready || PA pre "API is not up before the cold baseline -- start the engine first (bash scripts/run-vllm-with-persist.sh), wait for it to load, then rerun"
 M0=$(log_mark); B0=$(L2_bytes)
 ask cold "$M0"
 T_COLD=$(python3 -c "import json;d=json.load(open('$OUT/cold.summary.json'));print(d['ttft_s'])")
