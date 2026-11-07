@@ -128,7 +128,7 @@
       "type": "stat",
       "id": 3,
       "title": "Controllers up",
-      "description": "1 when every controller started; 0 means one failed to start and its work is not happening.",
+      "description": "Coordinator controllers up. In this repo there is NO coordinator (single-server cache) -- \"No data\" here is EXPECTED. Red is the threshold colour, not a real failure.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -148,7 +148,19 @@
                 "value": 1
               }
             ]
-          }
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "n/a (no coordinator in single-server mode)"
+                }
+              }
+            }
+          ],
+          "noValue": "n/a (no coordinator in single-server mode)"
         },
         "overrides": []
       },
@@ -3003,5 +3015,6 @@
         }
       ]
     }
-  ]
+  ],
+  "description": "Multi-server LMCache coordinator telemetry (lmcache_coordinator_*). NOT APPLICABLE in this repo: kv-persistence runs a SINGLE cache server, there is no coordinator process, so every panel here legitimately shows \"No data\". This is expected, not a failure -- use the \"LMCache\" dashboard instead. Panels turn red on \"No data\" because of their thresholds; ignore them in single-server mode."
 }

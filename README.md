@@ -75,6 +75,7 @@ Chat client → vLLM (TP4) → KV connector (LMCacheMPConnector)
 | `KV_PERSIST=1` in the recipe launchers | [Recipes Integration](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration) | [docs/compatibility.md](docs/compatibility.md) |
 | Security rules | [Security](https://github.com/sikkatu/kv-persistence/wiki/Security) | [docs/security.md](docs/security.md) |
 | Honest status & gaps | — | [docs/final-report.md](docs/final-report.md) |
+| Per-round changelog | — | [CHANGELOG.md](CHANGELOG.md) |
 
 ## Quick start
 
@@ -169,18 +170,18 @@ cd observability && docker compose up -d
 **Dashboard/version honesty note (review round 18):** the dashboards are the
 *official* LMCache assets, but they were authored against a NEWER LMCache than
 the pinned **0.5.6** this repo runs (the dashboard audit below was
-performed against the 0.5.3 source). Static comparison against the 0.5.3 source
-(`lmcache/v1/mp_observability/`) shows most panels map to real 0.5.3 metrics
+performed against the pinned 0.5.6 source). Static comparison against the pinned 0.5.6 source
+(`lmcache/v1/mp_observability/`) shows most panels map to real 0.5.6 metrics
 (L1/L2 usage gauges, store/prefetch pipelines, eviction loop, event-bus,
-throughput histograms), but **4 of 28 panels** referenced metrics 0.5.3 never
+throughput histograms), but **4 of 28 panels** referenced metrics 0.5.6 never
 emits (lookup prompt/request-hit token counters, L0↔L1 inflight store/retrieve
 counters, transfer-phase DMA counters). Those panels are now **remapped to the
-real 0.5.3 metrics** (`lookup_requested`/`lookup_hit` for the hit rate,
+real 0.5.6 metrics** (`lookup_requested`/`lookup_hit` for the hit rate,
 `l1_read`/`l1_write` chunk counters for L0↔L1 activity, `l0_l1_store_throughput`
 for DMA throughput). The remap is a best-effort semantic match, not an upstream
 guarantee — labels/units may differ slightly from the original intent.
-The *LMCache Coordinator* dashboard expects coordinator telemetry that 0.5.3's
-`mp_coordinator` does not export (48 series with no 0.5.3 analogue); this repo
+The *LMCache Coordinator* dashboard expects coordinator telemetry that the pre-0.5.6
+`mp_coordinator` does not export (48 series with no pre-0.5.6 analogue); this repo
 does not run a coordinator, so that dashboard will legitimately stay empty.
 
 **Security:** every published port is bound to `127.0.0.1` only (the

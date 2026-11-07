@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(265 unit tests + 19 more offline config/docs tests = 284 offline collected,
-282 passed + 2 skipped; 299 collected total including the live-`lmcache`
+(272 unit tests + 19 more offline config/docs tests = 291 offline collected,
+289 passed + 2 skipped; 306 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -94,7 +94,7 @@ on the first post-restart request, TTFT drop vs cold baseline, and
 ## Per-identity isolation at the LMCache storage level (review P1-3)
 
 The identity namespace is now enforced at the REAL LMCache storage level, not
-just as a local label. Verified against the pinned LMCache 0.5.3 source and a
+just as a local label. Verified against the pinned LMCache 0.5.6 source and a
 live store/lookup run (integration test
 `test_identity_namespace_isolates_lmcache_storage`, see docs/benchmarks.md):
 
@@ -160,7 +160,7 @@ before measuring).
    Review round 13: the score's prefix-length term is now LINEAR in tokens
    (was `log1p`), which made long reused prefixes evict FIRST; the offline
    planner is the only consumer of this ranking today.
-3. LMCache is version-pinned (`requirements-lmcache.txt`, `lmcache==0.5.3`); the
+3. LMCache is version-pinned (`requirements-lmcache.txt`, `lmcache==0.5.6`); the
    exact wheel must match the production image ABI. If it does not, `lmcache
    server` runs from the production image (documented fallback). This exact
    combination is NEEDS TESTING on host.
@@ -262,7 +262,7 @@ before measuring).
 
 ## Review round 15 fixes (verified on this host)
 
-* **cache_salt isolation fixed AT THE DISK-KEY LEVEL**: upstream 0.5.3 omits
+* **cache_salt isolation fixed AT THE DISK-KEY LEVEL**: pre-0.5.6 upstream omits
   the salt from the `nixl_store_dynamic` L2 file name (measured leak: store
   salt=tenantA -> lookup salt=tenantB returned 4/4 chunks after restart).
   New `kvpersist/salt_filename_patch.py` appends the salt to the file name;
@@ -296,7 +296,7 @@ without touching the production recipe:
 
 ### 1. Lossless-only L2 storage
 
-Upstream LMCache 0.5.3 registers only lossy (fp8, turboquant) and encryption
+Upstream LMCache before 0.5.6 registers only lossy (fp8, turboquant) and encryption
 (aesgcm) serdes -- there is NO lossless compression serde upstream. This repo
 adds one via `implementation/kvpersist/compress_serde.py`, which registers the
 `kvp-zstd` / `kvp-lz4` / `kvp-raw` serde types in LMCache's own registry at
@@ -408,7 +408,7 @@ target host in this session** (no GPU host / Docker daemon reachable).
   `--enable-prompt-tokens-details`, so `usage.prompt_tokens_details` was always
   `None` and `cached_of` read `MISSING`/0. The flag is now passed for every
   model (it only affects response verbosity).
-* **L2 log regexes matched nothing real**: verified against the pinned 0.5.3
+* **L2 log regexes matched nothing real**: verified against the pinned 0.5.6
   source (AST scan of every logger call). The real evidence lines are
   `"L2 store completed: adapter %d, %d succeeded, %d failed"`,
   `"L2 prefetch load completed: request %d, %d loaded, %d failed"` (both DEBUG
@@ -492,23 +492,23 @@ troubleshooting ×3.
   `test_marker_records_writer_pid_namespace`.
 
 **Serious (dashboards lied / scenarios raced):**
-* **Grafana "Cache Hit Rate" (and 3 more panels) were empty on 0.5.3**: the
-  vendored dashboards were copied from a NEWER LMCache than the pinned 0.5.3.
-  Verified against the 0.5.3 source (every `create_counter`/`register_gauge` in
-  `lmcache/v1/mp_observability/`): 4 of 28 panels referenced metrics 0.5.3 never
+* **Grafana "Cache Hit Rate" (and 3 more panels) were empty on the pre-0.5.6 pin**: the
+  vendored dashboards were copied from a NEWER LMCache than the pinned 0.5.6.
+  Verified against the pinned 0.5.6 source (every `create_counter`/`register_gauge` in
+  `lmcache/v1/mp_observability/`): 4 of 28 panels referenced metrics 0.5.6 never
   emits — `lookup_prompt_tokens_total` / `lookup_request_hit_tokens_total`
   (Cache Hit Rate, Lookup & Engine), `num_submitted/finished_stores|retrieves`
   (Inflight GPU Copies) and `transfer_phase_*` (MP Transfer DMA). Those panels
-  are remapped to the REAL 0.5.3 metrics (lookup_requested/hit, l1_read/l1_write,
+  are remapped to the REAL 0.5.6 metrics (lookup_requested/hit, l1_read/l1_write,
   l0_l1_store_throughput). CRITICAL correction during the fix: `l1_memory_usage_
   bytes`, `l2_usage_bytes`, `num_inflight_l2_*`, `active_prefetch_jobs` and the
-  `event_bus_*` gauges DO exist in 0.5.3 (registered via `register_gauge` in
+  `event_bus_*` gauges DO exist in 0.5.6 (registered via `register_gauge` in
   `l1_manager.py`/`storage_manager.py`/`lookup.py`) — the first patch wrongly
   replaced those too; that over-replacement was reverted. The README now says
   plainly that "official" dashboards target a newer LMCache, lists exactly which
   4 panels were remapped, and states that the **Coordinator** dashboard
   legitimately stays empty (this repo runs no coordinator; 48 of its series have
-  no 0.5.3 analogue).
+  no pre-0.5.6 analogue).
 * **L2_bytes counted registry markers**: `.kvp-active-writes/` markers are
   transient bookkeeping, not cache data — counting them could produce a false
   "L2 shrank". Now excluded from `L2_bytes`/`find`.
@@ -533,7 +533,7 @@ troubleshooting ×3.
   `repo_cfg`) AND forwarded into the docker container (`-e LMCACHE_LOG_LEVEL=…`)
   — all three launch modes agree.
 * **Token leak check for DEBUG logs (asked by the review)**: verified by static
-  audit of every `logger.debug` call in the pinned 0.5.3 — DEBUG logs carry only
+  audit of every `logger.debug` call in the pinned 0.5.6 — DEBUG logs carry only
   counts, sizes, session/request ids and chunk-key hashes, never token ids or
   prompt text. The only raw-key-material path is the opt-in `--lookup-hash-log-dir`
   JSONL file logger (OFF unless the operator sets it). Documented in
@@ -544,7 +544,7 @@ troubleshooting ×3.
 **P1 — cache-identity namespace did NOT work through the recipe**: the recipe
 launchers mounted `MODEL_DIR` at `/model`, so LMCache received one and the same
 `model_name` for every deployment (`model_config.model` = `--model` value;
-verified against `lmcache_mp_connector.py:680` of 0.5.3). Different revisions,
+verified against `lmcache_mp_connector.py:680` of 0.5.6). Different revisions,
 KV dtypes and chat templates shared ONE namespace — the README claim
 "incompatible deployments never read each other's KV" held only for
 kv-persistence's own launcher (fixed in round 13 there). Fixed in BOTH recipe
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 265 unit tests (`tests/unit`, 263 passed + 2 skipped),
-19 top-level offline tests, 284 offline collected (282 passed + 2 skipped),
-299 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 272 unit tests (`tests/unit`, 270 passed + 2 skipped),
+19 top-level offline tests, 291 offline collected (289 passed + 2 skipped),
+306 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -727,7 +727,7 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-39 tests (265 unit / 284 offline / 299 total).
+46 tests (272 unit / 291 offline / 306 total). Per-round change notes now live in [CHANGELOG.md](../CHANGELOG.md).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight
@@ -756,19 +756,19 @@ LMCache 0.5.6 restructured the L2 adapter: the agent moved to
 upstream -- its `_object_key_to_filename` now appends `@salt`.
 Both patches are now version-aware:
 * `salt_filename_patch.install()` returns `upstream` on 0.5.6+ (no
-  patch needed -- upstream isolates), `patched` on 0.5.3. The
+  patch needed -- upstream isolates), `patched` on pre-0.5.6. The
   legacy `_`-suffix naming is available via `legacy_salt_suffix`
   in the rendered adapter (migration aid only);
 * `tmp_guard.install()` wraps `dynamic_store` on the CONCRETE
   `FileDynamicNixlStorageAgent` (not the ABC's abstract method) and
-  keeps the 0.5.3 `dynamic_store_file` fallback;
+  keeps the pre-0.5.6 `dynamic_store_file` fallback;
 * `launch.py` prints "cache_salt included in L2 file names by
   upstream LMCache (0.5.6+ native '@'-suffix) -- no patch needed".
 9 tests (221 unit / 240 offline / 255 total).
 
 at `register_kv_caches` again -- the root cause is a version split:
 the pinned vLLM image ships lmcache **0.5.6** (the CLIENT inside the
-container) while the host venv served lmcache **0.5.3** (the SERVER).
+container) while the host venv served lmcache 0.5.6 (the SERVER).
 Mixed minor versions break the MP protocol silently. Fixes:
 * `requirements-lmcache.txt` now pins `lmcache==0.5.6` -- the image
   is the single source of truth (its connector is the client);
@@ -886,7 +886,7 @@ cache ROOT itself keeps its 0700 security contract (docs/security.md).
 
 round 36)**: `lmcache server` crashed with
 `ModuleNotFoundError: No module named 'openai'` -- the pinned lmcache
-0.5.3 CLI imports `openai` while REGISTERING its bench subcommands, so
+the lmcache CLI (0.5.6) imports `openai` while REGISTERING its bench subcommands, so
 even `lmcache server` cannot start without it. `openai>=1.40,<2` is now
 pinned in `requirements-lmcache.txt`, and `kvpersist.launch` reports a
 clear install command instead of a bare traceback. Second, the launcher

@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（265 个单元测试 + 19 个离线配置/文档测试 = 284 个离线收集，
-282 通过 + 2 跳过；共收集 299 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（272 个单元测试 + 19 个离线配置/文档测试 = 291 个离线收集，
+289 通过 + 2 跳过；共收集 306 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -34,7 +34,7 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 ## LMCache 存储级别的身份隔离（review P1-3）
 
 身份命名空间现在在**真实** LMCache 存储中强制隔离数据，而不仅是本地标签。
-已通过固定版 LMCache 0.5.3 源码和实际写入/查找运行验证（集成测试
+已通过固定版 LMCache 0.5.6 源码和实际写入/查找运行验证（集成测试
 `test_identity_namespace_isolates_lmcache_storage`，见 docs/benchmarks.zh.md）：
 
 * LMCache 缓存键（`ObjectKey.model_name`）同时构成键和 `nixl_store_dynamic`
@@ -112,7 +112,7 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 
 ## 第 15 轮审阅修复（已在本机验证）
 
-* **cache_salt 隔离已在磁盘键层面修复**：上游 0.5.3 不把 salt 写入
+* **cache_salt 隔离已在磁盘键层面修复**：上游（0.5.6 之前）不把 salt 写入
   `nixl_store_dynamic` 的 L2 文件名（实测泄漏：salt=tenantA 写入 → salt=tenantB
   查找返回 4/4 分块）。新增 `kvpersist/salt_filename_patch.py` 把 salt 追加到
   文件名；所有启动器（`scripts/start-cache.sh` host+docker、
@@ -134,7 +134,7 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 
 ## 已知限制（同前）
 1. 硬件验收（A/B 测试）未在本会话执行——目标主机不可达；脚本与协议完全就绪。
-2. LMCache 0.5.3 与生产镜像 PyTorch/CUDA 组合待硬件最终验证。
+2. LMCache 0.5.6 与生产镜像 PyTorch/CUDA 组合待硬件最终验证。
 3. 去重文档已完整记录；实际效果需在目标配置上度量。
 
 ## 第 13 轮审阅修复（已在本机验证）
@@ -173,7 +173,7 @@ INCONCLUSIVE = 拒绝复用缓存，绝不猜测。
 
 ### 1. L2 仅无损存储
 
-上游 LMCache 0.5.3 仅注册有损（fp8、turboquant）与加密（aesgcm）serde ——
+上游 LMCache（0.5.6 之前）仅注册有损（fp8、turboquant）与加密（aesgcm）serde ——
 上游不存在无损压缩 serde。本仓库通过 `implementation/kvpersist/compress_serde.py`
 在运行时向 LMCache 自身注册表注册 `kvp-zstd` / `kvp-lz4` / `kvp-raw` serde
 类型（与 salt 文件名补丁相同的启动器模式，现已统一到
@@ -238,7 +238,7 @@ bash scripts/start-observability.sh     # 一条命令，Grafana 位于 :3000
 * **`test-recovery.sh` 不可能 PASS**：启动器未传 `--enable-prompt-tokens-details`，
   因此 `usage.prompt_tokens_details` 恒为 `None`，`cached_of` 读到 0/MISSING。
   该标志现在对任何模型都传递。
-* **日志正则与 LMCache 0.5.3 真实日志不符**：真实证据行是
+* **日志正则与 LMCache 0.5.6 真实日志不符**：真实证据行是
   `L2 store completed: adapter N, N succeeded`、
   `L2 prefetch load completed: request N, N loaded`（均 DEBUG 级别）和
   `Prefetch request completed (L1+L2)`（INFO）。旧模式只能匹配错误行。新正则
@@ -289,21 +289,21 @@ benchmarks.md 的验收标准改为脚本实际匹配的字符串；未经证实
   `test_marker_records_writer_pid_namespace`。
 
 **严重（仪表盘不实 / 场景竞态）：**
-* **Grafana「Cache Hit Rate」（及另外 3 个面板）在 0.5.3 上为空**：内置仪表盘是
-  从比固定的 0.5.3 更新的 LMCache 复制的。通过比对 0.5.3 源码中每个
+* **Grafana「Cache Hit Rate」（及另外 3 个面板）在 0.5.6 之前的固定版本上为空**：内置仪表盘是
+  从比固定的 0.5.6 更新的 LMCache 复制的。通过比对 0.5.6 源码中每个
   `create_counter`/`register_gauge`（`lmcache/v1/mp_observability/`）确认：28 个
-  面板中有 **4 个**引用了 0.5.3 从不输出的指标 ——
+  面板中有 **4 个**引用了 0.5.6 从不输出的指标 ——
   `lookup_prompt_tokens_total` / `lookup_request_hit_tokens_total`（Cache Hit
   Rate、Lookup & Engine）、`num_submitted/finished_stores|retrieves`
   （Inflight GPU Copies）、`transfer_phase_*`（MP Transfer DMA）。这些面板已改用
-  **真实的 0.5.3 指标**（lookup_requested/hit、l1_read/l1_write、
+  **真实的 0.5.6 指标**（lookup_requested/hit、l1_read/l1_write、
   l0_l1_store_throughput）。修复过程中的**重要更正**：`l1_memory_usage_bytes`、
   `l2_usage_bytes`、`num_inflight_l2_*`、`active_prefetch_jobs` 以及
-  `event_bus_*` gauge 在 0.5.3 中**是存在的**（通过 `register_gauge` 在
+  `event_bus_*` gauge 在 0.5.6 中**是存在的**（通过 `register_gauge` 在
   `l1_manager.py`/`storage_manager.py`/`lookup.py` 中注册）—— 第一版补丁错误地
   连它们一起替换了；该过度替换已回退。README 现在明确说明「官方」仪表盘是针对
   更新版本的 LMCache 编写的，列出被替换的 4 个面板，并说明 **Coordinator** 仪表盘
-  合理地保持为空（本仓库不运行 coordinator；其 48 个指标在 0.5.3 中没有对应物）。
+  合理地保持为空（本仓库不运行 coordinator；其 48 个指标在 0.5.6 中没有对应物）。
 * **L2_bytes 把注册表标记算进了总量**：`.kvp-active-writes/` 中的标记是临时簿记，
   不是缓存数据 —— 把它们算进去可能导致误报「L2 shrank」。现在已从
   `L2_bytes`/`find` 中排除。
@@ -322,7 +322,7 @@ benchmarks.md 的验收标准改为脚本实际匹配的字符串；未经证实
   用 INFO。现在默认值被明确记录为有意为之（验收证据行需要 DEBUG），该值由
   `scripts/env.sh`、`systemd/kvp-lmcache-server`（经 `repo_cfg`）以及
   docker 容器（`-e LMCACHE_LOG_LEVEL=…`）一致读取 —— 三种启动模式统一。
-* **DEBUG 日志的 token 泄漏检查（评审要求）**：已对固定的 0.5.3 中每个
+* **DEBUG 日志的 token 泄漏检查（评审要求）**：已对固定的 0.5.6 中每个
   `logger.debug` 调用做静态审计 —— DEBUG 日志只包含计数、大小、session/request
   id 和块键哈希，从不包含 token id 或提示词文本。唯一涉及原始键材料的路径是
   可选的 `--lookup-hash-log-dir` JSONL 文件记录器（默认关闭，需操作员显式设置）。
@@ -332,7 +332,7 @@ benchmarks.md 的验收标准改为脚本实际匹配的字符串；未经证实
 
 **P1 —— 缓存身份命名空间在配方路径下不工作**：配方启动器把 `MODEL_DIR` 挂载到
 `/model`，LMCache 对每个部署都收到相同的 `model_name`（`model_config.model` =
-`--model` 值；已对照 0.5.3 的 `lmcache_mp_connector.py:680` 验证）。不同版本、
+`--model` 值；已对照 0.5.6 的 `lmcache_mp_connector.py:680` 验证）。不同版本、
 KV dtype 和聊天模板共享一个命名空间 —— README 的说法只对 kv-persistence 自己的
 启动器成立（第 13 轮已修复）。现已在**两个**配方启动器中修复（`run-tp4-uva.sh`、
 `run-tp4-hotsplit.sh`，相同的块）：`KV_PERSIST=1` 时模型挂载到
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：265 个单元测试（263 通过 + 2 跳过），19 个离线配置/文档测试，
-284 个离线收集（282 通过 + 2 跳过），共收集 299 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：272 个单元测试（270 通过 + 2 跳过），19 个离线配置/文档测试，
+291 个离线收集（289 通过 + 2 跳过），共收集 306 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -462,7 +462,7 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
   （模式 A，推荐）与 sudo（模式 B）；deployment 中破损的未闭合代码块已修复。
 * Docker 模式：`start-cache.sh` 警告缓存文件属主为 root（purge/budget
   需 sudo）；`purge` 在 PermissionError 时打印原因和修复方法，而非仅错误。
-39 个测试（265 unit / 284 offline / 299 共计）。
+46 个测试（272 unit / 291 offline / 306 共计）。各轮次变更说明现在见 [CHANGELOG.zh.md](../CHANGELOG.zh.md)。
 
 `register_kv_caches` 死掉（300 秒超时）——而 TCP 预检通过了。套接字开着，
 但 RPC 通道已死：TCP 可达性不能证明 lmcache 消息协议正常。修复：
@@ -484,17 +484,17 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 key)`。更关键的是，0.5.6 上游修复了盐泄漏——`_object_key_to_filename`
 现在追加 `@salt`。两个补丁现在都是版本感知的：
 * `salt_filename_patch.install()` 在 0.5.6+ 返回 `upstream`（无需补丁——
-  上游已隔离），在 0.5.3 返回 `patched`。旧的 `_` 后缀命名可通过
+  上游已隔离），在 0.5.6 之前返回 `patched`。旧的 `_` 后缀命名可通过
   rendered 适配器中的 `legacy_salt_suffix` 启用（仅用于迁移）；
 * `tmp_guard.install()` 包装具体类 `FileDynamicNixlStorageAgent` 上的
-  `dynamic_store`（不是 ABC 的抽象方法），并保留 0.5.3 的
+  `dynamic_store`（不是 ABC 的抽象方法），并保留 0.5.6 的
   `dynamic_store_file` 回退；
 * `launch.py` 打印「cache_salt included in L2 file names by upstream
   LMCache (0.5.6+ native '@'-suffix) -- no patch needed」。
 9 个测试（221 unit / 240 offline / 255 共计）。
 
 `register_kv_caches` 失败——根本原因是版本分裂：固定的 vLLM 镜像自带
-lmcache **0.5.6**（容器内的客户端），而主机 venv 提供 lmcache **0.5.3**
+lmcache **0.5.6**（容器内的客户端），而主机 venv 提供 lmcache 0.5.6
 （服务器）。混用小版本会静默破坏 MP 协议。修复：
 * `requirements-lmcache.txt` 现在固定 `lmcache==0.5.6`——镜像是唯一
   真相来源（其连接器即客户端）；
@@ -585,7 +585,7 @@ lmcache **0.5.6**（容器内的客户端），而主机 venv 提供 lmcache **0
   各栏统计的是同一个收集集合，只是 pass/skip 划分不同。
 
 崩溃于 `ModuleNotFoundError: No module named 'openai'` —— 固定的 lmcache
-0.5.3 CLI 在注册 bench 子命令时导入 `openai`，因此连 `lmcache server`
+the lmcache CLI (0.5.6) 在注册 bench 子命令时导入 `openai`，因此连 `lmcache server`
 没有它也无法启动。`openai>=1.40,<2` 现已固定在 `requirements-lmcache.txt`，
 `kvpersist.launch` 打印清晰的安装命令而非裸 traceback。其二：启动器现在
 在回环地址上自动生成 API 密钥（保存到 `live/api_key`，mode 600）——与

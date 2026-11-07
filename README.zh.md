@@ -62,6 +62,7 @@
 | 配方启动器中的 `KV_PERSIST=1` | [配方集成](https://github.com/sikkatu/kv-persistence/wiki/Recipes-Integration.zh) | [docs/compatibility.md](docs/compatibility.md) |
 | 安全规则 | [安全](https://github.com/sikkatu/kv-persistence/wiki/Security.zh) | [docs/security.md](docs/security.md) |
 | 若实的状态与缺口 | — | [docs/final-report.md](docs/final-report.md) |
+| 各轮次更新日志 | — | [CHANGELOG.zh.md](CHANGELOG.zh.md) |
 
 ## 快速开始
 
@@ -131,16 +132,16 @@ cd observability && docker compose up -d
 
 **仪表盘版本说明（第 18 轮）：** 这些仪表盘是 LMCache 的*官方*资产，但它们针对的是
 比本仓库固定的 **0.5.6** 更新的 LMCache 版本编写的（下述仪表盘审计基于
-0.5.3 源码）。与 0.5.3 源码
-（`lmcache/v1/mp_observability/`）静态对比表明：多数面板映射到真实的 0.5.3 指标
+0.5.6 源码）。与 0.5.6 源码
+（`lmcache/v1/mp_observability/`）静态对比表明：多数面板映射到真实的 0.5.6 指标
 （L1/L2 用量 gauge、store/prefetch 流水线、淘汰循环、事件总线、吞吐直方图），但
-**28 个面板中有 4 个**引用了 0.5.3 从不输出的指标（lookup 的 prompt/request-hit
+**28 个面板中有 4 个**引用了 0.5.6 从不输出的指标（lookup 的 prompt/request-hit
 token 计数、L0↔L1 inflight store/retrieve 计数、transfer-phase DMA 计数）。这些
-面板现已**改用真实的 0.5.3 指标**（命中率用 `lookup_requested`/`lookup_hit`，
+面板现已**改用真实的 0.5.6 指标**（命中率用 `lookup_requested`/`lookup_hit`，
 L0↔L1 活动用 `l1_read`/`l1_write` 块计数，DMA 吞吐用 `l0_l1_store_throughput`）。
 改用是尽力而为的语义匹配，不是上游保证 —— 标签/单位可能与原始意图略有差异。
-*LMCache Coordinator* 仪表盘期望 0.5.3 的 `mp_coordinator` 并不导出的协调器遥测
-（48 个系列在 0.5.3 中没有对应物）；本仓库不运行协调器，因此该仪表盘会合理地保持
+*LMCache Coordinator* 仪表盘期望 0.5.6 的 `mp_coordinator` 并不导出的协调器遥测
+（48 个系列在 0.5.6 中没有对应物）；本仓库不运行协调器，因此该仪表盘会合理地保持
 空白。
 * **Prometheus** → <http://localhost:9091>
 * **Tempo** → <http://localhost:3200>（跟踪）

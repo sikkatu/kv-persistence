@@ -22,7 +22,7 @@ This is the test that proves that **LMCache itself** can recover data from the
 L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
 
 * **Pinned version / API**: LMCache **0.5.6** (pin in `requirements-lmcache.txt`,
-  matches the pinned vLLM image; mechanism notes below were verified on 0.5.3).
+  matches the pinned vLLM image; mechanism notes below were verified on 0.5.6).
   The test drives the real MP server protocol through the pinned CLI
   `lmcache bench server` (`--mode cpu --transfer-mode engine_driven`):
   `REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT`, `LOOKUP`,
@@ -32,7 +32,7 @@ L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
   is excluded from key equality), so the same workload ids address the same
   objects in a later run. Per-chunk MD5 of the KV bytes is reported as
   `CHECKSUM: <digest> (N chunks)`. Note: `--l2-adapter` takes the adapter spec
-  as a JSON **string**, not a file path (0.5.3 `add_l2_adapters_args`).
+  as a JSON **string**, not a file path (the `add_l2_adapters_args` CLI).
 * **Dependencies**: Python 3.12, Linux with POSIX SHM (`/dev/shm`), the pinned
   `lmcache==0.5.6` plus `nixl==1.5.2` (the `nixl_store_dynamic` L2 adapter
   imports `nixl`), torch (CPU build is enough), pytest. GPU, CUDA and vLLM are
@@ -73,7 +73,7 @@ L2 tier after a full server restart. It does not need vLLM, a model or a GPU.
 Proves that the kv-persistence identity namespace separates incompatible
 configurations in REAL LMCache storage — not only in local labels.
 
-* **Mechanism (verified in the 0.5.3 source + live run)**: the LMCache cache
+* **Mechanism (verified in the pinned 0.5.6 source + live run)**: the LMCache cache
   key (`ObjectKey.model_name`) also feeds the `nixl_store_dynamic` L2 file
   name (`<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`). The namespace
   is embedded into that `model_name` via `CacheIdentity.lmcache_model_name()`,
@@ -92,7 +92,7 @@ configurations in REAL LMCache storage — not only in local labels.
   chunks at the LMCache API. `namespace_hint` is asserted NOT to change
   anything (it is a human label).
 * **cache_salt gap RESOLVED at the disk-key level (round 15)**: upstream
-  0.5.3 omits the salt from the `nixl_store_dynamic` file name -- a measured
+  pre-0.5.6 upstream omits the salt from the `nixl_store_dynamic` file name -- a measured
   cross-tenant leak (store salt=tenantA -> lookup salt=tenantB = 4/4 chunks
   after restart). This repo's `kvpersist/salt_filename_patch.py` appends the
   salt to the L2 file name; ALL launchers start the server through it.
@@ -136,7 +136,7 @@ requires the `--enable-prompt-tokens-details` engine flag, which
 `scripts/run-vllm-with-persist.sh` passes for every model),
 `ttft_s`, `total_s`, cache bytes before/after (`budget-report.sh status`),
 LMCache log counts (the L2 store/load evidence lines -- `l2_stored` /
-`l2_retrievals` in `scripts/test-recovery.sh` match the pinned 0.5.3 wording:
+`l2_retrievals` in `scripts/test-recovery.sh` match the pinned 0.5.6 wording:
 `L2 store completed: adapter N, N succeeded, N failed`,
 `L2 prefetch load completed: request N, N loaded, N failed`,
 `Prefetch request completed (L1+L2): N/N retained keys (N L1, N L2)` -- DEBUG

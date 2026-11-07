@@ -21,7 +21,7 @@
 不需要 vLLM、模型或 GPU。
 
 * **固定版本 / API**：LMCache **0.5.6**（固定于 `requirements-lmcache.txt`，
-  与固定 vLLM 镜像匹配；下述机制说明基于 0.5.3 验证）。
+  与固定 vLLM 镜像匹配；下述机制说明基于 0.5.6 验证）。
   测试通过固定 CLI `lmcache bench server`（`--mode cpu --transfer-mode
   engine_driven`）驱动真实 MP 服务器协议：`REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT`、
   `LOOKUP`、`QUERY_PREFETCH_STATUS`、`PREPARE_STORE`/`COMMIT_STORE`、
@@ -29,7 +29,7 @@
   跨调用确定（`IPCCacheServerKey.request_id` 被排除在键相等性之外），
   因此相同的负载标识在后续运行中寻址相同的对象。每分块 KV 字节的 MD5
   以 `CHECKSUM: <digest> (N chunks)` 输出。注意：`--l2-adapter` 接收
-  JSON **字符串**形式的适配器规格，而非文件路径（0.5.3 `add_l2_adapters_args`）。
+  JSON **字符串**形式的适配器规格，而非文件路径（the `add_l2_adapters_args` CLI）。
 * **依赖**：Python 3.12、支持 POSIX SHM 的 Linux（`/dev/shm`）、固定的
   `lmcache==0.5.6` 加 `nixl==1.5.2`（`nixl_store_dynamic` L2 适配器导入
   `nixl`）、torch（CPU 构建即可）、pytest。**不需要** GPU、CUDA 和 vLLM。
@@ -64,7 +64,7 @@
 证明 kv-persistence 身份命名空间在**真实** LMCache 存储中隔离不兼容的配置——
 不仅仅是在本地标签中。
 
-* **机制（经 0.5.3 源码与实际运行验证）**：LMCache 缓存键
+* **机制（经 0.5.6 源码与实际运行验证）**：LMCache 缓存键
   （`ObjectKey.model_name`）同时构成 `nixl_store_dynamic` L2 文件名
   （`<safe_model_name>_<kv_rank>_<group>_<chunkhash>.bin`）。命名空间通过
   `CacheIdentity.lmcache_model_name()` 嵌入该 `model_name`，因此任何身份变化都会
@@ -80,7 +80,7 @@
   connector_version、max_model_len、chat_template_digest），更改后的身份在
   LMCache API 得到 `0/N` 分块。`namespace_hint` 被断言为不影响任何内容（它是
   人类可读标签）。
-* **cache_salt 缺口已在磁盘键层面修复（第 15 轮）**：上游 0.5.3 不把 salt 写入
+* **cache_salt 缺口已在磁盘键层面修复（第 15 轮）**：上游（0.5.6 之前）不把 salt 写入
   `nixl_store_dynamic` 文件名——实测跨租户泄漏（salt=tenantA 写入 →
   salt=tenantB 查找返回 4/4 分块，重启后）。本仓库的
   `kvpersist/salt_filename_patch.py` 把 salt 追加到 L2 文件名；所有启动器

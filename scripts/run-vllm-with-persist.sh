@@ -421,13 +421,6 @@ fi
 if [ "$KVP_SAME_UID" = "1" ]; then
   echo "same-UID mode: engine runs as $_uid:$_gid (no root)"
   MOUNTS=(-v "$HF_CACHE:/tmp/hf-cache")
-  # Review fix (round 46): a crashed engine leaves compute processes on the
-  # GPUs -- the next start fails with a confusing allocation error. Refuse to
-  # launch while VRAM is held; the fix (stop-engine + restart the cache
-  # service) is printed by _kvp_gpu_preflight.
-  if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ]; then
-    _kvp_gpu_preflight 2048 || die "GPU memory is held by dead processes -- see the pre-flight output above"
-  fi
 else
   MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
 fi
@@ -517,6 +510,14 @@ print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
   esac
 fi
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+# Review fix (round 47): the GPU check runs AFTER the old container is
+# removed -- round 46 ran it earlier and refused on the OLD engine's legal
+# VRAM (78 GiB per GPU on the user's host). With the engine gone the GPUs
+# must be free; anything still holding VRAM is a leaked process that would
+# break the new engine's CUDA allocations. Applies to BOTH launch modes.
+if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ]; then
+  _kvp_gpu_preflight 2048 || die "GPU memory is still held after the old engine was removed -- leaked processes block the new engine (see the PIDs above). Fix: stop the cache service too (bash scripts/stop-cache.sh && bash scripts/start-cache.sh) and rerun."
+fi
 echo "starting $CONTAINER with persistent KV connector (lmcache $LMCACHE_HOST:$LMCACHE_PORT)"
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
