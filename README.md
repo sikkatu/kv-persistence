@@ -84,7 +84,8 @@ git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
-bash scripts/start-cache.sh             # persistent cache service (NVMe)
+bash scripts/start-observability.sh    # monitoring FIRST (Prometheus + Grafana)
+bash scripts/start-cache.sh             # persistent cache service (NVMe, metrics auto)
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (no root, no exports)
 bash scripts/test-recovery.sh           # acceptance: restart → cache reuse proof (exit 0 = PASS)
 ```
@@ -247,7 +248,7 @@ in `configs/generic/cache.env(.local)`.
 ## Quick start: lossless + Grafana
 
 ```bash
-# 1. Monitoring (optional but recommended)
+# 1. Monitoring (starts FIRST -- the cache auto-attaches to it)
 bash scripts/start-observability.sh
 
 # 2. LMCache + vLLM (lossless zstd is the DEFAULT since round 48)

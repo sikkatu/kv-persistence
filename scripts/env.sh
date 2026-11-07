@@ -71,6 +71,36 @@ _kvp_parse_line(){ # sets _name / _val; returns 1 if not an assignment
 
 die(){ echo "ERROR: $*" >&2; exit 1; }
 
+# Round 49 (user): `lmcache` lives ONLY in ~/.venvs/lmcache -- every script
+# needs it on PATH without a manual `export PATH=$HOME/.venvs/lmcache/bin:$PATH`
+# in every terminal. Resolve the venv bin dir (same sudo-aware logic as
+# _kvp_python) and prepend it to PATH once.
+_kvp_venv_bin(){
+  local _home="$HOME" _bin
+  if [ -n "${SUDO_UID:-}" ] && [ "${SUDO_UID}" != "0" ]; then
+    _home="$(getent passwd "${SUDO_UID}" 2>/dev/null | cut -d: -f6)"
+    [ -n "$_home" ] || _home="$HOME"
+  elif [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    _home="$(getent passwd "${SUDO_USER}" 2>/dev/null | cut -d: -f6)"
+    [ -n "$_home" ] || _home="$HOME"
+  fi
+  for _bin in "$_home/.venvs/lmcache/bin" "${KVP_LMCACHE_VENV:-}/bin"; do
+    if [ -n "$_bin" ] && [ -x "$_bin/lmcache" ]; then
+      printf '%s' "$_bin"
+      return 0
+    fi
+  done
+  return 1
+}
+_kvp_venv_bin="$(_kvp_venv_bin || true)"
+if [ -n "$_kvp_venv_bin" ]; then
+  case ":$PATH:" in
+    *":$_kvp_venv_bin:"*) : ;;
+    *) PATH="$_kvp_venv_bin:$PATH" ;;
+  esac
+  export PATH
+fi
+
 _kvp_seed(){ # _kvp_seed <file> <pre>: export assignments; skip names listed
              # in $pre (newline-delimited, from BEFORE loading began) and any
              # name already exported by a later-priority layer.

@@ -74,7 +74,8 @@ git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # заполнение И проверка пинов идентичности
 bash scripts/preflight.sh               # проверка хоста, хранилища и идентичности
-bash scripts/start-cache.sh             # сервис постоянного кэша (NVMe)
+bash scripts/start-observability.sh    # мониторинг ПЕРВЫМ (Prometheus + Grafana)
+bash scripts/start-cache.sh             # сервис постоянного кэша (NVMe, метрики сами)
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (без root, без export)
 bash scripts/test-recovery.sh           # приёмка: рестарт → доказательство переиспользования (exit 0 = PASS)
 ```
@@ -238,7 +239,7 @@ bash scripts/start-cache.sh           # метрики идут сами
 ## Быстрый старт: lossless + Grafana
 
 ```bash
-# 1. Мониторинг (опционально, но рекомендуется)
+# 1. Мониторинг (стартует ПЕРВЫМ -- кэш сам подключается к нему)
 bash scripts/start-observability.sh
 
 # 2. LMCache + vLLM (lossless zstd -- ПО УМОЛЧАНИЮ с раунда 48)

@@ -375,7 +375,8 @@ Start the cache service first:
   # The CLIENT lives inside the vLLM image; the SERVER runs from the host
   # venv (requirements-lmcache.txt). A minor-version mismatch makes
   # register_kv_caches silently time out after 300s inside the container.
-  _host_lmcache="$(python3 -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
+  # Round 49: use the venv python (the system python3 has no lmcache).
+  _host_lmcache="$("$(_kvp_python)" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
   _img_lmcache="$(docker run --rm --entrypoint python3 "$IMAGE" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
   if [ "$_host_lmcache" != "UNKNOWN" ] && [ "$_img_lmcache" != "UNKNOWN" ]; then
     if [ "$_host_lmcache" != "$_img_lmcache" ]; then

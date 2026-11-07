@@ -71,7 +71,8 @@ git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # 填写并核验身份固定项
 bash scripts/preflight.sh               # 校验主机、存储与身份
-bash scripts/start-cache.sh             # 持久缓存服务（NVMe）
+bash scripts/start-observability.sh    # 先启动监控（Prometheus + Grafana）
+bash scripts/start-cache.sh             # 持久缓存服务（NVMe，指标自动）
 bash scripts/run-vllm-with-persist.sh   # vLLM + KV 连接器（无需 root，无需 export）
 bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据（exit 0 = PASS）
 ```
@@ -191,7 +192,7 @@ KV 最多约 200 GB 的会话需要空间容纳这些数据并留有增长余量
 `configs/generic/cache.env(.local)`。
 ## 快速开始：无损 + Grafana
 ```bash
-# 1. 监控（可选但推荐）
+# 1. 监控（必须先启动——缓存会自动接入）
 bash scripts/start-observability.sh
 
 # 2. LMCache + vLLM（自第 48 轮起 lossless zstd 为默认）

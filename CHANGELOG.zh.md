@@ -7,6 +7,18 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 49 轮（PATH 自动、监控优先、报告清理）
+
+* 不再需要 `export PATH="$HOME/.venvs/lmcache/bin:$PATH"`（用户要求）：
+  `env.sh` 自行解析 lmcache venv 目录（sudo 感知）并为每个脚本前置加入
+  PATH。版本预检现通过 venv python 读取主机 lmcache（系统 python3 没有）。
+* 监控不是可选项：Quick-Start 第 6 步和 README 快速开始现在先启动
+  `start-observability.sh`，再启动 `start-cache.sh`（自动接入，第 47b 轮）。
+  「Optional」标注已删除。
+* `docs/final-report.{md,ru.md,zh.md}` 删除了所有按轮次的修复章节（用户
+  要求：变更在 changelog，早期修复无需记住）——报告只保留已验证状态与
+  技术记录，并链接 CHANGELOG。
+
 ## 第 48 轮（零配置启动）
 
 * 在新终端中 `bash scripts/run-vllm-with-persist.sh` 无需 export 和标志：

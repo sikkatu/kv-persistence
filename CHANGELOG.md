@@ -8,6 +8,20 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 49 (PATH auto, monitoring first, report cleanup)
+
+* `export PATH="$HOME/.venvs/lmcache/bin:$PATH"` is no longer needed
+  (user): `env.sh` resolves the lmcache venv bin itself (sudo-aware) and
+  prepends it to PATH for every script. The version pre-flight now reads
+  the host lmcache through the venv python (the system python3 has none).
+* Monitoring is NOT optional: Quick-Start step 6 and the README quick
+  starts now start `start-observability.sh` FIRST, then `start-cache.sh`
+  (auto-attaches, round 47b). The "Optional:" labels are gone.
+* `docs/final-report.{md,ru.md,zh.md}` stripped of every per-round fix
+  section (user: the changelog holds them; early fixes need not be
+  remembered) -- the report keeps only the verified status and the
+  technical record and links CHANGELOG.
+
 ## Round 48 (zero-config launch)
 
 * `bash scripts/run-vllm-with-persist.sh` in a fresh terminal needs NO
