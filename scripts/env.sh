@@ -83,6 +83,39 @@ _kvp_seed(){ # _kvp_seed <file> <pre>: export assignments; skip names listed
   done < "$1"
 }
 
+# Review fix (round 46): GPU free-memory pre-flight. A crashed engine or a
+# dead cache-server can leave compute processes (and their VRAM) behind, so
+# the NEXT engine start fails with a confusing allocation error. Check every
+# GPU BEFORE starting the engine; refuse to start when holdouts are found and
+# name the PIDs to kill.
+# Usage: _kvp_gpu_preflight [threshold_mib]   (default 2048 MiB)
+_kvp_gpu_preflight(){
+  local _th="${1:-2048}"
+  command -v nvidia-smi >/dev/null 2>&1 || return 0
+  local _bad=""
+  local _line _idx _used
+  while IFS=, read -r _idx _used; do
+    [ -n "$_idx" ] || continue
+    _used="${_used%%.*}"
+    if [ "${_used:-0}" -gt "$_th" ]; then
+      _bad="$_bad  GPU $_idx: ${_used} MiB busy (threshold ${_th} MiB)\n"
+    fi
+  done < <(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits 2>/dev/null)
+  if [ -z "$_bad" ]; then
+    echo "pre-flight: GPU memory is free (all GPUs below ${_th} MiB)"
+    return 0
+  fi
+  echo "ERROR: GPU memory is NOT free -- a dead process is holding VRAM:" >&2
+  printf '%b' "$_bad" >&2
+  echo "Compute processes still on the GPUs:" >&2
+  nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader 2>&1 | head -10 >&2 || true
+  echo "Fix: stop the engine (bash scripts/stop-engine.sh) and RESTART the cache" >&2
+  echo "service (bash scripts/stop-cache.sh && bash scripts/start-cache.sh) -- a" >&2
+  echo "crashed engine leaves VRAM on the GPU and the cache server holds it too." >&2
+  echo "Then rerun. To bypass (not recommended): KVP_SKIP_GPU_CHECK=1." >&2
+  return 1
+}
+
 _kvp_resolve_l2_serde(){
   # Fold the operator switch USE_LOSSLESS_SERDE into the effective
   # LMCACHE_L2_SERDE and EXPORT the result, so EVERY consumer (start-cache.sh,

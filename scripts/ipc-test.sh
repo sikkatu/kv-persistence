@@ -146,10 +146,8 @@ case $rc in
     echo "      server still fails, the cause is elsewhere (check the server log)."
     if [ -n "$PRODUCER_USER" ]; then
       echo "      SAME-UID result: PASS -- the transfer works WITHOUT root."
-      echo "      Next: add --user \$(id -u):\$(id -g) + -e HOME=... to the engine"
-      echo "      launcher (HF cache is at /root/.cache/huggingface; triton and"
-      echo "      flashinfer expect /root). This path is NOT yet wired into"
-      echo "      run-vllm-with-persist.sh -- test it manually first."
+      echo "      This path IS wired: KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh"
+      echo "      (the launcher runs the engine as \$(id -u):\$(id -g) with caches under /tmp)."
     fi ;;
   124)
     echo "TIMEOUT: the consumer hung while opening GPU memory from the container."

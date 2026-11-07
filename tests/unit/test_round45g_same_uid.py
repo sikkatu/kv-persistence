@@ -26,12 +26,16 @@ def test_producer_user_adds_user_flag():
 
 
 def test_same_uid_verdict_is_honest():
-    """PASS must warn that the engine path is NOT wired yet (HF/triton
-    paths); FAIL must say matching UIDs are not enough."""
+    """PASS must now say the same-UID path IS wired (round 46: the stale
+    "NOT yet wired" text is gone -- the launcher supports KVP_SAME_UID=1);
+    FAIL must say matching UIDs are not enough."""
     t = IPC_TEST.read_text()
     assert "SAME-UID result: PASS" in t
-    assert "NOT yet wired" in t, (
-        "a PASS must NOT claim the engine works without root"
+    assert "NOT yet wired" not in t, (
+        "the path IS wired since round 45h -- the stale warning must be gone"
+    )
+    assert "This path IS wired" in t and "KVP_SAME_UID=1" in t, (
+        "a PASS must point to the launcher flag that uses this path"
     )
     assert "SAME-UID result: FAIL" in t
     assert "even matching UIDs is not enough" in t

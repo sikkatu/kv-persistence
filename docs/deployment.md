@@ -285,6 +285,15 @@ explicitly:
 
 Stopping either one never deletes persistent cache data on disk.
 
+**Restart order (round 46, reviewer):** restart the cache service ONLY with the
+engine STOPPED. If the engine crashed (exit 1 / OOM), the cache server must be
+restarted too -- it can keep holding GPU/host memory from the dead engine, and a
+plain engine restart will fail until it is. Correct order:
+`bash scripts/stop-engine.sh` -> `bash scripts/stop-cache.sh` ->
+`bash scripts/start-cache.sh` -> `bash scripts/run-vllm-with-persist.sh`.
+The launcher's GPU pre-flight (`_kvp_gpu_preflight` in `scripts/env.sh`) refuses to
+start while VRAM is held and prints the offending PIDs.
+
 ## Rollback (one command)
 
 ```bash

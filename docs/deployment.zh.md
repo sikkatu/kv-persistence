@@ -221,6 +221,14 @@ journalctl -u lmcache-server -f
 
 停止任意一个都不会删除磁盘上的持久缓存数据。
 
+**重启顺序（第 46 轮，审阅者）：** 只在引擎已停止时重启缓存服务。如果引擎崩溃
+（exit 1 / OOM），缓存服务器也必须重启——它可能仍持有死去引擎的 GPU/主机内存，
+在重启它之前单纯重启引擎会失败。正确顺序：`bash scripts/stop-engine.sh` ->
+`bash scripts/stop-cache.sh` -> `bash scripts/start-cache.sh` ->
+`bash scripts/run-vllm-with-persist.sh`。启动器的 GPU 预检
+（`scripts/env.sh` 中的 `_kvp_gpu_preflight`）在 VRAM 被占用时拒绝启动并打印
+占用者 PID。
+
 ## 回滚（一条命令）
 
 ```bash

@@ -84,9 +84,13 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
 bash scripts/start-cache.sh             # persistent cache service (NVMe)
-bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (needs IMAGE, MODEL_DIR)
+KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (no root)
 bash scripts/test-recovery.sh           # acceptance: restart → cache reuse proof (exit 0 = PASS)
 ```
+Since round 46 the launcher records the effective cache identity (codec,
+namespace) in `$KVP_CACHE_ROOT/engine-identity.env`, so
+`verify-engine-identity.sh` and `test-recovery.sh` work in a fresh terminal
+WITHOUT repeating `USE_LOSSLESS_SERDE`. The switch, when present, still wins.
 
 Each command refuses loudly instead of producing a half-working setup: identity
 values are written and verified by `setup-identity.sh`, `preflight.sh` checks the
@@ -243,10 +247,12 @@ USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 ```
 
 `USE_LOSSLESS_SERDE` must be identical for both commands — it is part of the
-cache-identity namespace. Pin the same value as `KVP_L2_SERDE` in
-`identity.env.local` so the identity gate can verify the server's codec
-(it reads the rendered L2 adapter the server was started with). Omit it
-everywhere to stay on the byte-exact raw mode.
+cache-identity namespace. Since round 46 the launcher also writes the
+effective codec to `$KVP_CACHE_ROOT/engine-identity.env` and standalone
+scripts read it automatically (switch > `KVP_L2_SERDE` pin > the file), so a
+fresh terminal no longer reports a false `identity=none != engine/config=zstd`
+mismatch. You can still pin `KVP_L2_SERDE` in `identity.env.local` explicitly.
+Omit it everywhere to stay on the byte-exact raw mode.
 
 ## Repository layout
 

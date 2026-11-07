@@ -86,8 +86,18 @@ l2_stored(){ # write-to-L2 events appended after the scenario's log mark
   new_log "$1" | grep -cE 'L2 store completed: adapter [0-9]+, [1-9][0-9]* succeeded' || true
 }
 api_ready(){ for i in $(seq 1 180); do
+    # Review fix (round 46): the loop used to wait 20 min on a DEAD container
+    # (the engine crashed with code 1 minutes after restart). Check the
+    # container state and abort as soon as it is not running.
+    _st="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)"
+    case "$_st" in
+      running) : ;;
+      *) echo "  ABORT: container $CONTAINER is '$_st' -- the engine is dead, the API will never come back" >&2
+         echo "         check: docker logs --tail 60 $CONTAINER" >&2
+         return 2 ;;
+    esac
     curl -fsS --max-time 3 -H "Authorization: Bearer $KEY" "$API/v1/models" >/dev/null 2>&1 && return 0
-    [ $((i % 6)) -eq 0 ] && echo "  waiting for API... $((i*10))s"
+    [ $((i % 6)) -eq 0 ] && echo "  waiting for API... $((i*10))s (container $_st)"
     sleep 10; done
   return 1; }
 # Review round 13: inconc() used to SET V=9, erasing hard-FAIL counts -- two
@@ -254,13 +264,25 @@ else
 fi
 
 echo "== SCENARIO B: restart BOTH services, NVMe kept =="
+# Review fix (round 46): before touching anything, the GPUs must be free --
+# otherwise the engine restart fails and the test waits on a dead container.
+if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ]; then
+  _kvp_gpu_preflight 2048 || PA "GPU memory is held -- stop the engine and restart the cache service first"
+fi
 B_DISK0=$(disk_read_bytes)
 B_BEFORE=$(wait_l2_quiet)
+# Review fix (round 46): scenario B used to stop-cache/start-cache and
+# `docker restart` WHILE the engine was still alive -- the engine died with
+# a Python error and the test then waited 20 min on a dead container. The
+# correct order is: STOP THE ENGINE FIRST, then restart the cache service,
+# then bring the engine back up.
+echo "  stopping the engine first (B: correct order -- engine down, cache restart, engine up)"
+docker stop "$CONTAINER" >/dev/null 2>&1 || PA "docker stop (B) failed"
 bash "$HERE/stop-cache.sh" >/dev/null 2>&1 || PA "stop-cache.sh failed"
 bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA "start-cache.sh failed (cache service did not restart)"
 LIVE_PID="$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null || echo 0)"
 kill -0 "$LIVE_PID" 2>/dev/null || PA "cache service is dead right after start-cache.sh (readiness not reached)"
-docker restart "$CONTAINER" >/dev/null 2>&1 || PA "docker restart (B) failed"
+docker start "$CONTAINER" >/dev/null 2>&1 || PA "docker start (B) failed"
 api_ready || PA "API did not come back after full restart"
 M_B0=$(log_mark)
 ask afterB "$M_B0"

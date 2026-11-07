@@ -74,7 +74,7 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # заполнение И проверка пинов идентичности
 bash scripts/preflight.sh               # проверка хоста, хранилища и идентичности
 bash scripts/start-cache.sh             # сервис постоянного кэша (NVMe)
-bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (нужны IMAGE, MODEL_DIR)
+KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (без root)
 bash scripts/test-recovery.sh           # приёмка: рестарт → доказательство переиспользования (exit 0 = PASS)
 ```
 
@@ -238,10 +238,12 @@ USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 ```
 
 `USE_LOSSLESS_SERDE` должен быть одинаков для обеих команд — он входит в
-namespace идентичности кэша. Закрепите то же значение как `KVP_L2_SERDE` в
-`identity.env.local`, чтобы гейт идентичности мог проверить кодек сервера
-(он читает отрендеренный L2-адаптер, с которым стартовал сервер). Не
-задавайте его нигде, чтобы остаться в байт-точном сыром режиме.
+namespace идентичности кэша. С раунда 46 лаунчер также пишет эффективный
+кодек в `$KVP_CACHE_ROOT/engine-identity.env`, и отдельные скрипты читают его
+автоматически (переключатель > пин `KVP_L2_SERDE` > файл) — новый терминал
+больше не показывает ложное несовпадение `identity=none != engine/config=zstd`.
+Пин `KVP_L2_SERDE` в `identity.env.local` можно закрепить и явно. Не задавайте
+ничего, чтобы остаться в байт-точном сыром режиме.
 
 ## Структура репозитория
 | Путь | Содержимое |

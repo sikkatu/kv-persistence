@@ -421,6 +421,13 @@ fi
 if [ "$KVP_SAME_UID" = "1" ]; then
   echo "same-UID mode: engine runs as $_uid:$_gid (no root)"
   MOUNTS=(-v "$HF_CACHE:/tmp/hf-cache")
+  # Review fix (round 46): a crashed engine leaves compute processes on the
+  # GPUs -- the next start fails with a confusing allocation error. Refuse to
+  # launch while VRAM is held; the fix (stop-engine + restart the cache
+  # service) is printed by _kvp_gpu_preflight.
+  if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ]; then
+    _kvp_gpu_preflight 2048 || die "GPU memory is held by dead processes -- see the pre-flight output above"
+  fi
 else
   MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
 fi
@@ -456,6 +463,26 @@ if [ "$PERSIST" = "true" ]; then
   MODEL_MOUNT="/models/$KVP_MODEL_NAME"
   MOUNTS+=(-v "$MODEL_DIR:$MODEL_MOUNT:ro")
   echo "LMCache identity namespace: $KVP_MODEL_NAME"
+  # Review fix (round 46): persist the EFFECTIVE codec + namespace next to
+  # the cache. The codec lives in a shell variable (USE_LOSSLESS_SERDE)
+  # that had to be repeated in EVERY terminal -- a plain
+  # `bash scripts/verify-engine-identity.sh` then reported
+  # l2_serde: identity=none != engine/config=zstd and refused cache reuse.
+  # The file is the source of truth for standalone scripts (they read it
+  # when neither the switch nor the identity pin is set).
+  _eid_root="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
+  if [ -w "$_eid_root" ]; then
+    {
+      echo "# Written by run-vllm-with-persist.sh at engine launch (round 46)."
+      echo "# The EFFECTIVE cache identity of the running engine."
+      echo "# Standalone scripts (verify-engine-identity.sh, test-recovery.sh,"
+      echo "# benchmark.sh) read this file when neither USE_LOSSLESS_SERDE nor"
+      echo "# the KVP_L2_SERDE identity pin is set. Regenerated on every launch."
+      echo "KVP_L2_SERDE=${LMCACHE_L2_SERDE:-none}"
+      echo "KVP_MODEL_NAME=$KVP_MODEL_NAME"
+    } > "$_eid_root/engine-identity.env"
+    echo "engine identity written: $_eid_root/engine-identity.env (KVP_L2_SERDE=${LMCACHE_L2_SERDE:-none})"
+  fi
   echo "model mounted at: $MODEL_MOUNT (so model_config.model is namespace-coded)"
 else
   MODEL_MOUNT="/model"

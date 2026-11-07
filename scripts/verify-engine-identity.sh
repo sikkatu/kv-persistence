@@ -326,8 +326,12 @@ if bs in ("UNAVAILABLE", "MISSING") and model_dir:
         except Exception:
             pass
     if bs == "MISSING":
-        print("  [info] block_size could not be determined (no --block-size arg, "
-              "no config.json value, no engine log line) -- reporting INCONCLUSIVE")
+        # Review fix (round 46): in --check-config-only mode the engine log
+        # does not exist yet -- the INCONCLUSIVE line only scares the
+        # operator. Stay quiet there.
+        if not check_config_only:
+            print("  [info] block_size could not be determined (no --block-size arg, "
+                  "no config.json value, no engine log line) -- reporting INCONCLUSIVE")
 engine_checks.append(("block_size", vals.get("KVP_BLOCK_SIZE"), bs))
 nh = model_cfg("num_key_value_heads")
 hd = model_cfg("head_dim")
@@ -435,8 +439,33 @@ else:
 # (seen, from the rendered adapter) matches the namespace the cache is filed
 # under. Empty pin normalizes to "none" ("" / "none" / "raw" share one
 # namespace).
-_l2_expect = _fold_serde(os.environ.get("USE_LOSSLESS_SERDE", ""),
-                         vals.get("KVP_L2_SERDE", "") or os.environ.get("LMCACHE_L2_SERDE", ""))
+# Review fix (round 46): when NEITHER the shell switch NOR the identity pin
+# is set, read the EFFECTIVE codec the launcher recorded in
+# $KVP_CACHE_ROOT/engine-identity.env. The codec used to live only in the
+# launching shell -- a plain `bash scripts/verify-engine-identity.sh` in a
+# fresh terminal reported identity=none != engine/config=zstd and refused
+# cache reuse. Precedence: USE_LOSSLESS_SERDE switch > KVP_L2_SERDE pin >
+# engine-identity.env (written at launch) > LMCACHE_L2_SERDE.
+def _read_engine_identity():
+    out = {}
+    _root = os.environ.get("KVP_CACHE_ROOT", "/var/lib/kv-persistence/l2")
+    try:
+        with open(os.path.join(_root, "engine-identity.env")) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                out[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
+_engine_identity = _read_engine_identity()
+_l2_pin = vals.get("KVP_L2_SERDE", "") or os.environ.get("LMCACHE_L2_SERDE", "")
+_l2_switch = os.environ.get("USE_LOSSLESS_SERDE", "")
+if not _l2_switch and not _l2_pin:
+    _l2_pin = _engine_identity.get("KVP_L2_SERDE", "")
+_l2_expect = _fold_serde(_l2_switch, _l2_pin)
 engine_checks.append(("l2_serde", _l2_expect, _l2_seen))
 
 bad, inconc = [], []

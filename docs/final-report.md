@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(251 unit tests + 19 more offline config/docs tests = 270 offline collected,
-268 passed + 2 skipped; 285 collected total including the live-`lmcache`
+(261 unit tests + 19 more offline config/docs tests = 280 offline collected,
+278 passed + 2 skipped; 295 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 251 unit tests (`tests/unit`, 249 passed + 2 skipped),
-19 top-level offline tests, 270 offline collected (268 passed + 2 skipped),
-285 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 261 unit tests (`tests/unit`, 259 passed + 2 skipped),
+19 top-level offline tests, 280 offline collected (278 passed + 2 skipped),
+295 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -663,6 +663,24 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * **Same-UID engine mode (round 45h, KVP_SAME_UID=1)**: the same-UID
 * **Round 45i (bash assignment trap)**: the first same-UID run died
 * **Round 45j (reviewer batch)**: the bash-assignment trap is now
+* **Round 46 (reviewer batch after the first successful no-root run)**:
+  the launcher now records the EFFECTIVE cache identity (codec, namespace)
+  in `$KVP_CACHE_ROOT/engine-identity.env`; `verify-engine-identity.sh` and
+  `test-recovery.sh` read it when neither the `USE_LOSSLESS_SERDE` switch nor
+  the `KVP_L2_SERDE` pin is set -- a plain command in a fresh terminal no
+  longer reports a false `identity=none != engine/config=zstd` mismatch
+  (precedence: switch > pin > the file). `ipc-test.sh` lost its stale
+  "NOT yet wired" text (the path IS wired since round 45h). The
+  block_size INCONCLUSIVE line is quiet in `--check-config-only`.
+  `test-recovery.sh` scenario B stops the engine FIRST
+  (`docker stop` -> `stop-cache` -> `start-cache` -> `docker start`, no more
+  `docker restart` on a live engine) and its `api_ready` aborts as soon as
+  the container dies instead of waiting 20 min. New GPU free-memory
+  pre-flight (`_kvp_gpu_preflight` in `scripts/env.sh`) in the launcher and
+  the recovery test: a crashed engine leaves VRAM held and the next start
+  must refuse with the PIDs to kill, not fail on allocation.
+  Deployment docs (EN/RU/ZH) gained the restart-order rule: restart the
+  cache service only with the engine stopped.
   locked by an EXECUTABLE test (it runs the real call line against a
   fake ipc-test.sh -- text-matching tests cannot catch the trap; the
   test fails on the old line and passes on the new one). Insurance
@@ -698,7 +716,7 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-25 tests (251 unit / 270 offline / 285 total).
+35 tests (261 unit / 280 offline / 295 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight
