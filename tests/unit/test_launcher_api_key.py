@@ -42,6 +42,11 @@ def _base_env(tmp_path: Path) -> dict:
     recipe = tmp_path / "recipe"
     recipe.mkdir(exist_ok=True)
     env["RECIPE_DIR"] = str(recipe)
+    # Round 56: the launcher reads the canonical key file
+    # ($HOME/.config/kvp/api_key) FIRST -- point it at the repo live/api_key
+    # so these tests fully control the key source (no leak from the real
+    # canonical path).
+    env["KVP_API_KEY_FILE"] = str(KEY_FILE)
     env["IMAGE"] = "x@sha256:" + "a" * 64
     model = tmp_path / "model"
     model.mkdir(exist_ok=True)

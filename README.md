@@ -84,9 +84,9 @@ git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
-bash scripts/start-observability.sh    # monitoring FIRST (Prometheus + Grafana)
-bash scripts/start-cache.sh             # persistent cache service (NVMe, metrics auto)
-bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (no root, no exports)
+bash scripts/start-all.sh              # ONE command: monitoring + cache + engine
+#   (or step by step: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
+bash scripts/stop-all.sh                # stop everything (data kept)
 bash scripts/test-recovery.sh           # acceptance: restart → cache reuse proof (exit 0 = PASS)
 ```
 Since round 48 the launch needs NO exports and NO flags: IMAGE resolves from

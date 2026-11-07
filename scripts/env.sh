@@ -299,6 +299,40 @@ _kvp_resolve_cache_device(){
   return 0
 }
 
+# Round 56 (user): ONE API key for ALL launchers (kv-persistence + recipes).
+# Canonical path: $HOME/.config/kvp/api_key. Legacy per-repo live/api_key is
+# migrated on first use. The key is generated once and reused.
+_kvp_api_key_file(){
+  printf '%s' "${KVP_API_KEY_FILE:-$HOME/.config/kvp/api_key}"
+}
+_kvp_load_api_key(){ # prints the key (empty when none exists yet)
+  _kvp_kf="$(_kvp_api_key_file)"
+  if [ -f "$_kvp_kf" ]; then
+    head -n1 "$_kvp_kf" | tr -d '[:space:]'
+    return 0
+  fi
+  # legacy locations (migrate below)
+  local _root="${1:-}" _cand
+  for _cand in "$_root/live/api_key" "$HOME/kv-persistence/live/api_key"; do
+    [ -n "$_cand" ] && [ -f "$_cand" ] || continue
+    head -n1 "$_cand" | tr -d '[:space:]'
+    return 0
+  done
+  return 0
+}
+_kvp_save_api_key(){ # _kvp_save_api_key <key> [<legacy-dir>]
+  _kvp_kf="$(_kvp_api_key_file)"
+  mkdir -p "$(dirname "$_kvp_kf")"
+  printf '%s\n' "$1" > "$_kvp_kf"
+  chmod 600 "$_kvp_kf"
+  # keep a copy in the legacy location for older tooling
+  if [ -n "${2:-}" ]; then
+    mkdir -p "$2"
+    printf '%s\n' "$1" > "$2/api_key"
+    chmod 600 "$2/api_key"
+  fi
+}
+
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
   # Remember whether LMCACHE_L2_SERDE / KVP_L2_SERDE were pre-exported in the

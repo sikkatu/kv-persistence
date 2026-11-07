@@ -71,9 +71,9 @@ git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence
 cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # 填写并核验身份固定项
 bash scripts/preflight.sh               # 校验主机、存储与身份
-bash scripts/start-observability.sh    # 先启动监控（Prometheus + Grafana）
-bash scripts/start-cache.sh             # 持久缓存服务（NVMe，指标自动）
-bash scripts/run-vllm-with-persist.sh   # vLLM + KV 连接器（无需 root，无需 export）
+bash scripts/start-all.sh              # 一条命令：监控 + 缓存 + 引擎
+#   （或分步：start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh）
+bash scripts/stop-all.sh                # 全部停止（数据保留）
 bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据（exit 0 = PASS）
 ```
 自第 48 轮起启动无需 export 和标志：IMAGE 从配方解析（记入 `live/image`），

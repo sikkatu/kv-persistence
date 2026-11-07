@@ -56,6 +56,9 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # Opt out for the root fallback: KVP_SAME_UID=0.
 KVP_SAME_UID="${KVP_SAME_UID:-1}"
 ENGINE_USER_ARGS=()
+# Round 56: hotsplit env for the engine container (recipe defaults: dynamic
+# hot experts ON, hot budget from tp4.env.example, counts histogram under /w).
+HOTSPLIT_ENV_ARGS=()
 ENGINE_CACHE_ARGS=(-e HF_HOME=/root/.cache/huggingface)
 _uid="$(id -u)"; _gid="$(id -g)"
 if [ "$KVP_SAME_UID" = "1" ]; then
@@ -131,6 +134,12 @@ mkdir -p "$ROOT/live"
 ' "$MODEL_DIR" > "$ROOT/live/model_dir"
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
 API_KEY="${API_KEY:-}"
+# Round 56 (user): ONE key for all launchers. Read the canonical file
+# ($HOME/.config/kvp/api_key, auto-migrating a legacy live/api_key) via the
+# shared helper in env.sh. Save back to BOTH locations below.
+if [ -z "$API_KEY" ]; then
+  API_KEY="$(_kvp_load_api_key "$ROOT" || true)"
+fi
 # Review fix: look up live/api_key under the REPO ROOT ($ROOT), not $PWD --
 # the launcher must work from any working directory, not only from the repo root.
 [ -f "$ROOT/live/api_key" ] && [ -z "$API_KEY" ] && API_KEY="$(head -n1 "$ROOT/live/api_key" | tr -d '[:space:]')"
@@ -159,7 +168,7 @@ if [ -z "$API_KEY" ] && [ "$LOOPBACK" = "1" ]; then
   [ "${#API_KEY}" -ge 32 ] || die "generated API key is too short (${#API_KEY} chars)"
   umask 077
   mkdir -p "$ROOT/live"
-  printf '%s\n' "$API_KEY" > "$ROOT/live/api_key"
+  _kvp_save_api_key "$API_KEY" "$ROOT/live"
   chmod 600 "$ROOT/live/api_key"
   echo "API key auto-generated for the loopback server and saved to $ROOT/live/api_key"
 fi
@@ -543,6 +552,42 @@ print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
         -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
         -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
       )
+      # Round 56 (user): the recipe's DYNAMIC hot/cold experts machinery must
+      # run here too (HOTSPLIT_DYNAMIC=1 is the recipe default). Same mounts
+      # and the same /w boot hook as run-tp4-hotsplit.sh. Opt out: KVP_HOTSPLIT=0.
+      if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
+        for _hf in hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py expert_hist_mix.json; do
+          [ -f "$RECIPE/patches/$_hf" ] || die "hotsplit file missing in the recipe: $RECIPE/patches/$_hf (provide the full recipe checkout or set KVP_HOTSPLIT=0)"
+        done
+        MOUNTS+=(
+          -v "$RECIPE/patches/hotsplit.py:/w/hotsplit.py:ro"
+          -v "$RECIPE/patches/hotsplit_plan.py:/w/hotsplit_plan.py:ro"
+          -v "$RECIPE/patches/numa_bind.py:/w/numa_bind.py:ro"
+          -v "$RECIPE/patches/sitecustomize.py:/w/sitecustomize.py:ro"
+          -v "$RECIPE/patches/expert_hist_mix.json:/w/expert_hist_mix.json:ro"
+        )
+        echo "hotsplit: dynamic hot experts ON (KVP_HOTSPLIT=1, recipe default) -- /w boot hook mounted"
+        # The recipe's container env (run-tp4-hotsplit.sh, tp4.env.example):
+        # HOTSPLIT_DYNAMIC=1 is the default; HOT_GIB is REQUIRED for real
+        # splits (empty plan = an empty hot set), so fall back to 30 GiB when
+        # unset -- same value the recipe documents.
+        HOTSPLIT_ENV_ARGS=(
+          -e PYTHONPATH=/w
+          -e "HOTSPLIT_DYNAMIC=${HOTSPLIT_DYNAMIC:-1}"
+          -e "HOTSPLIT_DRYRUN=${HOTSPLIT_DRYRUN:-0}"
+          -e "HOTSPLIT_COUNTS=${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
+          -e "HOTSPLIT_WEIGHTS=${HOTSPLIT_WEIGHTS:-decode=1,prefill=0}"
+          -e "HOTSPLIT_HOT_GIB=${HOTSPLIT_HOT_GIB:-30}"
+          -e "HOTSPLIT_HOST_FLOOR_GIB=${HOTSPLIT_HOST_FLOOR_GIB:-128}"
+          -e "HOTSPLIT_NUMA=${HOTSPLIT_NUMA:-1}"
+          -e "HOTSPLIT_NUMA_POLICY=${HOTSPLIT_NUMA_POLICY:-preferred}"
+          -e "HOTSPLIT_ALLOW_STATIC_FALLBACK=${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}"
+          -e "HOTSPLIT_BOOT_HOOK=1"
+        )
+      else
+        echo "hotsplit: disabled by KVP_HOTSPLIT=0 (static placement only)"
+        HOTSPLIT_ENV_ARGS=()
+      fi
       ;;
     *)
       echo "KVP_MODEL_CONFIG=${KVP_MODEL_CONFIG} is not the reference MiMo config -- skipping MiMo model patches (provide your own via RECIPE_DIR if needed)"
@@ -563,6 +608,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   ${ENGINE_USER_ARGS[@]+"${ENGINE_USER_ARGS[@]}"} \
+  ${HOTSPLIT_ENV_ARGS[@]+"${HOTSPLIT_ENV_ARGS[@]}"} \
   "${ENGINE_CACHE_ARGS[@]}" \
   -e VLLM_USE_DEEP_GEMM=0 \
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 \

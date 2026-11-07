@@ -12,8 +12,8 @@ GitHub remote API).
 
 **Overall status: ACCEPTED (hardware 2026-11-07)** — implementation complete,
 offline tests pass
-(315 unit tests + 18 more offline config/docs tests = 333 offline collected,
-332 passed + 2 skipped; 349 collected total including the live-`lmcache`
+(325 unit tests + 34 more offline config/docs tests = 359 offline collected,
+342 passed + 2 skipped; 359 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
