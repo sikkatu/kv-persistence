@@ -6,8 +6,8 @@
 
 ## 总状态：PARTIAL
 
-实现已完成，离线测试全绿（245 个单元测试 + 19 个离线配置/文档测试 = 264 个离线收集，
-262 通过 + 2 跳过；共收集 279 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
+实现已完成，离线测试全绿（247 个单元测试 + 19 个离线配置/文档测试 = 266 个离线收集，
+264 通过 + 2 跳过；共收集 281 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
 另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
 硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
 （`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
@@ -361,8 +361,8 @@ kv-persistence 克隆；否则用 KV 兼容性字段的确定性哈希）。`KV_
 `.github/workflows/check.yml`：离线 unit+配置测试（无需 lmcache/GPU）、所有启动器
 的 bash 语法检查、所有模块的 py_compile。
 
-**测试计数**：此前的数字已过时。实际：245 个单元测试（243 通过 + 2 跳过），19 个离线配置/文档测试，
-264 个离线收集（262 通过 + 2 跳过），共收集 279 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
+**测试计数**：此前的数字已过时。实际：247 个单元测试（245 通过 + 2 跳过），19 个离线配置/文档测试，
+266 个离线收集（264 通过 + 2 跳过），共收集 281 个（另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集；
 跳过数依赖环境：torch/lz4/zstd）。已在
 final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
 
@@ -416,6 +416,11 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`。
 * **Same-UID 探针（round 45g）**：`ipc-test.sh` 现在支持
 * **Same-UID 引擎模式（round 45h，KVP_SAME_UID=1）**：same-UID ipc-test
+* **第 45i 轮（bash 赋值陷阱）**：首次 same-UID 运行在预检处以
+  `PRODUCER_USER=NNNN:NNNN: command not found` 失败——bash 不把
+  `${var:+NAME=val}` 当作赋值（展开的词变成命令名）。调用现在按字面传递
+  赋值（`PRODUCER_USER="$_ipc_pu"`）；空值即 ipc-test 默认（root producer），
+  无需条件展开。回归测试锁定该陷阱。
   通过（1000:1000 → 求和匹配）——两侧共享 UID 时传输无需 root。
   `run-vllm-with-persist.sh` 现已支持：`--user $(id -u):$(id -g)`
   （动态——任意用户、任意 UID，绝不硬编码），HF/torch 缓存迁到可写的
@@ -430,7 +435,7 @@ final-report（EN/RU/ZH）与 Home（EN/RU/ZH）中修正。
   `run-vllm-with-persist.sh`，verdict 会如实说明。
 * Docker 模式：`start-cache.sh` 警告缓存文件属主为 root（purge/budget
   需 sudo）；`purge` 在 PermissionError 时打印原因和修复方法，而非仅错误。
-19 个测试（245 unit / 264 offline / 279 共计）。
+21 个测试（247 unit / 266 offline / 281 共计）。
 
 `register_kv_caches` 死掉（300 秒超时）——而 TCP 预检通过了。套接字开着，
 但 RPC 通道已死：TCP 可达性不能证明 lmcache 消息协议正常。修复：

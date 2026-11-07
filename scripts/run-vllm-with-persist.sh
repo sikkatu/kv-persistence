@@ -379,7 +379,11 @@ the container. Align both sides to the SAME version:
     if [ "$KVP_SAME_UID" = "1" ]; then
       _ipc_pu="$_uid:$_gid"
     fi
-    if IMAGE="$IMAGE" CONSUMER="$_ipc_mode" ${_ipc_pu:+PRODUCER_USER="$_ipc_pu"} bash "$HERE/ipc-test.sh"; then
+    # Round 45i: ${var:+NAME=val} is NOT an assignment in bash -- the expanded
+    # word becomes a command name ("PRODUCER_USER=NNNN:NNNN: command not found").
+    # Pass the assignment LITERALLY; an empty value is the script default (root
+    # producer), so no conditional expansion is needed at all.
+    if IMAGE="$IMAGE" CONSUMER="$_ipc_mode" PRODUCER_USER="$_ipc_pu" bash "$HERE/ipc-test.sh"; then
       echo "pre-flight: CUDA IPC boundary OK (consumer=$_ipc_mode${_ipc_pu:+, producer UID=$_ipc_pu})"
     else
       die "CUDA IPC BOUNDARY FAILED (pre-flight): the cache server cannot open

@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(245 unit tests + 19 more offline config/docs tests = 264 offline collected,
-262 passed + 2 skipped; 279 collected total including the live-`lmcache`
+(247 unit tests + 19 more offline config/docs tests = 266 offline collected,
+264 passed + 2 skipped; 281 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 245 unit tests (`tests/unit`, 243 passed + 2 skipped),
-19 top-level offline tests, 264 offline collected (262 passed + 2 skipped),
-279 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 247 unit tests (`tests/unit`, 245 passed + 2 skipped),
+19 top-level offline tests, 266 offline collected (264 passed + 2 skipped),
+281 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -661,6 +661,13 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`.
 * **Same-UID probe (round 45g)**: `ipc-test.sh` now supports
 * **Same-UID engine mode (round 45h, KVP_SAME_UID=1)**: the same-UID
+* **Round 45i (bash assignment trap)**: the first same-UID run died
+  at the pre-flight with `PRODUCER_USER=NNNN:NNNN: command not
+  found` -- bash does NOT treat `${var:+NAME=val}` as an assignment
+  (the expanded word becomes a command name). The call now passes
+  the assignment LITERALLY (`PRODUCER_USER="$_ipc_pu"`); an empty
+  value is the ipc-test default (root producer) so no conditional
+  expansion is needed. Regression test locks the trap.
   ipc-test PASSED (1000:1000 -> sum matched) -- transfer works
   WITHOUT root when both sides share the UID. `run-vllm-with-persist.sh`
   now supports this: `--user $(id -u):$(id -g)` (DYNAMIC -- any user,
@@ -681,7 +688,7 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-19 tests (245 unit / 264 offline / 279 total).
+21 tests (247 unit / 266 offline / 281 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight
