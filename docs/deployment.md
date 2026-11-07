@@ -137,6 +137,26 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 or permanently in `configs/generic/lmcache-server.env(.local)`:
 
 ```
+
+### Alternative: same-UID mode (no root, round 45h)
+
+Instead of sudo, BOTH processes can share the SAME UID -- the engine
+container runs with `--user $(id -u):$(id -g)` (DYNAMIC: works for any
+user, any UID -- nothing is hardcoded). The CUDA IPC test proved this
+path (`PRODUCER_USER=$(id -u):$(id -g) bash scripts/ipc-test.sh` = PASS).
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+In this mode the HF cache mounts at `/tmp/hf-cache` and the torch
+caches (`XDG_CACHE_HOME`, `TRITON_CACHE_DIR`) move under `/tmp` --
+the non-root user cannot write `/root`. The pre-flight IPC test runs
+with `PRODUCER_USER=$(id -u):$(id -g)` so it reproduces EXACTLY the
+production boundary. The cache server runs as your user (no sudo),
+and cache files are owned by you.
+
 ### The cache server MUST run as root (round 45)
 
 The CUDA IPC boundary test (`bash scripts/ipc-test.sh`) proved on the

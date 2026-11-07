@@ -45,6 +45,20 @@ set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# Review fix (round 45h): same-UID mode (KVP_SAME_UID=1) runs the engine
+# container as $(id -u):$(id -g) -- DYNAMIC UID, works for any user (no
+# hardcoded 1000). The cache dirs move to world-writable /tmp paths because
+# the non-root user cannot write /root. Without KVP_SAME_UID the container
+# runs as root (the proven fallback: CONSUMER=host-root passed the
+# ipc-test). Defined EARLY: the pre-flight IPC test needs it too.
+KVP_SAME_UID="${KVP_SAME_UID:-0}"
+ENGINE_USER_ARGS=()
+ENGINE_CACHE_ARGS=(-e HF_HOME=/root/.cache/huggingface)
+_uid="$(id -u)"; _gid="$(id -g)"
+if [ "$KVP_SAME_UID" = "1" ]; then
+  ENGINE_USER_ARGS=(--user "$_uid:$_gid")
+  ENGINE_CACHE_ARGS=(-e HF_HOME=/tmp/hf-cache -e XDG_CACHE_HOME=/tmp/xdg-cache -e TRITON_CACHE_DIR=/tmp/triton-cache)
+fi
 # Review fix (round 26): try the documented clone layout first
 # (~/sikkatu-recipes/recipes/...), then the plain ~/recipes layout.
 if [ -n "${RECIPE_DIR:-}" ]; then
@@ -361,8 +375,12 @@ the container. Align both sides to the SAME version:
     if [ "${KVP_LAUNCH_MODE:-host}" = "docker" ]; then _ipc_mode=container; fi
     echo "pre-flight: CUDA IPC boundary test (consumer=$_ipc_mode) -- can the cache"
     echo "            server open GPU memory created in the container? (~1 min)"
-    if IMAGE="$IMAGE" CONSUMER="$_ipc_mode" bash "$HERE/ipc-test.sh"; then
-      echo "pre-flight: CUDA IPC boundary OK (consumer=$_ipc_mode)"
+    _ipc_pu=""
+    if [ "$KVP_SAME_UID" = "1" ]; then
+      _ipc_pu="$_uid:$_gid"
+    fi
+    if IMAGE="$IMAGE" CONSUMER="$_ipc_mode" ${_ipc_pu:+PRODUCER_USER="$_ipc_pu"} bash "$HERE/ipc-test.sh"; then
+      echo "pre-flight: CUDA IPC boundary OK (consumer=$_ipc_mode${_ipc_pu:+, producer UID=$_ipc_pu})"
     else
       die "CUDA IPC BOUNDARY FAILED (pre-flight): the cache server cannot open
 GPU memory created in the container -- this is the EXACT step that killed
@@ -381,7 +399,13 @@ To bypass this check: KVP_SKIP_IPC_TEST=1 (NOT recommended -- the failure return
 else
   echo "KVP_PERSIST_ENABLED=$PERSIST -- launching WITHOUT persistent KV connector (--kv-transfer-config omitted)"
 fi
-MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
+# Review fix (round 45h): MOUNTS follows the same-UID mode defined above.
+if [ "$KVP_SAME_UID" = "1" ]; then
+  echo "same-UID mode: engine runs as $_uid:$_gid (no root)"
+  MOUNTS=(-v "$HF_CACHE:/tmp/hf-cache")
+else
+  MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
+fi
 # Review round 13 (critical): LMCache derives its cache identity (ObjectKey and
 # the L2 file name) from vLLM's `model_config.model`, which is whatever `--model`
 # was passed. Mounting every model at the SAME path `/model` meant all
@@ -452,7 +476,8 @@ echo "starting $CONTAINER with persistent KV connector (lmcache $LMCACHE_HOST:$L
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
-  -e HF_HOME=/root/.cache/huggingface \
+  ${ENGINE_USER_ARGS[@]+"${ENGINE_USER_ARGS[@]}"} \
+  "${ENGINE_CACHE_ARGS[@]}" \
   -e VLLM_USE_DEEP_GEMM=0 \
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 \
   -e "VLLM_API_KEY=$API_KEY" \

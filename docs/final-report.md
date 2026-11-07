@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(240 unit tests + 19 more offline config/docs tests = 259 offline collected,
-257 passed + 2 skipped; 274 collected total including the live-`lmcache`
+(245 unit tests + 19 more offline config/docs tests = 264 offline collected,
+262 passed + 2 skipped; 279 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 240 unit tests (`tests/unit`, 238 passed + 2 skipped),
-19 top-level offline tests, 259 offline collected (257 passed + 2 skipped),
-274 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 245 unit tests (`tests/unit`, 243 passed + 2 skipped),
+19 top-level offline tests, 264 offline collected (262 passed + 2 skipped),
+279 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -660,6 +660,17 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh` then
   `sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`.
 * **Same-UID probe (round 45g)**: `ipc-test.sh` now supports
+* **Same-UID engine mode (round 45h, KVP_SAME_UID=1)**: the same-UID
+  ipc-test PASSED (1000:1000 -> sum matched) -- transfer works
+  WITHOUT root when both sides share the UID. `run-vllm-with-persist.sh`
+  now supports this: `--user $(id -u):$(id -g)` (DYNAMIC -- any user,
+  any UID, never hardcoded), HF/torch caches move to world-writable
+  /tmp paths (the non-root user cannot write /root), and the
+  pre-flight IPC test runs with PRODUCER_USER=$(id -u):$(id -g) --
+  exactly the production boundary. Usage:
+  `KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh`
+  (cache server runs as the same user, no sudo). Default stays the
+  proven root fallback.
   `PRODUCER_USER=$(id -u):$(id -g)` -- the producer container runs
   with the SAME UID as the host consumer. PASS would mean the
   transfer works WITHOUT root at the GPU level, but the engine
@@ -670,7 +681,7 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-14 tests (240 unit / 259 offline / 274 total).
+19 tests (245 unit / 264 offline / 279 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight

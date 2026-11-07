@@ -61,7 +61,8 @@ def test_ipc_mode_follows_server_process_user():
     assert "/proc/$_ipc_pid/status" in t, (
         "the server process user must be read from proc"
     )
-    idx = t.index("host-root")
-    assert idx > t.index("ipc-test.sh"), (
+    marker = t.index("Review fix (round 45): the RPC ping does NOT prove")
+    idx = t.index("_ipc_mode=host-root")
+    assert idx > marker, (
         "the mode detection must live in the IPC test block"
     )

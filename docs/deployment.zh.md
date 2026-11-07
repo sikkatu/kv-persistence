@@ -98,6 +98,25 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 或在 `configs/generic/lmcache-server.env(.local)` 中永久设置：
 
 ```
+
+### 替代方案：same-UID 模式（无需 root，round 45h）
+
+不必用 sudo——两个进程可以共享同一个 UID：引擎容器以
+`--user $(id -u):$(id -g)` 启动（动态：适用于任何用户、任何 UID——
+绝无硬编码）。CUDA IPC 测试已验证此路径
+（`PRODUCER_USER=$(id -u):$(id -g) bash scripts/ipc-test.sh` = PASS）。
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+此模式下 HF 缓存挂载到 `/tmp/hf-cache`，torch 缓存
+（`XDG_CACHE_HOME`、`TRITON_CACHE_DIR`）移到 `/tmp` 下——非 root 用户
+无法写 `/root`。预检 IPC 测试以 `PRODUCER_USER=$(id -u):$(id -g)`
+运行，恰好复现生产边界。缓存服务器以您的用户运行（无需 sudo），
+缓存文件归您所有。
+
 ### 缓存服务器必须以 root 运行（round 45）
 
 CUDA IPC 边界测试（`bash scripts/ipc-test.sh`）在目标主机上证实：引擎容器

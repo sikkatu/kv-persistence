@@ -127,6 +127,27 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 или постоянно в `configs/generic/lmcache-server.env(.local)`:
 
 ```
+
+### Альтернатива: режим same-UID (без root, round 45h)
+
+Вместо sudo оба процесса могут делить ОДИН UID -- контейнер движка
+запускается с `--user $(id -u):$(id -g)` (ДИНАМИЧЕСКИ: работает для
+любого пользователя и UID -- ничего не захардкожено). CUDA IPC-тест
+доказал этот путь (`PRODUCER_USER=$(id -u):$(id -g) bash
+scripts/ipc-test.sh` = PASS).
+
+```bash
+USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
+KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+```
+
+В этом режиме HF-кэш монтируется в `/tmp/hf-cache`, а torch-кэши
+(`XDG_CACHE_HOME`, `TRITON_CACHE_DIR`) переезжают под `/tmp` --
+не-root пользователь не может писать в `/root`. Pre-flight IPC-тест
+запускается с `PRODUCER_USER=$(id -u):$(id -g)` и воспроизводит РОВНО
+продуктовую границу. Кэш-сервер работает от вашего пользователя
+(без sudo), файлы кэша принадлежат вам.
+
 ### Кэш-сервер ОБЯЗАН работать под root (round 45)
 
 Тест CUDA IPC границы (`bash scripts/ipc-test.sh`) доказал на целевом
