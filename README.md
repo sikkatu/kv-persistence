@@ -197,14 +197,18 @@ reverse proxy in front of it. All images are pinned to exact versions
 the container `localhost` is the container itself, so the metrics would
 otherwise never reach the collector.
 
-Point the cache server at the collector and enable telemetry (off by default,
-the cache works fine without it):
+Telemetry is enabled AUTOMATICALLY since round 47b: `start-cache.sh` detects
+a collector listening at `127.0.0.1:4320` and starts pushing -- start the
+stack first, then (re)start the cache:
 
 ```bash
-USE_OBSERVABILITY=1 bash scripts/start-cache.sh
-# or explicitly:
-KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+bash scripts/start-observability.sh   # collector + Prometheus + Grafana
+bash scripts/start-cache.sh           # metrics flow automatically
 ```
+
+Explicit override when needed: `USE_OBSERVABILITY=1` forces it on,
+`KVP_NO_OBSERVABILITY=1` forces it off,
+`KVP_OTLP_ENDPOINT=http://host:port` sets a custom endpoint.
 
 Panels worth watching on the LMCache dashboard:
 

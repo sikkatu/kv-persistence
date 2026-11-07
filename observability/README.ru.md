@@ -47,13 +47,21 @@ cd observability && docker compose up -d
 ## Подключение сервиса кэша
 
 Стек пассивен, пока lmcache-сервер не начнёт отправлять телеметрию в
-коллектор. Включите её любым из переключателей (по умолчанию выключена — кэш
-полноценно работает и без неё):
+коллектор. С раунда 47b метрики включаются АВТОМАТИЧЕСКИ: `start-cache.sh`
+обнаруживает коллектор на `127.0.0.1:4320` и начинает отправку — флаг не нужен.
+Сначала поднимите стек, затем кэш:
 
 ```bash
-USE_OBSERVABILITY=1 bash scripts/start-cache.sh
-# или явно:
-KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+bash scripts/start-observability.sh   # коллектор + Prometheus + Grafana
+bash scripts/start-cache.sh           # метрики идут сами
+```
+
+Явное управление (редко нужно):
+
+```bash
+USE_OBSERVABILITY=1 bash scripts/start-cache.sh                      # принудительно вкл
+KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh  # свой endpoint
+KVP_NO_OBSERVABILITY=1 bash scripts/start-cache.sh                   # принудительно выкл
 ```
 
 `--enable-tracing` добавляется автоматически при включённом OTLP, поэтому

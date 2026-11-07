@@ -156,12 +156,15 @@ Grafana 以匿名 Admin 运行且登录表单被禁用 —— 暴露到 `0.0.0.0
 `start-cache.sh` 会自动把 OTLP 端点中的 `localhost`/`127.0.0.1` 改写为
 `host.docker.internal` —— 容器内的 `localhost` 是容器自身，否则指标永远
 无法到达收集器。
-把缓存服务指向收集器并启用遥测（默认关闭，缓存不依赖它也能完整工作）：
+遥测自第 47b 轮起自动启用：`start-cache.sh` 检测到 `127.0.0.1:4320` 上的
+收集器后开始推送——先启动监控栈，再（重新）启动缓存：
 ```bash
-USE_OBSERVABILITY=1 bash scripts/start-cache.sh
-# 或显式指定：
-KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+bash scripts/start-observability.sh   # 收集器 + Prometheus + Grafana
+bash scripts/start-cache.sh           # 指标自动流动
 ```
+需要时可显式覆盖：`USE_OBSERVABILITY=1` 强制开启，
+`KVP_NO_OBSERVABILITY=1` 强制关闭，
+`KVP_OTLP_ENDPOINT=http://host:port` 指定自定义端点。
 LMCache 仪表盘上值得关注的面板：
 | 面板 | 含义 |
 |---|---|

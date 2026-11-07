@@ -46,13 +46,22 @@ Datasources (Prometheus, Tempo) are provisioned automatically from
 
 ## Connecting the cache service
 
-The stack is passive until the lmcache server pushes to the collector. Enable
-it with either switch (off by default — the cache works fine without it):
+The stack is passive until the lmcache server pushes to the collector. Since
+round 47b metrics are enabled AUTOMATICALLY: `start-cache.sh` detects a
+collector listening on `127.0.0.1:4320` and starts pushing -- no flag needed.
+Start the stack first, then the cache:
 
 ```bash
-USE_OBSERVABILITY=1 bash scripts/start-cache.sh
-# or explicitly:
-KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+bash scripts/start-observability.sh   # collector + Prometheus + Grafana
+bash scripts/start-cache.sh           # metrics flow automatically
+```
+
+Explicit control (rarely needed):
+
+```bash
+USE_OBSERVABILITY=1 bash scripts/start-cache.sh                      # force on
+KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh  # custom endpoint
+KVP_NO_OBSERVABILITY=1 bash scripts/start-cache.sh                   # force off
 ```
 
 `--enable-tracing` is added automatically when OTLP is enabled, so request

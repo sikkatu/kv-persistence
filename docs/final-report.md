@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(272 unit tests + 19 more offline config/docs tests = 291 offline collected,
-289 passed + 2 skipped; 306 collected total including the live-`lmcache`
+(275 unit tests + 19 more offline config/docs tests = 294 offline collected,
+292 passed + 2 skipped; 309 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 272 unit tests (`tests/unit`, 270 passed + 2 skipped),
-19 top-level offline tests, 291 offline collected (289 passed + 2 skipped),
-306 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 275 unit tests (`tests/unit`, 273 passed + 2 skipped),
+19 top-level offline tests, 294 offline collected (292 passed + 2 skipped),
+309 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -727,7 +727,7 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-46 tests (272 unit / 291 offline / 306 total). Per-round change notes now live in [CHANGELOG.md](../CHANGELOG.md).
+49 tests (275 unit / 294 offline / 309 total). Per-round change notes now live in [CHANGELOG.md](../CHANGELOG.md).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight

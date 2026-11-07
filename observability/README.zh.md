@@ -43,13 +43,21 @@ cd observability && docker compose up -d
 
 ## 连接缓存服务
 
-在 lmcache 服务开始向收集器推送遥测之前，该栈是被动的。用任一开关启用
-（默认关闭 —— 缓存不依赖它也能完整工作）：
+在 lmcache 服务开始向收集器推送遥测之前，该栈是被动的。自第 47b 轮起，指标
+自动启用：`start-cache.sh` 检测到 `127.0.0.1:4320` 上的收集器后开始推送——
+无需任何标志。先启动监控栈，再启动缓存：
 
 ```bash
-USE_OBSERVABILITY=1 bash scripts/start-cache.sh
-# 或显式指定：
-KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+bash scripts/start-observability.sh   # 收集器 + Prometheus + Grafana
+bash scripts/start-cache.sh           # 指标自动流动
+```
+
+显式控制（很少需要）：
+
+```bash
+USE_OBSERVABILITY=1 bash scripts/start-cache.sh                      # 强制开
+KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh  # 自定义端点
+KVP_NO_OBSERVABILITY=1 bash scripts/start-cache.sh                   # 强制关
 ```
 
 启用 OTLP 时会自动附加 `--enable-tracing`，因此请求瀑布图会出现在 Tempo

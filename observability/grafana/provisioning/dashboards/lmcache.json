@@ -3170,5 +3170,5 @@
   "uid": "lmcache-standard",
   "version": 9,
   "weekStart": "",
-  "description": "Official LMCache MP-mode dashboard. Data appears ONLY when the cache server exports telemetry: start it with USE_OBSERVABILITY=1 bash scripts/start-cache.sh (or KVP_OTLP_ENDPOINT=http://localhost:4320). Panels that stay empty are panels whose metrics the pinned lmcache 0.5.6 does not emit -- see the dashboard honesty note in README. The \"LMCache coordinator\" dashboard is for multi-server fleets and is legitimately empty in this single-server repo."
+  "description": "Official LMCache MP-mode dashboard. Data appears automatically when the observability stack is up: start-cache.sh detects the OTel collector at 127.0.0.1:4320 and starts pushing (round 47b; force with USE_OBSERVABILITY=1, opt out with KVP_NO_OBSERVABILITY=1). Panels that stay empty are panels whose metrics the pinned lmcache 0.5.6 does not emit -- see the dashboard honesty note in README. The \"LMCache coordinator\" dashboard is for multi-server fleets and is legitimately empty in this single-server repo."
 }

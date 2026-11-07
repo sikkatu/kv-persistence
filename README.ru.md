@@ -189,14 +189,18 @@ Admin-доступом и отключённой формой входа — в�
 контейнера `localhost` это сам контейнер, и метрики иначе никогда не дошли
 бы до коллектора.
 
-Направить кэш-сервер на коллектор и включить телеметрию (по умолчанию
-выключена, кэш полноценно работает и без неё):
+Телеметрия включается АВТОМАТИЧЕСКИ с раунда 47b: `start-cache.sh`
+обнаруживает коллектор на `127.0.0.1:4320` и начинает отправку -- сначала
+поднимите стек, затем (пере)запустите кэш:
 
 ```bash
-USE_OBSERVABILITY=1 bash scripts/start-cache.sh
-# или явно:
-KVP_OTLP_ENDPOINT=http://localhost:4320 bash scripts/start-cache.sh
+bash scripts/start-observability.sh   # коллектор + Prometheus + Grafana
+bash scripts/start-cache.sh           # метрики идут сами
 ```
+
+Явное переопределение: `USE_OBSERVABILITY=1` принудительно включает,
+`KVP_NO_OBSERVABILITY=1` принудительно выключает,
+`KVP_OTLP_ENDPOINT=http://host:port` задаёт свой endpoint.
 
 Панели, за которыми стоит следить на дашборде LMCache:
 

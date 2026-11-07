@@ -8,6 +8,15 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 47b (observability auto-detect)
+
+* `start-cache.sh` AUTO-DETECTS the OTel collector at `127.0.0.1:4320`
+  and enables metrics automatically -- no flag needed (user request).
+  Explicit opt-out: `KVP_NO_OBSERVABILITY=1`; force on:
+  `USE_OBSERVABILITY=1`; custom endpoint: `KVP_OTLP_ENDPOINT=...`.
+* README + observability README (EN/RU/ZH) updated: "start the stack,
+  then the cache" flow; Grafana dashboard descriptions refreshed.
+
 ## Round 47 (documentation + dashboard honesty)
 
 * All docs now refer to the pinned **LMCache 0.5.6** (90 stale `0.5.3`

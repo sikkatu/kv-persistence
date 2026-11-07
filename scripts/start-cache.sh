@@ -61,13 +61,24 @@ case "${LMCACHE_HTTP_HOST:-}" in
 esac
 case "$LMCACHE_HELP" in *--http-port*) : ;; *) unset LMCACHE_HTTP_PORT ;; esac
 # OTLP push for the observability stack (scripts/start-observability.sh).
-# Off by default: the cache must start and work WITHOUT the monitoring stack.
-# Enabled by KVP_OTLP_ENDPOINT (e.g. http://localhost:4320) or
-# USE_OBSERVABILITY=1 which assumes the collector on its default port.
+# Review fix (round 47b, user): metrics used to need a manual flag -- pointless.
+# Resolution order:
+#   1. LMCACHE_OTLP_ENDPOINT / KVP_OTLP_ENDPOINT (explicit endpoint),
+#   2. USE_OBSERVABILITY=1 (assume the collector default),
+#   3. AUTO-DETECT: if a collector is listening on 127.0.0.1:4320 right now,
+#      metrics are enabled automatically -- the cache only starts pushing
+#      when the stack is actually up.
+# Explicit opt-out: KVP_NO_OBSERVABILITY=1 (never probe, never push).
 case "${USE_OBSERVABILITY:-}" in
   1|yes|true) LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-http://localhost:4320}" ;;
 esac
 LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-${KVP_OTLP_ENDPOINT:-}}"
+if [ -z "$LMCACHE_OTLP_ENDPOINT" ] && [ "${KVP_NO_OBSERVABILITY:-0}" != "1" ]; then
+  if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/4320' 2>/dev/null; then
+    LMCACHE_OTLP_ENDPOINT="http://localhost:4320"
+    echo "observability: OTel collector detected at 127.0.0.1:4320 -- metrics enabled automatically (opt out: KVP_NO_OBSERVABILITY=1)"
+  fi
+fi
 if [ -n "$LMCACHE_OTLP_ENDPOINT" ] && [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   # Review fix: inside the sidecar container `localhost` is the CONTAINER
   # itself, so the default endpoint would silently point nowhere. The

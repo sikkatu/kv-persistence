@@ -7,6 +7,14 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 47b 轮（可观测性自动检测）
+
+* `start-cache.sh` 自动检测 `127.0.0.1:4320` 上的 OTel 收集器并启用指标——
+  无需任何标志（用户要求）。显式关闭：`KVP_NO_OBSERVABILITY=1`；强制开启：
+  `USE_OBSERVABILITY=1`；自定义端点：`KVP_OTLP_ENDPOINT=...`。
+* README 与 observability README（EN/RU/ZH）已更新：先栈后缓存的流程；
+  Grafana 仪表盘描述已刷新。
+
 ## 第 47 轮（文档 + 仪表盘诚实性）
 
 * 所有文档现在引用固定的 **LMCache 0.5.6**（README/docs EN/RU/ZH 中
