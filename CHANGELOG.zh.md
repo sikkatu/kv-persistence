@@ -7,6 +7,15 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 50 轮（MODEL_DIR 送达门禁 + 配置中的编解码默认值）
+
+* 自动解析的 MODEL_DIR 从未被导出，因此启动后身份门禁（子进程）看到
+  `model_dir=unset`，无法读取 config.json，并拒绝验证 num_kv_heads /
+  head_dim（INCONCLUSIVE -> 缓存复用被阻止）。启动器现在在解析后导出它。
+* 零配置启动时 `L2 codec: none`：`lmcache-server.env` 仍固定
+  `LMCACHE_L2_SERDE=none`，覆盖了第 48 轮的默认值。三个语言文件现均
+  一致为 `zstd`；测试锁定以防语言版本分歧。
+
 ## 第 49 轮（PATH 自动、监控优先、报告清理）
 
 * 不再需要 `export PATH="$HOME/.venvs/lmcache/bin:$PATH"`（用户要求）：

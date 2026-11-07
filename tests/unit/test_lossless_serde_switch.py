@@ -53,7 +53,7 @@ def _python_resolve(use: str) -> str:
 @pytest.mark.parametrize(
     "use,expected",
     [
-        ("", "none"),
+        ("", "zstd"),   # round 48: empty switch -> configured/default (zstd)
         ("0", "none"),
         ("none", "none"),
         ("1", "zstd"),

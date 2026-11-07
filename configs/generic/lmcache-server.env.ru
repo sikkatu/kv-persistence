@@ -43,7 +43,7 @@ LMCACHE_EVICTION_RATIO=0.1
 # никогда не растёт. Значение входит в namespace идентичности кэша: его
 # смена превращает старые чанки в безопасный cache MISS (никогда не в
 # неверное чтение).
-LMCACHE_L2_SERDE=none
+LMCACHE_L2_SERDE=zstd
 
 # Удобный переключатель для scripts/start-cache.sh (Python-загрузчик его не
 # читает). USE_LOSSLESS_SERDE=1 включает zstd; =lz4 / =zstd выбирают кодек

@@ -134,6 +134,10 @@ fi
 or run:  MODEL_DIR=/path/to/model bash scripts/run-vllm-with-persist.sh
 (the choice is remembered in live/model_dir)."
 [ -d "$MODEL_DIR" ] || die "MODEL_DIR not found: $MODEL_DIR"
+# Round 50: EXPORT MODEL_DIR so the identity gate (a subprocess) can read
+# config.json from it. Without this the post-launch gate reports
+# model_dir=unset and refuses to verify num_kv_heads / head_dim (INCONCLUSIVE).
+export MODEL_DIR
 mkdir -p "$ROOT/live"
 [ "$(head -n1 "$ROOT/live/model_dir" 2>/dev/null)" = "$MODEL_DIR" ] || printf '%s
 ' "$MODEL_DIR" > "$ROOT/live/model_dir"

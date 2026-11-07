@@ -8,6 +8,18 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 50 (MODEL_DIR reaches the gate + codec default in configs)
+
+* The auto-resolved MODEL_DIR was never EXPORTED, so the post-launch
+  identity gate (a subprocess) saw `model_dir=unset`, could not read
+  config.json and refused to verify num_kv_heads / head_dim
+  (INCONCLUSIVE -> cache reuse blocked). The launcher now exports it
+  after resolution.
+* `L2 codec: none` in a zero-config launch: `lmcache-server.env` still
+  pinned `LMCACHE_L2_SERDE=none`, outranking the round-48 default. All
+  three locale files now agree on `zstd`; tests locked to prevent
+  locale divergence.
+
 ## Round 49 (PATH auto, monitoring first, report cleanup)
 
 * `export PATH="$HOME/.venvs/lmcache/bin:$PATH"` is no longer needed

@@ -96,8 +96,10 @@ def test_preflight_codec_mismatch_blocks_before_docker(tmp_path):
     saved = _preserve()
     try:
         env = _base_env(tmp_path)
+        # Round 50: the launch default codec is now zstd, so the adapter must
+        # use a DIFFERENT codec (lz4) to reproduce the mismatch.
         (tmp_path / "cache_root" / "l2-adapter.rendered.json").write_text(
-            '{"serde": {"type": "kvp-zstd", "level": "3", "align_bytes": "4096"}}'
+            '{"serde": {"type": "kvp-lz4", "level": "3", "align_bytes": "4096"}}'
         )
         r = subprocess.run(["bash", str(LAUNCHER)], env=env,
                            capture_output=True, text=True, timeout=120)
