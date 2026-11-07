@@ -62,8 +62,14 @@ def test_no_stale_partial_status():
 
 
 def test_changelog_records_round54():
+    """Round 54 evidence lives in the git log now (the CHANGELOG keeps only
+    the newest 3 rounds, user request, round 56). The policy itself is
+    asserted: at most 3 round sections, no verbatim request quotes."""
+    import re
     for name in ("CHANGELOG.md", "CHANGELOG.ru.md", "CHANGELOG.zh.md"):
         t = _read(name)
-        assert "2560" in t, "%s must record the evidence" % name
-        assert "KVP_CACHE_DEVICE" in t, (
-            "%s must note the honest machine-verdict caveat" % name)
+        rounds = re.findall(r"^## (Round|Раунд|第 )", t, re.M)
+        assert len(rounds) <= 3, (
+            "%s must keep only the newest 3 rounds, found %d" % (name, len(rounds)))
+        assert "user:" not in t and "пользователь:" not in t, (
+            "%s must not carry verbatim request quotes" % name)

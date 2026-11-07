@@ -77,6 +77,10 @@ bash scripts/preflight.sh               # проверка хоста, хран�
 bash scripts/start-all.sh              # ОДНА команда: мониторинг + кэш + движок
 #   (или пошагово: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
 bash scripts/stop-all.sh                # остановить всё (данные сохраняются)
+
+API-ключ: ОДИН общий файл для обоих репо (`$HOME/.config/kvp/api_key`,
+автогенерация при первом запуске, chmod 600). Переопределение:
+`KVP_API_KEY_FILE=`. Легаси `live/api_key` мигрируются автоматически.
 bash scripts/test-recovery.sh           # приёмка: рестарт → доказательство переиспользования (exit 0 = PASS)
 ```
 С раунда 48 запуск НЕ требует export и флагов: IMAGE резолвится из рецепта

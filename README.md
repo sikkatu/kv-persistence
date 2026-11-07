@@ -87,6 +87,10 @@ bash scripts/preflight.sh               # verify host, storage and identity
 bash scripts/start-all.sh              # ONE command: monitoring + cache + engine
 #   (or step by step: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
 bash scripts/stop-all.sh                # stop everything (data kept)
+
+API key: ONE shared file for both repos (`$HOME/.config/kvp/api_key`,
+auto-generated on first launch, chmod 600). Override: `KVP_API_KEY_FILE=`.
+Legacy per-repo `live/api_key` files are migrated automatically.
 bash scripts/test-recovery.sh           # acceptance: restart → cache reuse proof (exit 0 = PASS)
 ```
 Since round 48 the launch needs NO exports and NO flags: IMAGE resolves from

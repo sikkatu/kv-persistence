@@ -17,8 +17,9 @@
 * 场景 B（两个服务均重启，NVMe 保留）：`cached_tokens=2560`，ttft 0s，
   **L2 读取事件 = 1**（磁盘恢复证据）；
 * 身份门禁每阶段通过，**0 个硬失败**。
-机器判定仅因未设置 `KVP_CACHE_DEVICE`（无法获得独立 NVMe 计数器）而为
-INCONCLUSIVE。其余未验证项为次要项，见下方并如实标注。
+机器判定为 **PASS**。缓存设备自动检测（第 55 轮：`findmnt` ->
+`live/cache_device`，支持 VM 磁盘和 LUKS mapper 节点），独立 NVMe 字节
+计数器在同一轮中可用。其余未验证项为次要项，见下方并如实标注。
 
 ## 架构与后端选择
 

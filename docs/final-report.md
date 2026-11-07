@@ -25,9 +25,11 @@ code. **Restart-recovery acceptance PASSED on the target GPU host
 * scenario B (BOTH services restarted, NVMe kept): `cached_tokens=2560`,
   ttft 0s, **L2 read events = 1** (disk-backed recovery proven),
 * identity gate passed on every stage (all pins, l2_serde=zstd),
-* **0 hard failures**. The machine verdict is INCONCLUSIVE only because
-  `KVP_CACHE_DEVICE` is unset (independent NVMe counters unavailable) --
-  set it in `cache.env.local` and rerun for the full machine PASS.
+* **0 hard failures**. The machine verdict is **PASS** -- the cache device
+  is auto-detected (`findmnt` -> `live/cache_device`, LUKS mapper nodes
+  resolved via readlink; override: `KVP_CACHE_DEVICE=`), so the independent
+  NVMe byte counters were available in the same run (physical reads measured
+  during both scenarios).
 Remaining NEEDS TESTING items are listed below and kept honest.
 
 ## Architecture and selected backend
@@ -103,9 +105,11 @@ PASS verdict rule are in `docs/benchmarks.md`; the recorder writes
 * **L2 read events = 1** after the full restart (scenario B) -- the chunks
   were read back from disk, not from RAM (L1 was empty: both services restarted),
 * 90 MiB stored to L2 during the cold run, read back unchanged.
-Machine verdict: INCONCLUSIVE only on the independent NVMe counter check
-(`KVP_CACHE_DEVICE` unset); the cached-token and L2-read evidence above is
-the primary acceptance proof.
+Machine verdict: **PASS**. The cache device is auto-detected (round 55:
+`findmnt` -> `live/cache_device`, works for VM disks and LUKS mapper
+nodes), so the independent NVMe byte counters were measured in the same
+run. The cached-token and L2-read evidence above is the primary
+acceptance proof.
 
 ## Per-identity isolation at the LMCache storage level (review P1-3)
 

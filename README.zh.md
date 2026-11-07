@@ -74,6 +74,10 @@ bash scripts/preflight.sh               # 校验主机、存储与身份
 bash scripts/start-all.sh              # 一条命令：监控 + 缓存 + 引擎
 #   （或分步：start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh）
 bash scripts/stop-all.sh                # 全部停止（数据保留）
+
+API 密钥：两个仓库共用一个文件（`$HOME/.config/kvp/api_key`，
+首次启动自动生成，chmod 600）。覆盖：`KVP_API_KEY_FILE=`。
+旧版 `live/api_key` 自动迁移。
 bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据（exit 0 = PASS）
 ```
 自第 48 轮起启动无需 export 和标志：IMAGE 从配方解析（记入 `live/image`），
