@@ -13,12 +13,12 @@
 | vLLM 提交 | `8e2beaa3bff595577a069d49d96bde9074294ec2`（2026-10-21） | VERIFIED |
 | Python | 3.12 | VERIFIED |
 | 镜像中的 `LMCacheMPConnector` | 支持 `kv_connector_module_path` | VERIFIED（据源码） |
-| LMCache | **0.5.6**（与固定 vLLM 镜像匹配；固定于 `requirements-lmcache.txt`） | 目标主机 NEEDS TESTING |
-| MP 协议兼容（lmcache ↔ vLLM） | ZMQ 请求通道 | 目标主机 NEEDS TESTING |
+| LMCache | **0.5.6**（与固定 vLLM 镜像匹配；固定于 `requirements-lmcache.txt`） | VERIFIED（硬件 2026-11-07） |
+| MP 协议兼容（lmcache ↔ vLLM） | ZMQ 请求通道 | VERIFIED（硬件 2026-11-07：register_kv_caches + API 服务正常） |
 | L2 `cache_salt` 隔离 | **0.5.6+ 原生支持**（文件名 `@` 后缀）；我们的补丁是 0.5.6 之前文件的兼容墫片 | VERIFIED（据源码） |
-| L2 `nixl_store_dynamic` 持久化 | persist_enabled + 惰性索引重建 | 目标主机 NEEDS TESTING |
-| vLLM 重启后恢复 | 验收要求 | 目标主机 NEEDS TESTING |
-| 双服务重启后恢复 | 验收要求 | 目标主机 NEEDS TESTING |
+| L2 `nixl_store_dynamic` 持久化 | persist_enabled + 惰性索引重建 | VERIFIED（硬件 2026-11-07：90 MiB 写入，重启后读回） |
+| vLLM 重启后恢复 | 验收要求 | VERIFIED（硬件 2026-11-07，场景 A：cached_tokens=2560，ttft 0s） |
+| 双服务重启后恢复 | 验收要求 | VERIFIED（硬件 2026-11-07，场景 B：cached_tokens=2560，L2 读取事件=1） |
 | 模型 | MiMo-V2.6-Pro-MOPD + 自定义补丁 | VERIFIED（生产配方可运行） |
 | KV 类型 | bfloat16（项目实际类型；属于缓存身份） | 配置选择；变更后需重测 |
 | NVMe 后端 | POSIX（刻意推迟 GDS） | NEEDS TESTING |

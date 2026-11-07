@@ -278,10 +278,13 @@ Omit it everywhere to stay on the byte-exact raw mode.
 
 ## Status
 
-Implementation complete; offline tests green. Hardware acceptance runs on a GPU
-host are scripted (`scripts/test-recovery.sh`, `scripts/benchmark.sh`) and executed by
-the operator. Unverified features are labelled `NEEDS TESTING` / `BLOCKED` in
-[docs/final-report.md](docs/final-report.md) — nothing untested is claimed as working.
+Implementation complete; offline tests green. **Restart-recovery acceptance PASSED
+on the target GPU host (4x RTX PRO 6000, 2026-11-07)**: after a full restart of
+BOTH services the first request was served from the cache
+(`cached_tokens=2560`, ttft 0s vs 17.53s cold) with L2 disk-read evidence
+(L2 read events = 1). Remaining unverified features are labelled `NEEDS TESTING` /
+`BLOCKED` in [docs/final-report.md](docs/final-report.md) — nothing untested is
+claimed as working.
 
 ## Design rules
 

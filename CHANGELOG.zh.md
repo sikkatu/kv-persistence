@@ -7,6 +7,20 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 54 轮（硬件验收已记录）
+
+* 重启后恢复的硬件验收已在目标 GPU 主机通过（4x RTX PRO 6000，
+  MiMo-V2.6-Pro-MOPD，same-UID，2026-11-07）：
+  - 场景 A（重启 vLLM）：cached_tokens=2560，ttft 0s（冷启动 17.53s），
+    L1/RAM 命中；
+  - 场景 B（两服务均重启，NVMe 保留）：cached_tokens=2560，ttft 0s，
+    **L2 读取事件 = 1**（磁盘恢复已证实）；
+  - 身份门禁每阶段通过，**0 个硬失败**。
+* 机器判定仅因未设置 KVP_CACHE_DEVICE（无法获得独立 NVMe 计数器）而为
+  INCONCLUSIVE——在 cache.env.local 中设置后重跑可获机器 PASS。
+* README（EN/RU/ZH）、兼容性矩阵（EN/RU/ZH）和 final-report（EN/RU/ZH）
+  已更新：ACCEPTED 状态附证据；其余 NEEDS TESTING 项为次要项，如实标注。
+
 ## 第 53 轮（cold baseline 等待 API）
 
 * `test-recovery.sh` 的 cold baseline 立即发送第一个 HTTP 请求，若引擎仍在

@@ -216,12 +216,8 @@ bash scripts/run-vllm-with-persist.sh
 | `tests/` | 单元（随处可跑）、集成（需 `lmcache`）、恢复（GPU 主机） |
 
 ## 状态
-
-实现已完成；离线测试全部通过。GPU 主机上的验收测试已封装为脚本
-（`scripts/test-recovery.sh`、`scripts/benchmark.sh`），由运维方执行。
-未验证功能在 [docs/final-report.md](docs/final-report.md) 中标记为
-`NEEDS TESTING` / `BLOCKED` —— 未测试者绝不说成可用。
-
+实现已完成，离线测试全绿。**重启后恢复的硬件验收已通过（4x RTX PRO 6000，2026-11-07）**：两个服务完全重启后，首个请求由缓存提供（`cached_tokens=2560`，ttft 0s，冷启动 17.53s），并有 L2 磁盘读取证据。
+其余未验证功能在 [docs/final-report.md](docs/final-report.md) 中标注为 `NEEDS TESTING` / `BLOCKED` —— 未测试者绝不说成可用。
 ## 设计规则
 
 * 生产配方（`sikkatu/recipes`）对本项目**只读**。

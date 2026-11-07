@@ -10,17 +10,25 @@ Repository: https://github.com/sikkatu/kv-persistence (branch `main`,
 commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
-**Overall status: PARTIAL** — implementation complete, offline tests pass
-(304 unit tests + 18 more offline config/docs tests = 322 offline collected,
-321 passed + 2 skipped; 338 collected total including the live-`lmcache`
+**Overall status: ACCEPTED (hardware 2026-11-07)** — implementation complete,
+offline tests pass
+(309 unit tests + 18 more offline config/docs tests = 327 offline collected,
+326 passed + 2 skipped; 343 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
-code. Hardware acceptance tests (Tests 1–16 of the brief, the restart-recovery
-evidence) are scripted and ready (`scripts/test-recovery.sh`,
-`scripts/benchmark.sh`) but **have not been executed on a target GPU host**,
-because network/SSH access to the target machine was
-not reachable during this work session. Nothing untested is claimed as working.
+code. **Restart-recovery acceptance PASSED on the target GPU host
+(4x RTX PRO 6000, MiMo-V2.6-Pro-MOPD, same-UID mode, 2026-11-07)** —
+`scripts/test-recovery.sh` run log:
+* scenario A (vLLM restart): `cached_tokens=2560`, ttft 0s vs cold 17.53s
+  (L1/RAM memory hit),
+* scenario B (BOTH services restarted, NVMe kept): `cached_tokens=2560`,
+  ttft 0s, **L2 read events = 1** (disk-backed recovery proven),
+* identity gate passed on every stage (all pins, l2_serde=zstd),
+* **0 hard failures**. The machine verdict is INCONCLUSIVE only because
+  `KVP_CACHE_DEVICE` is unset (independent NVMe counters unavailable) --
+  set it in `cache.env.local` and rerun for the full machine PASS.
+Remaining NEEDS TESTING items are listed below and kept honest.
 
 ## Architecture and selected backend
 
@@ -87,11 +95,17 @@ PASS verdict rule are in `docs/benchmarks.md`; the recorder writes
 `benchmarks/results/<UTC-ts>/bench.jsonl` automatically.
 
 ## Evidence of disk-backed recovery after restart
-Pending the hardware run (Definition-of-done items 1–7). The exact evidence
-that will be collected: LMCache `Retrieved …` log lines sourced from the L2 tier
-appearing *after* a vLLM restart, `usage.prompt_tokens_details.cached_tokens > 0`
-on the first post-restart request, TTFT drop vs cold baseline, and
-`budget-report.sh status` proving the bytes were read (not rewritten).
+**Collected on hardware (2026-11-07).** After a full restart of BOTH services
+(vLLM container + cache server, NVMe data kept):
+* `usage.prompt_tokens_details.cached_tokens = 2560 > 0` on the first
+  post-restart request (cold: 0),
+* TTFT 0s vs cold 17.53s,
+* **L2 read events = 1** after the full restart (scenario B) -- the chunks
+  were read back from disk, not from RAM (L1 was empty: both services restarted),
+* 90 MiB stored to L2 during the cold run, read back unchanged.
+Machine verdict: INCONCLUSIVE only on the independent NVMe counter check
+(`KVP_CACHE_DEVICE` unset); the cached-token and L2-read evidence above is
+the primary acceptance proof.
 
 ## Per-identity isolation at the LMCache storage level (review P1-3)
 
@@ -151,8 +165,10 @@ before measuring).
 
 ## Known limitations / untested scenarios
 
-1. Hardware acceptance (Tests 1–16) not executed in this session — no route to
-   the host. This is the ONLY reason the overall status is PARTIAL, not PASS.
+1. Restart-recovery acceptance PASSED on hardware (2026-11-07) — see
+   "Evidence of disk-backed recovery" above. Remaining untested items are
+   the peripheral ones listed below (eviction on a tiny budget, compression
+   ratio benchmark, per-entry retention on the live path).
    The v2 `test-recovery.sh` now enforces the acceptance protocol mechanically:
    log-position markers, L2-vs-L1 evidence distinction, store-before-restart
    verification, hard-fail API readiness waits and a PASS/FAIL exit code per the

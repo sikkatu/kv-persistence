@@ -6,14 +6,19 @@
 
 仓库：github.com/sikkatu/kv-persistence（`main` 分支，提交 `HEAD`（见 `git rev-parse HEAD`） —— 已通过 GitHub remote API 验证）。
 
-## 总状态：PARTIAL
+## 总状态：验收通过（硬件 2026-11-07）
 
-实现已完成，离线测试全绿（304 个单元测试 + 18 个离线配置/文档测试 = 322 个离线收集，
-321 通过 + 2 跳过；共收集 338 个，含依赖真实 `lmcache` 的集成（10）与 recovery（5）测试；
-另有伴生仓库 `sikkatu/recipes` 332 通过 + 5 跳过 / 337 收集——跳过数依赖环境（例如无 torch 的主机跳过 torch 测试）。
-硬件验收场景（重启后 A/B 恢复、32K/128K/256K 基准、bytes-per-token）已封装为脚本
-（`scripts/test-recovery.sh`、`scripts/benchmark.sh`），待在 GPU 目标主机
-上运行。在硬件验证通过前，PARTIAL 是唯一诚实的状态标签。
+实现已完成，离线测试全绿（309 个单元测试 + 18 个离线配置/文档测试 = 327 个离线收集，
+326 通过 + 2 跳过；共收集 343 个，含集成（10）与 recovery（5）测试；另有伴生仓库
+`sikkatu/recipes` 332 通过 + 5 跳过 / 337）。**重启后恢复的硬件验收已通过
+（4x RTX PRO 6000，MiMo-V2.6-Pro-MOPD，same-UID 模式，2026-11-07）**：
+* 场景 A（仅重启 vLLM）：`cached_tokens=2560`，ttft 0s（冷启动 17.53s），
+  L1/RAM 命中；
+* 场景 B（两个服务均重启，NVMe 保留）：`cached_tokens=2560`，ttft 0s，
+  **L2 读取事件 = 1**（磁盘恢复证据）；
+* 身份门禁每阶段通过，**0 个硬失败**。
+机器判定仅因未设置 `KVP_CACHE_DEVICE`（无法获得独立 NVMe 计数器）而为
+INCONCLUSIVE。其余未验证项为次要项，见下方并如实标注。
 
 ## 架构与后端选择
 

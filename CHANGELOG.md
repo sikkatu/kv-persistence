@@ -8,6 +8,22 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 54 (hardware acceptance recorded)
+
+* Restart-recovery acceptance PASSED on the target GPU host (4x RTX
+  PRO 6000, MiMo-V2.6-Pro-MOPD, same-UID, 2026-11-07):
+  - scenario A (vLLM restart): cached_tokens=2560, ttft 0s vs 17.53s
+    cold (L1/RAM memory hit);
+  - scenario B (BOTH services restarted, NVMe kept): cached_tokens=2560,
+    ttft 0s, **L2 read events = 1** (disk-backed recovery proven);
+  - identity gate passed at every stage; **0 hard failures**.
+* Machine verdict INCONCLUSIVE only because KVP_CACHE_DEVICE is unset
+  (independent NVMe counters unavailable) -- set it in cache.env.local
+  and rerun for the full machine PASS.
+* README (EN/RU/ZH), compatibility matrix (EN/RU/ZH) and final-report
+  (EN/RU/ZH) updated: ACCEPTED status with the evidence; the remaining
+  NEEDS TESTING items are peripheral and kept honest.
+
 ## Round 53 (cold baseline waits for the API)
 
 * `test-recovery.sh` cold baseline fired its first HTTP request
