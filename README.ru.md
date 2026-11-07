@@ -75,9 +75,13 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # заполнение И проверка пинов идентичности
 bash scripts/preflight.sh               # проверка хоста, хранилища и идентичности
 bash scripts/start-cache.sh             # сервис постоянного кэша (NVMe)
-KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (без root)
+bash scripts/run-vllm-with-persist.sh   # vLLM + KV-коннектор (без root, без export)
 bash scripts/test-recovery.sh           # приёмка: рестарт → доказательство переиспользования (exit 0 = PASS)
 ```
+С раунда 48 запуск НЕ требует export и флагов: IMAGE резолвится из рецепта
+(запоминается в `live/image`), MODEL_DIR — из `live/model_dir`/пина
+идентичности/`~/models`, same-UID по умолчанию, кодек по умолчанию —
+lossless zstd (отключение: `USE_LOSSLESS_SERDE=0`).
 
 Каждая команда громко отказывается вместо полурабочей установки: значения
 идентичности записывает и проверяет `setup-identity.sh`, `preflight.sh`
@@ -237,9 +241,9 @@ bash scripts/start-cache.sh           # метрики идут сами
 # 1. Мониторинг (опционально, но рекомендуется)
 bash scripts/start-observability.sh
 
-# 2. LMCache + vLLM в lossless-режиме
-USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+# 2. LMCache + vLLM (lossless zstd -- ПО УМОЛЧАНИЮ с раунда 48)
+bash scripts/start-cache.sh
+bash scripts/run-vllm-with-persist.sh
 ```
 
 `USE_LOSSLESS_SERDE` должен быть одинаков для обеих команд — он входит в

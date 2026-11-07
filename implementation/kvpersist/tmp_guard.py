@@ -295,7 +295,7 @@ def _agent_classes():
     """Yield the concrete store classes of whichever lmcache layout is
     installed. 0.5.6: the agent moved to
     ``l2_adapters.nixl_store_agents`` and the store method is
-    ``dynamic_store(mem_indices, key)`` on the FILE agent; 0.5.3: the
+    ``dynamic_store(mem_indices, key)`` on the FILE agent; pre-0.5.6: the
     adapter module exposes ``DynamicNixlStorageAgent.dynamic_store_file``.
     Abstract bases are skipped -- abstract methods must not be wrapped
     (subclasses override them, so a base-class wrapper would never run).
@@ -325,7 +325,7 @@ def install() -> bool:
       3. unregisters in ``finally`` -- success and failure both clear the
          marker, so only crashed stores leave one behind.
     Keeps the original call signature and derives the final name from
-    either the explicit ``file_path`` argument (0.5.3) or the ObjectKey
+    either the explicit ``file_path`` argument (pre-0.5.6) or the ObjectKey
     (0.5.6: the file name is derived from the key upstream).
     """
     wrapped_any = False

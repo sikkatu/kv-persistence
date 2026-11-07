@@ -85,9 +85,13 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
 bash scripts/start-cache.sh             # persistent cache service (NVMe)
-KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (no root)
+bash scripts/run-vllm-with-persist.sh   # vLLM + KV connector (no root, no exports)
 bash scripts/test-recovery.sh           # acceptance: restart → cache reuse proof (exit 0 = PASS)
 ```
+Since round 48 the launch needs NO exports and NO flags: IMAGE resolves from
+the recipe (remembered in `live/image`), MODEL_DIR resolves from
+`live/model_dir`/the identity pin/`~/models`, same-UID is the default, and
+the codec defaults to lossless zstd (opt out: `USE_LOSSLESS_SERDE=0`).
 Since round 46 the launcher records the effective cache identity (codec,
 namespace) in `$KVP_CACHE_ROOT/engine-identity.env`, so
 `verify-engine-identity.sh` and `test-recovery.sh` work in a fresh terminal
@@ -246,9 +250,9 @@ in `configs/generic/cache.env(.local)`.
 # 1. Monitoring (optional but recommended)
 bash scripts/start-observability.sh
 
-# 2. LMCache + vLLM in lossless mode
-USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+# 2. LMCache + vLLM (lossless zstd is the DEFAULT since round 48)
+bash scripts/start-cache.sh
+bash scripts/run-vllm-with-persist.sh
 ```
 
 `USE_LOSSLESS_SERDE` must be identical for both commands — it is part of the

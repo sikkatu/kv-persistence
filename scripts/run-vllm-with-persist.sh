@@ -51,7 +51,10 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # the non-root user cannot write /root. Without KVP_SAME_UID the container
 # runs as root (the proven fallback: CONSUMER=host-root passed the
 # ipc-test). Defined EARLY: the pre-flight IPC test needs it too.
-KVP_SAME_UID="${KVP_SAME_UID:-0}"
+# Round 48 (user): same-UID mode is the DEFAULT -- the engine container runs
+# as $(id -u):$(id -g), no root anywhere, no flag to type in every terminal.
+# Opt out for the root fallback: KVP_SAME_UID=0.
+KVP_SAME_UID="${KVP_SAME_UID:-1}"
 ENGINE_USER_ARGS=()
 ENGINE_CACHE_ARGS=(-e HF_HOME=/root/.cache/huggingface)
 _uid="$(id -u)"; _gid="$(id -g)"
@@ -86,10 +89,54 @@ fi
 . "$HERE/env.sh"
 _kvp_load_env "$ROOT"
 [ -d "$RECIPE" ] || die "production recipe not found at $RECIPE (set RECIPE_DIR)"
+# Round 48 (user): IMAGE and MODEL_DIR must not need manual exports -- a new
+# terminal just works. Resolution order for IMAGE:
+#   1. explicit $IMAGE (unchanged contract),
+#   2. live/image (what a previous launch used),
+#   3. the production recipe's tp4.env.example digest (print-recipe-image.sh).
+# MODEL_DIR:
+#   1. explicit $MODEL_DIR / $KVP_MODEL_DIR,
+#   2. live/model_dir (recorded at the first successful launch),
+#   3. the identity pin KVP_MODEL_DIR from identity.env(.local),
+#   4. the single model directory under ~/models (or $KVP_MODELS_ROOT).
+if [ -z "${IMAGE:-}" ]; then
+  [ -f "$ROOT/live/image" ] && IMAGE="$(head -n1 "$ROOT/live/image" | tr -d '[:space:]')"
+fi
+if [ -z "${IMAGE:-}" ]; then
+  IMAGE="$(bash "$HERE/print-recipe-image.sh" "$RECIPE" 2>/dev/null)"     || die "IMAGE is not set and could not be resolved from the recipe ($RECIPE/tp4.env.example).Set it explicitly: IMAGE='vllm/vllm-openai:...@sha256:<64 hex>' bash scripts/run-vllm-with-persist.sh"
+  mkdir -p "$ROOT/live"
+  printf '%s
+' "$IMAGE" > "$ROOT/live/image"
+  echo "IMAGE resolved from the recipe and remembered: $IMAGE"
+fi
 IMAGE="${IMAGE:?IMAGE must be pinned with @sha256:<64 hex>}"
 printf '%s' "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$' || die "IMAGE must be pinned by digest"
-MODEL_DIR="${MODEL_DIR:?set MODEL_DIR to the local model directory}"
+
+if [ -z "${MODEL_DIR:-}" ]; then
+  MODEL_DIR="${KVP_MODEL_DIR:-}"
+fi
+if [ -z "$MODEL_DIR" ] && [ -f "$ROOT/live/model_dir" ]; then
+  MODEL_DIR="$(head -n1 "$ROOT/live/model_dir" | tr -d '[:space:]')"
+fi
+if [ -z "$MODEL_DIR" ] && [ -n "${KVP_MODEL_CONFIG:-}" ] && [ -f "$ROOT/configs/$KVP_MODEL_CONFIG/identity.env.local" ]; then
+  MODEL_DIR="$(sed -n 's/^KVP_MODEL_DIR=//p' "$ROOT/configs/$KVP_MODEL_CONFIG/identity.env.local" | tail -1 | tr -d '[:space:]')"
+fi
+if [ -z "$MODEL_DIR" ]; then
+  _models_root="${KVP_MODELS_ROOT:-$HOME/models}"
+  _cands=()
+  for _d in "$_models_root"/*/; do
+    [ -f "$_d/config.json" ] && _cands+=("${_d%/}")
+  done
+  [ "${#_cands[@]}" -eq 1 ] && MODEL_DIR="${_cands[0]}"
+fi
+[ -n "$MODEL_DIR" ] || die "MODEL_DIR could not be resolved automatically.Point it at the local model directory once:
+  echo /path/to/model > live/model_dir
+or run:  MODEL_DIR=/path/to/model bash scripts/run-vllm-with-persist.sh
+(the choice is remembered in live/model_dir)."
 [ -d "$MODEL_DIR" ] || die "MODEL_DIR not found: $MODEL_DIR"
+mkdir -p "$ROOT/live"
+[ "$(head -n1 "$ROOT/live/model_dir" 2>/dev/null)" = "$MODEL_DIR" ] || printf '%s
+' "$MODEL_DIR" > "$ROOT/live/model_dir"
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-30007}"
 API_KEY="${API_KEY:-}"
 # Review fix: look up live/api_key under the REPO ROOT ($ROOT), not $PWD --
@@ -276,7 +323,7 @@ if [ "$PERSIST" = "true" ]; then
   # 1) the codec must match the RUNNING server's rendered adapter;
   # 2) the cache server must be REACHABLE at all;
   # 3) the lmcache version inside the image must match the host's (round 42:
-  #    the image ships 0.5.6 while the pinned host venv has 0.5.3 -- mixed
+  #    the image and the pinned host venv must match -- mixed
   #    minor versions break the MP protocol silently at register_kv_caches).
   _pre_root="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
   _pre_adapter="$_pre_root/l2-adapter.rendered.json"

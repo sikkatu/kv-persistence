@@ -108,6 +108,8 @@ def test_gate_auto_without_model_dir_is_inconclusive(tmp_path):
             PATH=f"{bindir}:{os.environ.get('PATH', '')}",
             STUB_CMD_ARGS=args,
             KVP_CACHE_ROOT=str(cache_root),
+            # Round 48: explicit raw mode (matches the "{}" raw adapter)
+            USE_LOSSLESS_SERDE="0",
         )
         env.pop("MODEL_DIR", None)
         env.pop("KVP_MODEL_DIR", None)

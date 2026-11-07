@@ -91,6 +91,8 @@ def test_bare_gate_keeps_identity_pins(tmp_path):
             PATH=f"{bindir}:{os.environ.get('PATH', '')}",
             STUB_CMD_ARGS=args,
             KVP_CACHE_ROOT=str(cache_root),
+            # Round 48: explicit raw mode (matches the "{}" raw adapter)
+            USE_LOSSLESS_SERDE="0",
             MODEL_DIR=str(model_dir),
         )
         for k in ("KVP_TP_SIZE", "TP_SIZE", "KVP_KV_CACHE_DTYPE", "KV_CACHE_DTYPE",

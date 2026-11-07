@@ -412,13 +412,24 @@ def _codec_from_adapter() -> str:
     return "none"  # no serde key = raw byte-exact chunks
 
 def _fold_serde(switch: str, configured: str) -> str:
+    """Identical to scripts/env.sh _kvp_resolve_l2_serde and
+    kvpersist.identity -- ONE semantic table across bash and Python."""
     switch = (switch or "").strip().lower()
-    configured = (configured or "").strip().lower() or "none"
+    configured = (configured or "").strip().lower()
     if switch in ("1", "yes", "true", "zstd"):
         return "zstd"
     if switch == "lz4":
         return "lz4"
-    return configured if configured not in ("raw", "") else "none"
+    if switch in ("0", "no", "false", "none"):
+        return "none"          # explicit raw opt-out
+    # No switch: use the configured codec. "raw"/"none" are an EXPLICIT raw
+    # choice (same codec, one namespace); only a truly EMPTY value falls
+    # through to the lossless default. (Mixing these up made
+    # configured="raw" collapse to the default -- caught by
+    # test_fold_semantics_executed.)
+    if configured in ("raw", "none"):
+        return "none"
+    return configured or "zstd"
 
 _l2_missing_adapter = False
 _l2_from_server = _codec_from_adapter()

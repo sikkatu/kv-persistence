@@ -72,9 +72,12 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # 填写并核验身份固定项
 bash scripts/preflight.sh               # 校验主机、存储与身份
 bash scripts/start-cache.sh             # 持久缓存服务（NVMe）
-bash scripts/run-vllm-with-persist.sh   # vLLM + KV 连接器（需 IMAGE、MODEL_DIR）
+bash scripts/run-vllm-with-persist.sh   # vLLM + KV 连接器（无需 root，无需 export）
 bash scripts/test-recovery.sh           # 验收：重启 → 缓存复用证据（exit 0 = PASS）
 ```
+自第 48 轮起启动无需 export 和标志：IMAGE 从配方解析（记入 `live/image`），
+MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为默认模式，
+编解码器默认 lossless zstd（关闭：`USE_LOSSLESS_SERDE=0`）。
 
 每条命令都会在出错时明确拒绝，而不是留下半成品环境：`setup-identity.sh`
 负责写入并核验身份值，`preflight.sh` 校验物理 NVMe 设备，
@@ -191,9 +194,9 @@ KV 最多约 200 GB 的会话需要空间容纳这些数据并留有增长余量
 # 1. 监控（可选但推荐）
 bash scripts/start-observability.sh
 
-# 2. 无损模式下的 LMCache + vLLM
-USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+# 2. LMCache + vLLM（自第 48 轮起 lossless zstd 为默认）
+bash scripts/start-cache.sh
+bash scripts/run-vllm-with-persist.sh
 ```
 `USE_LOSSLESS_SERDE` 在两条命令中必须一致 —— 它属于缓存身份命名空间。自第 46 轮起，
 启动器还将有效编解码器写入 `$KVP_CACHE_ROOT/engine-identity.env`，独立脚本会自动读取

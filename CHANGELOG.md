@@ -8,6 +8,20 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 48 (zero-config launch)
+
+* `bash scripts/run-vllm-with-persist.sh` in a fresh terminal needs NO
+  exports and NO flags: IMAGE resolves from the recipe digest (remembered
+  in `live/image`), MODEL_DIR resolves from `live/model_dir`/identity
+  pin/`~/models`, `KVP_SAME_UID=1` is the DEFAULT (root fallback:
+  `KVP_SAME_UID=0`), and the codec defaults to lossless zstd
+  (`USE_LOSSLESS_SERDE=0` opts out to byte-exact raw).
+* ONE codec semantic table across env.sh / identity.py / _fold_serde
+  (executable test): empty -> zstd default, `raw`/`none` -> explicit raw,
+  switch beats configured. The cache namespace is identical in bash and
+  Python with zero exports.
+* 0.5.3 leftovers purged from source comments too (docs: round 47).
+
 ## Round 47b (observability auto-detect)
 
 * `start-cache.sh` AUTO-DETECTS the OTel collector at `127.0.0.1:4320`

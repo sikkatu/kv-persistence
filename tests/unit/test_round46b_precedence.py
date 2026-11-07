@@ -27,10 +27,13 @@ def _extract_precedence() -> str:
         t, re.S)
     assert m, "precedence block not found in verify-engine-identity.sh"
     reader = re.search(r'(def _read_engine_identity\(\):.*?\n    return out\n)', t, re.S)
-    fold = re.search(r'(def _fold_serde.*?\n    return configured if configured not in \("raw", ""\) else "none"\n)',
-                     t, re.S)
-    assert reader and fold, "helpers not found"
-    return reader.group(1) + "\n" + fold.group(1) + "\nimport os\nvals = {}\n" + m.group(1) + '\nprint(_l2_expect)\n'
+    # extract _fold_serde by its END MARKER (the next statement after the
+    # function) -- robust to the function body being rewritten.
+    fold_start = t.index("def _fold_serde")
+    fold_end = t.index("\n_l2_missing_adapter", fold_start)
+    fold_text = t[fold_start:fold_end]
+    assert "def _fold_serde" in fold_text and fold_text.strip(), "fold helper not found"
+    return reader.group(1) + "\n" + fold_text + "\nimport os\nvals = {}\n" + m.group(1) + '\nprint(_l2_expect)\n'
 
 
 def _run(tmp_path, env, with_file=True):

@@ -1,5 +1,5 @@
 """Patch: include ``cache_salt`` in the nixl_store_dynamic L2 file name.
-WHY (review rounds 12-15): upstream LMCache 0.5.3 derived the L2 file name
+WHY (review rounds 12-15): pre-0.5.6 upstream LMCache derived the L2 file name
 from ``(model_name, kv_rank, object_group_id, chunk_hash)`` only -- the
 ``cache_salt`` field of ``ObjectKey`` participated in the key's equality/hash
 but NOT in the file name. After a server restart the adapter's secondary
@@ -14,10 +14,10 @@ became a COMPAT SHIM (round 43):
   installed -- upstream already isolates and its ``@``-suffix naming must
   stay intact (consuming modules bind the name at import);
 * with the rendered-adapter option ``legacy_salt_suffix: true`` the patch
-  installs the OLD ``_``-suffix naming so files written by a 0.5.3-era
+  installs the OLD ``_``-suffix naming so files written by a pre-0.5.6
   server remain findable (migration aid only).
 
-Version support: the module knows BOTH layouts. On 0.5.3 the patch installs
+Version support: the module knows BOTH layouts. On pre-0.5.6 the patch installs
 in ``nixl_store_dynamic_l2_adapter``; on 0.5.6+ it resolves
 ``nixl_store_agents.dynamic_nixl_store_agent`` (the DEFINING module).
 
@@ -49,7 +49,7 @@ def patched_object_key_to_filename(key) -> str:
 
 
 def _adapter_modules():
-    """Yield the module(s) defining the filename mapping (0.5.3 adapter
+    """Yield the module(s) defining the filename mapping (pre-0.5.6 adapter
     module or the 0.5.6+ nixl_store_agents package)."""
     import importlib
     for name in (

@@ -32,7 +32,7 @@ which keep shared blocks referenced by other entries intact.
 
 SCOPE (review round 13, honest statement): this policy ranks entries when
 per-entry statistics (hits, last access) are AVAILABLE. The pinned LMCache
-0.5.3 does not export per-entry hit counters through its public API, so in the
+pre-0.5.6 LMCache does not export per-entry hit counters through its public API, so in the
 current production path eviction is performed by LMCache's own in-service LRU
 and this module is used only by the offline planner and its unit tests. Do
 NOT assume the value-based ordering is active in production until the

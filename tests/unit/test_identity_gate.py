@@ -173,10 +173,14 @@ def _stub_env(tmp_path):
             del env[k]
     # The l2_serde check reads the SERVER's rendered adapter (written by
     # start-cache.sh at launch). Provide one by default: raw chunks ("none").
+    # Round 48: the DEFAULT codec is now zstd, so these tests pin the EXPLICIT
+    # raw mode (USE_LOSSLESS_SERDE=0) to keep the namespace == "none" and match
+    # the "{}" (raw) adapter -- they exercise the non-serde identity fields.
     cache_root = tmp_path / "cache_root"
     cache_root.mkdir(exist_ok=True)
     (cache_root / "l2-adapter.rendered.json").write_text("{}")
     env["KVP_CACHE_ROOT"] = str(cache_root)
+    env["USE_LOSSLESS_SERDE"] = "0"
     return env
 
 

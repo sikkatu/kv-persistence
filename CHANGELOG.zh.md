@@ -7,6 +7,18 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 48 轮（零配置启动）
+
+* 在新终端中 `bash scripts/run-vllm-with-persist.sh` 无需 export 和标志：
+  IMAGE 从配方摘要解析（记入 `live/image`），MODEL_DIR 从
+  `live/model_dir`/身份固定值/`~/models` 解析，`KVP_SAME_UID=1` 为默认
+  （root 备选：`KVP_SAME_UID=0`），编解码器默认 lossless zstd
+  （`USE_LOSSLESS_SERDE=0` 切换到字节精确 raw）。
+* env.sh / identity.py / _fold_serde 共用一张编解码器语义表（可执行测试）：
+  空 -> zstd 默认，`raw`/`none` -> 显式 raw，开关优先于配置。缓存命名空间
+  在 bash 和 Python 中完全一致，零 export。
+* 源码注释中的 0.5.3 残留也已清除（文档在第 47 轮完成）。
+
 ## 第 47b 轮（可观测性自动检测）
 
 * `start-cache.sh` 自动检测 `127.0.0.1:4320` 上的 OTel 收集器并启用指标——

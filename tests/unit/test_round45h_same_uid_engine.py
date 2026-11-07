@@ -20,7 +20,9 @@ LAUNCHER = ROOT / "scripts" / "run-vllm-with-persist.sh"
 
 def test_same_uid_flag_and_dynamic_uid():
     t = LAUNCHER.read_text()
-    assert 'KVP_SAME_UID="${KVP_SAME_UID:-0}"' in t
+    # Round 48 (user): same-UID is the DEFAULT -- no flag to type in a
+    # fresh terminal; KVP_SAME_UID=0 opts into the root fallback.
+    assert 'KVP_SAME_UID="${KVP_SAME_UID:-1}"' in t
     assert '_uid="$(id -u)"' in t and '_gid="$(id -g)"' in t, (
         "the UID/GID must be resolved dynamically (any user, any UID)"
     )
@@ -60,16 +62,21 @@ def test_same_uid_defined_before_preflight():
     """KVP_SAME_UID must be defined BEFORE the pre-flight uses it
     (set -u would die otherwise)."""
     t = LAUNCHER.read_text()
-    def_idx = t.index('KVP_SAME_UID="${KVP_SAME_UID:-0}"')
+    def_idx = t.index('KVP_SAME_UID="${KVP_SAME_UID:-1}"')
     use_idx = t.index('if [ "$KVP_SAME_UID" = "1" ]; then\n      _ipc_pu=')
     assert def_idx < use_idx, (
         "KVP_SAME_UID must be defined before the pre-flight IPC block"
     )
 
 
-def test_default_is_root_fallback():
-    """Without KVP_SAME_UID the container must run as root (proven by
-    CONSUMER=host-root)."""
+def test_default_is_same_uid_not_root():
+    """Round 48 (user request): the DEFAULT launch is same-UID (no root).
+    The root path stays available with KVP_SAME_UID=0 and is kept proven by
+    CONSUMER=host-root in ipc-test."""
     t = LAUNCHER.read_text()
+    # the root cache-path line must still exist (root fallback), but the
+    # same-UID branch must come first and be the default
     assert 'ENGINE_CACHE_ARGS=(-e HF_HOME=/root/.cache/huggingface)' in t
+    assert 'KVP_SAME_UID="${KVP_SAME_UID:-1}"' in t, (
+        "same-UID must be the default so a fresh terminal needs no flags")
     assert 'MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")' in t

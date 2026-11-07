@@ -136,10 +136,15 @@ _kvp_resolve_l2_serde(){
   #   1 / yes / true / zstd -> zstd
   #   lz4                   -> lz4
   #   0 / no / false / none / "" -> keep the configured LMCACHE_L2_SERDE
+  # Round 48: ONE semantic table shared by env.sh / identity.py /
+  # verify-engine-identity.sh._fold_serde. "" (unset) means NO switch ->
+  # fall through to configured/default; "0|no|false|none" is an EXPLICIT
+  # raw opt-out -> "none".
   case "${USE_LOSSLESS_SERDE:-}" in
     1|yes|true|zstd) _kvp_switch_serde=zstd ;;
     lz4)             _kvp_switch_serde=lz4 ;;
-    0|no|false|none|"") _kvp_switch_serde="" ;;
+    0|no|false|none) _kvp_switch_serde=none ;;
+    "")              _kvp_switch_serde="" ;;   # no switch -> configured/default
     *)
       echo "ERROR: USE_LOSSLESS_SERDE=${USE_LOSSLESS_SERDE} not understood (use 1 / zstd / lz4 / 0)" >&2
       return 1 ;;
@@ -154,11 +159,15 @@ _kvp_resolve_l2_serde(){
     # Rule 1: explicit env export beats the shorthand switch.
     LMCACHE_L2_SERDE="$_kvp_env_serde"
   elif [ -n "$_kvp_switch_serde" ]; then
+    # switch present (zstd / lz4 / explicit none)
     LMCACHE_L2_SERDE="$_kvp_switch_serde"
   elif [ -n "${KVP_L2_SERDE:-}" ]; then
     LMCACHE_L2_SERDE="$KVP_L2_SERDE"
   else
-    LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-none}"
+    # Round 48 (user): the DEFAULT codec is lossless zstd -- no export
+    # needed in every new terminal. Opt out to byte-exact raw explicitly:
+    # USE_LOSSLESS_SERDE=0 or LMCACHE_L2_SERDE=none.
+    LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-zstd}"
   fi
   LMCACHE_L2_SERDE="$(printf '%s' "$LMCACHE_L2_SERDE" | tr '[:upper:]' '[:lower:]')"
   export LMCACHE_L2_SERDE

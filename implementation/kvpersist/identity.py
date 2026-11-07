@@ -9,7 +9,7 @@ The namespace is a SHA-256 over canonical JSON of the identity fields, so it is
 stable across restarts, hosts and Python versions.
 
 HOW THE NAMESPACE ISOLATES REAL LMCache STORAGE (verified against the pinned
-LMCache 0.5.3 source and a live store/lookup run -- see
+LMCache 0.5.6 source and a live store/lookup run -- see
 tests/integration/test_l2_persistence.py::test_identity_namespace_isolates_lmcache_storage):
 
   * The LMCache MP cache key (IPCCacheServerKey -> ObjectKey) carries
@@ -298,11 +298,16 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         _os2.environ.get("LMCACHE_L2_SERDE") or _os2.environ.get("KVP_L2_SERDE") or ""
     ).strip()
     use_lossless = get("USE_LOSSLESS_SERDE").strip().lower()
+    # Round 48: ONE semantic table shared by env.sh / _fold_serde.
+    # "" (unset) = NO switch -> fall through to configured/default;
+    # "0|no|false|none" = EXPLICIT raw opt-out -> "none".
     if use_lossless in ("1", "yes", "true", "zstd"):
         switch_serde = "zstd"
     elif use_lossless == "lz4":
         switch_serde = "lz4"
-    elif use_lossless in ("", "0", "no", "false", "none"):
+    elif use_lossless in ("0", "no", "false", "none"):
+        switch_serde = "none"
+    elif use_lossless == "":
         switch_serde = ""
     else:
         raise IdentityError(
@@ -322,7 +327,10 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         serde = switch_serde
     else:
         _env_pin = _os.environ.get("KVP_L2_SERDE", "").strip()
-        serde = (get("KVP_L2_SERDE") or _env_pin or get("LMCACHE_L2_SERDE") or "none").strip().lower()
+        # Round 48 (user): the DEFAULT codec is lossless zstd -- matches
+        # scripts/env.sh so the namespace is identical in bash and Python
+        # with NO exports. Explicit none/raw stays byte-exact raw.
+        serde = (get("KVP_L2_SERDE") or _env_pin or get("LMCACHE_L2_SERDE") or "zstd").strip().lower()
     # Advanced identity fields (review fix): these ARE read from the config
     # files / environment -- they were declared on the dataclass but never
     # populated, so two deployments differing only in LoRA / RoPE / multimodal

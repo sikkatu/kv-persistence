@@ -1,7 +1,7 @@
 """Lossless compression serde for the LMCache L2 tier (zstd / lz4).
 
 WHY THIS MODULE EXISTS
-Upstream LMCache 0.5.3 registers exactly three L2 serdes -- fp8 and
+Pre-0.5.6 upstream LMCache registered exactly three L2 serdes -- fp8 and
 turboquant (both LOSSY quantization) and aesgcm (encryption). There is
 NO lossless compression serde upstream, and `lmcache server` has no
 --l2-serde flag at all: serde is configured per L2 adapter through the

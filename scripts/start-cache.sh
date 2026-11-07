@@ -99,7 +99,7 @@ if [ -n "$LMCACHE_OTLP_ENDPOINT" ]; then
        LMCACHE_OTLP_ENDPOINT="" ;;
   esac
 fi
-# NOTE: there is NO --l2-serde CLI flag in LMCache 0.5.3 -- serde is part of the
+# NOTE: there is NO --l2-serde CLI flag in LMCache 0.5.6 -- serde is part of the
 # --l2-adapter JSON ("serde" sub-dict), rendered below from __KVP_L2_SERDE_JSON__.
 # The codec is therefore never dropped here; it is validated when the JSON is
 # built and the server refuses to start if the requested codec is unavailable.
@@ -221,7 +221,7 @@ fi
 # session or dropping the connection will NOT kill the cache service. nohup
 # additionally shields it from HUP. Both matter because the service is meant
 # to outlive the operator's shell.
-# --l2-adapter takes the adapter spec as a JSON STRING (lmcache 0.5.3:
+# --l2-adapter takes the adapter spec as a JSON STRING (lmcache 0.5.6:
 # lmcache/v1/distributed/l2_adapters/config.py add_l2_adapters_args does
 # json.loads(raw) on the value). Passing the file PATH fails with
 # "Invalid JSON for --l2-adapter #1", so the rendered file is passed inline;

@@ -30,7 +30,7 @@ SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}"
 export SERVED_MODEL_NAME
 L2="$KVP_CACHE_ROOT"; LOG="$KVP_CACHE_ROOT/lmcache-server.log"   # adapter writes file_path=KVP_CACHE_ROOT directly
 # Review fix (round 17): L2 store/load events are logged at DEBUG level in the
-# pinned LMCache 0.5.3 (see l2_retrievals/l2_stored comment above). The cache
+# pinned LMCache 0.5.6 (see l2_retrievals/l2_stored comment above). The cache
 # service must therefore run with LMCACHE_LOG_LEVEL=DEBUG for the acceptance
 # evidence to exist in the log at all. Exported here so every start-cache.sh
 # invocation in this script inherits it.
@@ -68,7 +68,7 @@ wait_l2_quiet(){ # wait until L2_bytes stops changing (async stores must finish)
 # line with "l2", so it could never distinguish storage activity from a log
 # line that just happened to mention L2). Tightened to action-shaped phrases.
 # Review fix (round 17): the patterns must match the REAL strings of the pinned
-# LMCache 0.5.3 -- verified against the source (AST scan of every logger call):
+# LMCache 0.5.6 -- verified against the source (AST scan of every logger call):
 #   * "L2 store completed: adapter %d, %d succeeded, %d failed"
 #       (lmcache/v1/mp_observability/subscribers/logging/l2.py, DEBUG level)
 #   * "L2 prefetch load completed: request %d, %d loaded, %d failed"
