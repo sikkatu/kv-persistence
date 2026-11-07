@@ -7,6 +7,17 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 55 轮（KVP_CACHE_DEVICE 自动检测）
+
+* `KVP_CACHE_DEVICE` 无需手动猜测（用户：“我也不知道，全是 VM + 加密分区”）：
+  env.sh 中的共享助手 `_kvp_resolve_cache_device` 从 `live/cache_device`
+  （记住）或缓存根的 `findmnt SOURCE` 解析后备设备——支持 VM 磁盘
+  （`/dev/vda1`）、LUKS mapper 节点（`/dev/mapper/cryptroot`，经 readlink）
+  和 NVMe 分区。test-recovery.sh 与 preflight.sh 使用；显式固定仍优先。
+  选择记录在 `live/cache_device`。
+* docs/final-report.md 余项清理：LMCache runtime、version-pin 和
+  serde end-to-end 行现为 VERIFIED（硬件 2026-11-07）。
+
 ## 第 54 轮（硬件验收已记录）
 
 * 重启后恢复的硬件验收已在目标 GPU 主机通过（4x RTX PRO 6000，

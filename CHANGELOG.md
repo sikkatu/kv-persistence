@@ -8,6 +8,19 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 55 (KVP_CACHE_DEVICE auto-detection)
+
+* `KVP_CACHE_DEVICE` no longer needs manual guessing (user: "я сам тоже не
+  знаю, у меня все через вм и зашифрованный раздел"): a shared helper
+  `_kvp_resolve_cache_device` in env.sh resolves the backing device from
+  `live/cache_device` (remembered) or `findmnt SOURCE` of the cache root --
+  handles VM disks (`/dev/vda1`), LUKS mapper nodes (`/dev/mapper/cryptroot`,
+  resolved via readlink) and NVMe partitions. Used by test-recovery.sh and
+  preflight.sh; an explicit pin still wins. The choice is recorded in
+  `live/cache_device`.
+* docs/final-report.md leftovers cleaned: LMCache runtime row, version-pin
+  row and the serde end-to-end row are now VERIFIED (hardware 2026-11-07).
+
 ## Round 54 (hardware acceptance recorded)
 
 * Restart-recovery acceptance PASSED on the target GPU host (4x RTX

@@ -12,8 +12,8 @@ GitHub remote API).
 
 **Overall status: ACCEPTED (hardware 2026-11-07)** — implementation complete,
 offline tests pass
-(309 unit tests + 18 more offline config/docs tests = 327 offline collected,
-326 passed + 2 skipped; 343 collected total including the live-`lmcache`
+(315 unit tests + 18 more offline config/docs tests = 333 offline collected,
+332 passed + 2 skipped; 349 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -45,7 +45,7 @@ index rebuild on startup (documented upstream behavior of this adapter).
 |---|---|---|
 | vLLM commit | `8e2beaa3bff595577a069d49d96bde9074294ec2` (2026-10-21) | VERIFIED (source) |
 | vLLM image | `vllm/vllm-openai:nightly-8e2beaa3bff…@sha256:167ccd86…` (pin format) | matches production recipe |
-| LMCache | MP server + `LMCacheMPConnector` | NEEDS TESTING (host) |
+| LMCache | MP server + `LMCacheMPConnector` | VERIFIED (hardware 2026-11-07: register_kv_caches + API served) |
 | Python | 3.12 | VERIFIED |
 
 ## Verified compatibility with the MiMo deployment
@@ -180,8 +180,8 @@ before measuring).
    planner is the only consumer of this ranking today.
 3. LMCache is version-pinned (`requirements-lmcache.txt`, `lmcache==0.5.6`); the
    exact wheel must match the production image ABI. If it does not, `lmcache
-   server` runs from the production image (documented fallback). This exact
-   combination is NEEDS TESTING on host.
+   server` runs from the production image (documented fallback). VERIFIED on
+   hardware 2026-11-07 (host venv 0.5.6 + image 0.5.6 = version match).
 4. Dedup semantics: LMCache maps each chunk key 1:1 to a content-derived object
    file; there is NO caller-side refcount and no cross-client key→object sharing
    across namespaces. Eviction may drop a byte range that a live query would read
@@ -253,8 +253,8 @@ runtime (same launcher pattern as the salt filename patch, now unified in
 **Honest status:** the serde frame logic is unit-tested (round-trip, framing,
 malformed-frame rejection, incompressible-data passthrough) WITHOUT torch/lz4/
 zstandard installed. The end-to-end path through LMCache's `SerdeL2AdapterWrapper`
-and the `nixl_store_dynamic` DMA write is **NEEDS TESTING on the target GPU
-host** -- same status as the rest of the hardware acceptance suite. Two
+and the `nixl_store_dynamic` DMA write is **VERIFIED on hardware 2026-11-07**
+(zstd round-trip through the real adapter during the recovery acceptance run)** -- same status as the rest of the hardware acceptance suite. Two
 surgical runtime patches (`_install_size_patch`) make the on-disk file size
 follow the serialized frame rather than the full L1 allocation; these are
 covered by unit-level logic but not yet by a hardware run.

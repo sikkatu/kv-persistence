@@ -108,6 +108,23 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
 fail(){ echo "FAIL: $*"; V=$((V+1)); echo "$*" >> "$OUT/failures.txt"; }
 inconc(){ echo "INCONCLUSIVE: $*"; VI=$((VI+1)); echo "$*" >> "$OUT/failures.txt"; }
 
+# Round 55 (user, VM + LUKS): resolve KVP_CACHE_DEVICE automatically via the
+# shared helper (env.sh) when it is not pinned. The result is recorded in
+# live/cache_device so later runs skip the lookup. findmnt handles VM disks,
+# LUKS mapper nodes and NVMe partitions alike.
+if [ -z "${KVP_CACHE_DEVICE:-}" ]; then
+  _auto_dev="$(_kvp_resolve_cache_device "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}" || true)"
+  if [ -n "$_auto_dev" ]; then
+    KVP_CACHE_DEVICE="$_auto_dev"
+    export KVP_CACHE_DEVICE
+    mkdir -p "$ROOT/live"
+    [ "$(head -n1 "$ROOT/live/cache_device" 2>/dev/null)" = "$_auto_dev" ] || printf '%s\n' "$_auto_dev" > "$ROOT/live/cache_device"
+    echo "cache device auto-detected: $KVP_CACHE_DEVICE (override: KVP_CACHE_DEVICE=... or live/cache_device)"
+  else
+    echo "[info] cache device could not be auto-detected -- NVMe byte counters will be unavailable (set KVP_CACHE_DEVICE or live/cache_device)"
+  fi
+fi
+
 disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume holds Docker, the model and the OS) device -> independent
   # proof of disk-sourced reads (not RAM). Requires KVP_CACHE_DEVICE.
   # Review P2 fix: use lsblk PKNAME (robust for /dev/nvme0n1p1, /dev/sda1, /dev/vda1

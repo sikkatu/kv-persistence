@@ -8,6 +8,19 @@
 
 ## Не выпущено
 
+## Раунд 55 (авто-определение KVP_CACHE_DEVICE)
+
+* `KVP_CACHE_DEVICE` больше не нужно подбирать вручную (пользователь: «я сам
+  тоже не знаю, у меня все через вм и зашифрованный раздел»): общий хелпер
+  `_kvp_resolve_cache_device` в env.sh определяет устройство из
+  `live/cache_device` (запоминается) или `findmnt SOURCE` корня кэша —
+  работает с дисками VM (`/dev/vda1`), LUKS-mapper-узлами
+  (`/dev/mapper/cryptroot`, через readlink) и NVMe-разделами. Используется в
+  test-recovery.sh и preflight.sh; явный пин имеет приоритет. Выбор
+  записывается в `live/cache_device`.
+* Остатки в docs/final-report.md вычищены: строки LMCache runtime, version-pin
+  и serde end-to-end теперь VERIFIED (железо 2026-11-07).
+
 ## Раунд 54 (аппаратная приёмка зафиксирована)
 
 * Приёмка восстановления после перезапуска ПРОЙДЕНА на целевом GPU-хосте

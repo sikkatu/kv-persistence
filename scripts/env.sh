@@ -268,6 +268,37 @@ _kvp_resolve_model_dir(){
   return 0
 }
 
+# Round 55 (user, VM + LUKS): resolve the block device that backs the cache
+# root AUTOMATICALLY. The operator may not know (or want to guess) which
+# device to pin -- VMs, LUKS-encrypted roots and NVMe partitions all show
+# different names (/dev/mapper/cryptroot, /dev/vda1, /dev/nvme0n1p1).
+# Order: explicit $KVP_CACHE_DEVICE > live/cache_device (remembered) >
+# findmnt SOURCE of $KVP_CACHE_ROOT (resolved through readlink for mapper
+# symlinks). Prints the device path or nothing.
+_kvp_resolve_cache_device(){
+  local _root="${1:-}" _dev=""
+  [ -n "$_root" ] || _root="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
+  _dev="${KVP_CACHE_DEVICE:-}"
+  if [ -z "$_dev" ] && [ -f "${KVP_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/live/cache_device" ]; then
+    _dev="$(head -n1 "${KVP_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/live/cache_device" | tr -d '[:space:]')"
+  fi
+  if [ -z "$_dev" ] && command -v findmnt >/dev/null 2>&1; then
+    _dev="$(findmnt -no SOURCE --target "$_root" 2>/dev/null | head -1)"
+    # mapper / dm-crypt names show up as /dev/mapper/cryptroot or /dev/dm-0;
+    # readlink resolves to the canonical node so lsblk PKNAME works.
+    [ -n "$_dev" ] && _dev="$(readlink -f "$_dev" 2>/dev/null || echo "$_dev")"
+  fi
+  # Round 55b: an EXPLICIT pin (env var or live/cache_device) is printed as-is
+  # -- it is the operator's choice even if the node check would fail (e.g.
+  # LUKS mapper names appear only after unlock). Only auto-detected values
+  # must exist on the filesystem.
+  if [ -n "${KVP_CACHE_DEVICE:-}" ] || [ -f "${KVP_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/live/cache_device" ]; then
+    [ -n "$_dev" ] && printf '%s' "$_dev" && return 0
+  fi
+  [ -n "$_dev" ] && [ -e "$_dev" ] && printf '%s' "$_dev"
+  return 0
+}
+
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
   # Remember whether LMCACHE_L2_SERDE / KVP_L2_SERDE were pre-exported in the

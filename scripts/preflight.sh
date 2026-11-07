@@ -40,7 +40,16 @@ echo "-- storage location (device-level check) --"
 # a filesystem with enough free space. KVP_CACHE_DEVICE pins the expected
 # block device (e.g. /dev/nvme0n1, /dev/sda, /dev/vda, or a partition of one).
 # findmnt resolves the mount of KVP_CACHE_ROOT; lsblk maps it to the parent disk.
+# Round 55 (user, VM + LUKS): auto-detect the backing device when not pinned
+# (shared helper in env.sh: live/cache_device > findmnt SOURCE of the cache
+# root). Works for VM disks, LUKS mapper nodes and NVMe partitions alike.
 TARGET_DEV="${KVP_CACHE_DEVICE:-}"
+if [ -z "$TARGET_DEV" ]; then
+  TARGET_DEV="$(_kvp_resolve_cache_device "$ROOT_PATH" || true)"
+  if [ -n "$TARGET_DEV" ]; then
+    echo "cache device auto-detected: $TARGET_DEV"
+  fi
+fi
 if command -v findmnt >/dev/null && command -v lsblk >/dev/null; then
   MOUNT_SRC="$(findmnt -nro SOURCE --target "$ROOT_PATH" 2>/dev/null || true)"
   # Review round 13: `lsblk -p` prints NAME and PKNAME as FULL device paths
