@@ -96,10 +96,16 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 ```
 
 或在 `configs/generic/lmcache-server.env(.local)` 中永久设置：
-
 ```
+LMCACHE_L2_SERDE=zstd     # 或 lz4，或 none
+```
+本项目**不存在有损量化**（fp8 / turboquant / lbq 在启动时被明确拒绝）。
+编解码属于缓存身份命名空间的一部分：切换编解码会让已存储的块变成安全的
+cache miss（绝不会错误命中），因此请在所有启动器中使用同一取值。
+`KVP_L2_COMPRESS_LEVEL`（仅 zstd，默认 3，范围 1-19）用于权衡压缩率与
+写入速度。
 
-### 替代方案：same-UID 模式（无需 root，round 45h）
+### 启动模式 A（推荐）：same-UID，无需 root（第 45h 轮）
 
 不必用 sudo——两个进程可以共享同一个 UID：引擎容器以
 `--user $(id -u):$(id -g)` 启动（动态：适用于任何用户、任何 UID——
@@ -117,7 +123,7 @@ KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 运行，恰好复现生产边界。缓存服务器以您的用户运行（无需 sudo），
 缓存文件归您所有。
 
-### 缓存服务器必须以 root 运行（round 45）
+### 启动模式 B（备选）：均以 root 运行（第 45 轮）
 
 CUDA IPC 边界测试（`bash scripts/ipc-test.sh`）在目标主机上证实：引擎容器
 （root）创建的 GPU 内存只有主机上的 ROOT 能打开。非 root 的缓存服务器会在
@@ -131,23 +137,19 @@ sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 
 `start-cache.sh` 在 sudo 下自动解析 lmcache venv 的 python
 （`SUDO_UID`/`SUDO_USER`——无需手动 export）。缓存文件将属 root：
-`budget-report.sh` / `purge` 也请用 sudo 运行。bash
-LMCACHE_L2_SERDE=zstd     # 或 lz4，或 none
-```
+`budget-report.sh` / `purge` 也请用 sudo 运行。
 
-本项目**不存在有损量化**（fp8 / turboquant / lbq 在启动时被明确拒绝）。
-编解码属于缓存身份命名空间的一部分：切换编解码会让已存储的块变成安全的
-缓存 miss（绝不会错误命中），因此请在所有启动器中使用同一取值。
-
-`KVP_L2_COMPRESS_LEVEL`（仅 zstd，默认 3，范围 1–19）用于权衡压缩率与
-写入速度。
+**选择一种模式（A 或 B）并一致使用**——引擎和缓存服务在 CUDA IPC 边界必须
+看到相同的 UID。模式 A 无需 root，为推荐默认；模式 B 是无法以非 root 启动时
+的备选。
 
 ## 6. 启动带缓存的 vLLM
 
 ```bash
 export IMAGE='…@sha256:<digest>'
 export MODEL_DIR="$HOME/models/<your-model-dir>"
-bash scripts/run-vllm-with-persist.sh
+KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # 模式 A（无需 root）
+# 模式 B（root）：sudo KVP_SAME_UID=0 bash scripts/run-vllm-with-persist.sh
 ```
 
 ## 7. 验证

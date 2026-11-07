@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(261 unit tests + 19 more offline config/docs tests = 280 offline collected,
-278 passed + 2 skipped; 295 collected total including the live-`lmcache`
+(265 unit tests + 19 more offline config/docs tests = 284 offline collected,
+282 passed + 2 skipped; 299 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 261 unit tests (`tests/unit`, 259 passed + 2 skipped),
-19 top-level offline tests, 280 offline collected (278 passed + 2 skipped),
-295 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 265 unit tests (`tests/unit`, 263 passed + 2 skipped),
+19 top-level offline tests, 284 offline collected (282 passed + 2 skipped),
+299 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -713,10 +713,21 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
   is mounted at /root/.cache/huggingface; triton and flashinfer
   expect /root) -- that path is NOT wired into
   `run-vllm-with-persist.sh` and the verdict says so honestly.
+* **Round 46b/46c (the codec gate inside test-recovery + instructions)**:
+  the engine-identity.env fallback lost to the LMCACHE_L2_SERDE env that
+  `scripts/env.sh` folds to a default "none" and `test-recovery.sh` exports
+  -- inside the recovery test the gate still reported
+  `identity=none != engine/config=zstd` while a plain call passed. Fixed:
+  precedence is now switch > pin > engine-identity.env > LMCACHE_L2_SERDE
+  (the recorded launch identity outranks the folded env default), locked
+  by an EXECUTABLE precedence test. Instructions updated everywhere with
+  the required flags: wiki Quick-Start step 7 and deployment (EN/RU/ZH)
+  now show `KVP_SAME_UID=1` (mode A, recommended) vs sudo (mode B), the
+  broken unclosed code fences in deployment were repaired.
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-35 tests (261 unit / 280 offline / 295 total).
+39 tests (265 unit / 284 offline / 299 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight

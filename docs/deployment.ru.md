@@ -125,10 +125,17 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 ```
 
 или постоянно в `configs/generic/lmcache-server.env(.local)`:
-
 ```
+LMCACHE_L2_SERDE=zstd     # или lz4, или none
+```
+В проекте **нет lossy-квантизации** (fp8 / turboquant / lbq громко отвергаются
+при старте). Кодек входит в namespace идентичности кэша: смена кодека
+превращает ранее сохранённые чанки в безопасный cache miss (никогда не в
+неверное чтение), поэтому используйте одно и то же значение во всех
+лаунчерах. `KVP_L2_COMPRESS_LEVEL` (только zstd, дефолт 3, диапазон 1-19)
+меняет баланс между коэффициентом сжатия и скоростью записи.
 
-### Альтернатива: режим same-UID (без root, round 45h)
+### Режим запуска A (РЕКОМЕНДУЕТСЯ): same-UID, без root (round 45h)
 
 Вместо sudo оба процесса могут делить ОДИН UID -- контейнер движка
 запускается с `--user $(id -u):$(id -g)` (ДИНАМИЧЕСКИ: работает для
@@ -148,7 +155,7 @@ KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 продуктовую границу. Кэш-сервер работает от вашего пользователя
 (без sudo), файлы кэша принадлежат вам.
 
-### Кэш-сервер ОБЯЗАН работать под root (round 45)
+### Режим запуска B (запасной): оба под root (round 45)
 
 Тест CUDA IPC границы (`bash scripts/ipc-test.sh`) доказал на целевом
 хосте: контейнер движка (root) создаёт GPU-память, которую может открыть
@@ -163,24 +170,20 @@ sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 
 `start-cache.sh` сам находит python venv lmcache под sudo
 (`SUDO_UID`/`SUDO_USER` -- ручные export не нужны). Файлы кэша будут
-принадлежать root: `budget-report.sh` / `purge` тоже запускайте с sudo.bash
-LMCACHE_L2_SERDE=zstd     # или lz4, или none
-```
+принадлежать root: `budget-report.sh` / `purge` тоже запускайте с sudo.
 
-В проекте **нет lossy-квантизации** (fp8 / turboquant / lbq громко отвергаются
-при старте). Кодек входит в namespace идентичности кэша: смена кодека превращает
-ранее сохранённые чанки в безопасный cache miss (никогда не в неверное чтение),
-поэтому используйте одно и то же значение во всех лаунчерах.
-
-`KVP_L2_COMPRESS_LEVEL` (только zstd, дефолт 3, диапазон 1–19) меняет баланс
-между коэффициентом сжатия и скоростью записи.
+**Выберите ОДИН режим (A или B) и используйте его последовательно** -- движок
+и сервис кэша должны видеть один и тот же UID на границе CUDA IPC. Режим A не
+требует root и рекомендуется по умолчанию; режим B -- запасной, когда
+непривилегированный старт в вашем окружении невозможен.
 
 ## 6. Запуск vLLM с постоянным KV-коннектором
 
 ```bash
 export IMAGE='…@sha256:<digest>'
 export MODEL_DIR="$HOME/models/<your-model-dir>"
-bash scripts/run-vllm-with-persist.sh
+KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # режим A (без root)
+# Режим B (root): sudo KVP_SAME_UID=0 bash scripts/run-vllm-with-persist.sh
 ```
 
 Скрипт повторяет аргументы продового лаунчера рецепта и добавляет

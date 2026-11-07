@@ -461,10 +461,19 @@ def _read_engine_identity():
         pass
     return out
 _engine_identity = _read_engine_identity()
-_l2_pin = vals.get("KVP_L2_SERDE", "") or os.environ.get("LMCACHE_L2_SERDE", "")
 _l2_switch = os.environ.get("USE_LOSSLESS_SERDE", "")
+_l2_pin = vals.get("KVP_L2_SERDE", "")
+# Review fix (round 46b): the file comes BEFORE the LMCACHE_L2_SERDE env.
+# scripts/env.sh folds a default "none" into LMCACHE_L2_SERDE even when the
+# operator chose nothing, and a caller like test-recovery.sh exports that
+# default into the gate -- it used to outrank engine-identity.env and the
+# gate reported identity=none != engine/config=zstd despite the recorded
+# file. The recorded launch identity is the ground truth of the RUNNING
+# engine; LMCACHE_L2_SERDE is only the last fallback.
 if not _l2_switch and not _l2_pin:
     _l2_pin = _engine_identity.get("KVP_L2_SERDE", "")
+if not _l2_switch and not _l2_pin:
+    _l2_pin = os.environ.get("LMCACHE_L2_SERDE", "")
 _l2_expect = _fold_serde(_l2_switch, _l2_pin)
 engine_checks.append(("l2_serde", _l2_expect, _l2_seen))
 

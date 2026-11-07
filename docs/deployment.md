@@ -135,10 +135,17 @@ USE_LOSSLESS_SERDE=lz4 bash scripts/start-cache.sh   # lz4
 ```
 
 or permanently in `configs/generic/lmcache-server.env(.local)`:
-
 ```
+LMCACHE_L2_SERDE=zstd     # or lz4, or none
+```
+There is **no lossy quantization** in this project (fp8 / turboquant / lbq are
+refused loudly at startup). The codec is part of the cache-identity namespace:
+switching codecs turns previously stored chunks into a safe cache miss (never
+a wrong read), so use the same value for every launcher.
+`KVP_L2_COMPRESS_LEVEL` (zstd only, default 3, range 1-19) trades ratio for
+store speed.
 
-### Alternative: same-UID mode (no root, round 45h)
+### Launch mode A (RECOMMENDED): same-UID, no root (round 45h)
 
 Instead of sudo, BOTH processes can share the SAME UID -- the engine
 container runs with `--user $(id -u):$(id -g)` (DYNAMIC: works for any
@@ -157,7 +164,7 @@ with `PRODUCER_USER=$(id -u):$(id -g)` so it reproduces EXACTLY the
 production boundary. The cache server runs as your user (no sudo),
 and cache files are owned by you.
 
-### The cache server MUST run as root (round 45)
+### Launch mode B (fallback): both under root (round 45)
 
 The CUDA IPC boundary test (`bash scripts/ipc-test.sh`) proved on the
 target host: the engine container (root) creates GPU memory that only
@@ -173,24 +180,20 @@ sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 `start-cache.sh` resolves the lmcache venv python under sudo
 automatically (`SUDO_UID`/`SUDO_USER` -- no manual export needed).
 Cache files will be root-owned: run `budget-report.sh` / `purge` with
-sudo as well.bash
-LMCACHE_L2_SERDE=zstd     # or lz4, or none
-```
+sudo as well.
 
-There is **no lossy quantization** in this project (fp8 / turboquant / lbq are
-refused loudly at startup). The codec is part of the cache-identity namespace:
-switching codecs turns previously stored chunks into a safe cache miss (never a
-wrong read), so use the same value for every launcher.
-
-`KVP_L2_COMPRESS_LEVEL` (zstd only, default 3, range 1–19) trades ratio for
-store speed.
+**Pick ONE mode (A or B) and use it consistently** -- the engine and the cache
+service must see the same UID for the CUDA IPC boundary. Mode A needs no root
+and is the recommended default; mode B is the fallback when a non-root start is
+not possible in your environment.
 
 ## 6. Start vLLM with the persistent KV connector
 
 ```bash
 export IMAGE='…@sha256:<64-hex-digest>'   # same digest as production
 export MODEL_DIR="$HOME/models/<your-model-dir>"
-bash scripts/run-vllm-with-persist.sh
+KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # mode A (no root)
+# Mode B (root): sudo KVP_SAME_UID=0 bash scripts/run-vllm-with-persist.sh
 ```
 
 The script mirrors the production launcher arguments and adds
