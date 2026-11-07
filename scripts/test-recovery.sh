@@ -13,14 +13,16 @@
 # Scenario A: restart vLLM only (cache service alive).
 # Scenario B: restart BOTH services, NVMe data kept.
 set -Eeuo pipefail
-PA(){ echo "FAIL(A): $*"; exit 1; }
+# Round 52: PA() must not always say "FAIL(A)" -- it is used in scenarios A
+# and B alike. Pass the scenario tag explicitly.
+PA(){ echo "FAIL(${1:-?}): ${*:2}"; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/env.sh"
 _kvp_load_env "$ROOT"
 API="${API_BASE:-http://127.0.0.1:30007}"
 KEY="${API_KEY:-}"; [ -f "$PWD/live/api_key" ] && [ -z "$KEY" ] && KEY="$(head -n1 "$PWD/live/api_key" | tr -d '[:space:]')"
-[ -n "$KEY" ] || PA "API_KEY unavailable (live/api_key)"
+[ -n "$KEY" ] || PA pre "API_KEY unavailable (live/api_key)"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # Review fix: the served model name is deployment-specific, not a project
 # constant. Default matches the reference MiMo launcher (SERVED_MODEL_NAME).
@@ -135,7 +137,7 @@ ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
   # never expanded by the shell -- a stray $ or backtick inside it would
   # otherwise be interpreted (and `stream_options` already contains braces
   # that happen to be harmless, but any future edit with $ would break).
-  python3 - "$API" "$KEY" "$OUT/prefix.txt" "$OUT/$label.json" <<'PYEOF' || PA "request $label failed"
+  python3 - "$API" "$KEY" "$OUT/prefix.txt" "$OUT/$label.json" <<'PYEOF' || PA pre "request $label failed"
 import json,sys,time,urllib.request,os
 api,key,prefix_file,out=sys.argv[1:5]
 body=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
@@ -221,8 +223,8 @@ STORED_LINES=$(l2_stored "$M0")
 echo "== SCENARIO A: restart vLLM only =="
 A_DISK0=$(disk_read_bytes)
 M_A0=$(log_mark)
-docker restart "$CONTAINER" >/dev/null 2>&1 || PA "docker restart failed"
-api_ready || PA "API did not come back after vLLM restart (scenario impossible)"
+docker restart "$CONTAINER" >/dev/null 2>&1 || PA A "docker restart failed"
+api_ready || PA A "API did not come back after vLLM restart (scenario impossible)"
 ask afterA "$M_A0"
 A_RETR=$(l2_retrievals "$M_A0"); A_CACHED=$(cached_of "$OUT/afterA.json")
 T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['ttft_s'])")
@@ -272,21 +274,35 @@ B_BEFORE=$(wait_l2_quiet)
 # correct order is: STOP THE ENGINE FIRST, then restart the cache service,
 # then bring the engine back up.
 echo "  stopping the engine first (B: correct order -- engine down, cache restart, engine up)"
-docker stop "$CONTAINER" >/dev/null 2>&1 || PA "docker stop (B) failed"
-bash "$HERE/stop-cache.sh" >/dev/null 2>&1 || PA "stop-cache.sh failed"
+# Round 52: do NOT swallow the docker error -- the previous form hid the
+# real cause. An already-stopped/removed container is NOT a failure here:
+# the goal is a clean cache restart with the engine down.
+_b_state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)"
+echo "  engine container state before stop: $_b_state"
+if [ "$_b_state" = "missing" ]; then
+  echo "  [info] engine container already removed -- nothing to stop"
+elif [ "$_b_state" = "exited" ] || [ "$_b_state" = "created" ]; then
+  echo "  [info] engine container already stopped ($_b_state) -- skipping stop"
+else
+  if ! _b_stop_out="$(docker stop "$CONTAINER" 2>&1)"; then
+    echo "  docker stop output: $_b_stop_out" >&2
+    PA B "docker stop (B) failed -- see the docker output above"
+  fi
+fi
+bash "$HERE/stop-cache.sh" >/dev/null 2>&1 || PA B "stop-cache.sh failed"
 # Review fix (round 47): the GPU check runs HERE -- AFTER both services are
 # stopped. Round 46 checked BEFORE the stop and refused on the engine's own
 # legal VRAM (78 GiB per GPU). A STOPPED engine+server must leave the GPUs
 # free; if VRAM is still held, the holders are leaked processes that would
 # break the restart below.
 if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ]; then
-  _kvp_gpu_preflight 2048 || PA "GPU memory still held AFTER stop-engine + stop-cache -- leaked processes block the restart (see PIDs above)"
+  _kvp_gpu_preflight 2048 || PA B "GPU memory still held AFTER stop-engine + stop-cache -- leaked processes block the restart (see PIDs above)"
 fi
-bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA "start-cache.sh failed (cache service did not restart)"
+bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA B "start-cache.sh failed (cache service did not restart)"
 LIVE_PID="$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null || echo 0)"
-kill -0 "$LIVE_PID" 2>/dev/null || PA "cache service is dead right after start-cache.sh (readiness not reached)"
-docker start "$CONTAINER" >/dev/null 2>&1 || PA "docker start (B) failed"
-api_ready || PA "API did not come back after full restart"
+kill -0 "$LIVE_PID" 2>/dev/null || PA B "cache service is dead right after start-cache.sh (readiness not reached)"
+docker start "$CONTAINER" >/dev/null 2>&1 || PA B "docker start (B) failed"
+api_ready || PA B "API did not come back after full restart"
 M_B0=$(log_mark)
 ask afterB "$M_B0"
 B_RETR=$(l2_retrievals "$M_B0"); B_CACHED=$(cached_of "$OUT/afterB.json")

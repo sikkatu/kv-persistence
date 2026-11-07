@@ -8,6 +8,16 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 52 (scenario B: honest failure reporting)
+
+* `test-recovery.sh` scenario B: `docker stop` no longer swallows its
+  error output (`>/dev/null 2>&1` hid the real cause). The container
+  state is probed first -- an already stopped/removed container is NOT a
+  failure (the goal is a clean cache restart with the engine down). A
+  real failure shows the docker output.
+* `PA()` now takes the scenario tag explicitly -- the old form printed
+  `FAIL(A)` even for scenario B failures. All call sites updated.
+
 ## Round 51 (standalone gate resolves MODEL_DIR like the launcher)
 
 * A standalone `scripts/verify-engine-identity.sh` in a fresh terminal
