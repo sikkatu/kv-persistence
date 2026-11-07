@@ -112,22 +112,10 @@ fi
 IMAGE="${IMAGE:?IMAGE must be pinned with @sha256:<64 hex>}"
 printf '%s' "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$' || die "IMAGE must be pinned by digest"
 
+# Round 51: ONE shared resolver (env.sh _kvp_resolve_model_dir) -- the gate
+# resolves the SAME way in a standalone run, so both always agree.
 if [ -z "${MODEL_DIR:-}" ]; then
-  MODEL_DIR="${KVP_MODEL_DIR:-}"
-fi
-if [ -z "$MODEL_DIR" ] && [ -f "$ROOT/live/model_dir" ]; then
-  MODEL_DIR="$(head -n1 "$ROOT/live/model_dir" | tr -d '[:space:]')"
-fi
-if [ -z "$MODEL_DIR" ] && [ -n "${KVP_MODEL_CONFIG:-}" ] && [ -f "$ROOT/configs/$KVP_MODEL_CONFIG/identity.env.local" ]; then
-  MODEL_DIR="$(sed -n 's/^KVP_MODEL_DIR=//p' "$ROOT/configs/$KVP_MODEL_CONFIG/identity.env.local" | tail -1 | tr -d '[:space:]')"
-fi
-if [ -z "$MODEL_DIR" ]; then
-  _models_root="${KVP_MODELS_ROOT:-$HOME/models}"
-  _cands=()
-  for _d in "$_models_root"/*/; do
-    [ -f "$_d/config.json" ] && _cands+=("${_d%/}")
-  done
-  [ "${#_cands[@]}" -eq 1 ] && MODEL_DIR="${_cands[0]}"
+  MODEL_DIR="$(_kvp_resolve_model_dir "$ROOT")"
 fi
 [ -n "$MODEL_DIR" ] || die "MODEL_DIR could not be resolved automatically.Point it at the local model directory once:
   echo /path/to/model > live/model_dir

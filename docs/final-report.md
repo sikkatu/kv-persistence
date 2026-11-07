@@ -11,8 +11,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(291 unit tests + 18 more offline config/docs tests = 309 offline collected,
-308 passed + 2 skipped; 325 collected total including the live-`lmcache`
+(296 unit tests + 18 more offline config/docs tests = 314 offline collected,
+313 passed + 2 skipped; 330 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source

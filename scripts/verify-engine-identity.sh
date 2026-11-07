@@ -39,6 +39,14 @@ CONFIG="$(mktemp /tmp/kvp-identity-XXXXXX.env)"
 trap 'rm -f "$CONFIG"' EXIT
 # MODEL_DIR is resolved EARLY: the shared effective-identity resolver below
 # needs it to resolve KV_CACHE_DTYPE=auto via config.json.
+# Round 51: use the SHARED resolver (env.sh) so a standalone gate run in a
+# fresh terminal resolves live/model_dir / the identity pin / ~/models just
+# like the launcher -- it used to see model_dir=unset and report
+# num_kv_heads/head_dim UNAVAILABLE (INCONCLUSIVE -> cache reuse blocked).
+. "$HERE/env.sh" 2>/dev/null || true
+if [ -z "${MODEL_DIR:-${KVP_MODEL_DIR:-}}" ] && command -v _kvp_resolve_model_dir >/dev/null 2>&1; then
+  MODEL_DIR="$(_kvp_resolve_model_dir "$ROOT")"
+fi
 MODEL_DIR="${MODEL_DIR:-${KVP_MODEL_DIR:-}}"
 # Review fix (round 23): fold the EFFECTIVE engine config into the KVP_* env
 # names BEFORE the merge's env-wins pass, using the SAME shared resolver the

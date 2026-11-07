@@ -228,6 +228,46 @@ _kvp_python(){
   command -v python3 2>/dev/null || echo python3
 }
 
+# Round 51 (user): ONE MODEL_DIR resolver shared by run-vllm-with-persist.sh
+# and verify-engine-identity.sh. A standalone gate in a fresh terminal used
+# to report model_dir=unset (the resolution chain lived only in the launcher)
+# -> num_kv_heads/head_dim UNAVAILABLE -> INCONCLUSIVE -> cache reuse blocked.
+# Order: explicit $MODEL_DIR / $KVP_MODEL_DIR > live/model_dir (remembered at
+# launch) > KVP_MODEL_DIR pin in identity.env.local > the single model dir
+# under ${KVP_MODELS_ROOT:-$HOME/models}. Prints the path (or nothing).
+_kvp_resolve_model_dir(){
+  local _root="$1" _md="" _mc="${KVP_MODEL_CONFIG:-}" _d _cands=() _models_root
+  _md="${MODEL_DIR:-${KVP_MODEL_DIR:-}}"
+  if [ -z "$_md" ] && [ -f "$_root/live/model_dir" ]; then
+    _md="$(head -n1 "$_root/live/model_dir" | tr -d '[:space:]')"
+  fi
+  if [ -z "$_md" ] && [ -z "$_mc" ]; then
+    for _d in "$_root"/configs/*/; do
+      [ -d "$_d" ] || continue
+      case "$(basename "$_d")" in generic) continue ;; esac
+      [ -f "$_d/identity.env" ] && _cands+=("$(basename "$_d")")
+    done
+    [ "${#_cands[@]}" -eq 1 ] && _mc="${_cands[0]}"
+  fi
+  if [ -z "$_md" ] && [ -n "$_mc" ]; then
+    for _d in "$_root/configs/$_mc/identity.env.local" "$_root/configs/$_mc/identity.env"; do
+      [ -f "$_d" ] || continue
+      _md="$(sed -n 's/^KVP_MODEL_DIR=//p' "$_d" | tail -1 | tr -d '[:space:]')"
+      [ -n "$_md" ] && break
+    done
+  fi
+  if [ -z "$_md" ]; then
+    _models_root="${KVP_MODELS_ROOT:-$HOME/models}"
+    _cands=()   # reset: may hold stale config-dir names from the scan above
+    for _d in "$_models_root"/*/; do
+      [ -f "$_d/config.json" ] && _cands+=("${_d%/}")
+    done
+    [ "${#_cands[@]}" -eq 1 ] && _md="${_cands[0]}"
+  fi
+  [ -n "$_md" ] && [ -d "$_md" ] && printf '%s' "$_md"
+  return 0
+}
+
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
   # Remember whether LMCACHE_L2_SERDE / KVP_L2_SERDE were pre-exported in the

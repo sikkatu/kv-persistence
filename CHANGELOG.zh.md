@@ -7,6 +7,15 @@ kv-persistence 的所有重要变更，最新的在前。各轮次的变更说�
 
 ## 未发布
 
+## 第 51 轮（独立门禁像启动器一样解析 MODEL_DIR）
+
+* 新终端中的独立 `scripts/verify-engine-identity.sh` 报告
+  `model_dir=unset` -> num_kv_heads/head_dim UNAVAILABLE -> INCONCLUSIVE，
+  而启动器内部的门禁却通过：解析链（live/model_dir > 身份固定值 >
+  ~/models）只存在于启动器中。现在共享助手 `_kvp_resolve_model_dir`
+  （在 env.sh 中）被两者使用——独立门禁与启动器解析完全一致。
+* 修复了新助手中的过期数组 bug（配置目录扫描残留混入模型扫描）。
+
 ## 第 50 轮（MODEL_DIR 送达门禁 + 配置中的编解码默认值）
 
 * 自动解析的 MODEL_DIR 从未被导出，因此启动后身份门禁（子进程）看到

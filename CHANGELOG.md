@@ -8,6 +8,17 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
+## Round 51 (standalone gate resolves MODEL_DIR like the launcher)
+
+* A standalone `scripts/verify-engine-identity.sh` in a fresh terminal
+  reported `model_dir=unset` -> num_kv_heads/head_dim UNAVAILABLE ->
+  INCONCLUSIVE, while the launcher's own gate run passed: the resolution
+  chain (live/model_dir > identity pin > ~/models) lived ONLY in the
+  launcher. ONE shared helper `_kvp_resolve_model_dir` in env.sh is now
+  used by both -- a standalone gate resolves exactly like the launcher.
+* Fixed a stale-array bug in the new helper (config-dir scan leftovers
+  mixed into the models scan).
+
 ## Round 50 (MODEL_DIR reaches the gate + codec default in configs)
 
 * The auto-resolved MODEL_DIR was never EXPORTED, so the post-launch
