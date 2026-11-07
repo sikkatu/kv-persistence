@@ -9,8 +9,8 @@ commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
 **Overall status: PARTIAL** — implementation complete, offline tests pass
-(247 unit tests + 19 more offline config/docs tests = 266 offline collected,
-264 passed + 2 skipped; 281 collected total including the live-`lmcache`
+(251 unit tests + 19 more offline config/docs tests = 270 offline collected,
+268 passed + 2 skipped; 285 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 332 passed + 5 skipped of 337 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
@@ -596,9 +596,9 @@ py_compile of every module. The recipes repo already had `check.yml` (288 tests
 green with the new contract tests included).
 
 **Test counts (review note)**: "157 unit tests" in docs was stale. Real
-numbers, verified: 247 unit tests (`tests/unit`, 245 passed + 2 skipped),
-19 top-level offline tests, 266 offline collected (264 passed + 2 skipped),
-281 collected total (plus 332 passed + 5 skipped of 337 collected in the
+numbers, verified: 251 unit tests (`tests/unit`, 249 passed + 2 skipped),
+19 top-level offline tests, 270 offline collected (268 passed + 2 skipped),
+285 collected total (plus 332 passed + 5 skipped of 337 collected in the
 companion `sikkatu/recipes` repo). Fixed in final-report (EN/RU/ZH) and wiki
 Home (EN/RU/ZH).
 
@@ -662,6 +662,16 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * **Same-UID probe (round 45g)**: `ipc-test.sh` now supports
 * **Same-UID engine mode (round 45h, KVP_SAME_UID=1)**: the same-UID
 * **Round 45i (bash assignment trap)**: the first same-UID run died
+* **Round 45j (reviewer batch)**: the bash-assignment trap is now
+  locked by an EXECUTABLE test (it runs the real call line against a
+  fake ipc-test.sh -- text-matching tests cannot catch the trap; the
+  test fails on the old line and passes on the new one). Insurance
+  for any UID: `HOME=/tmp/engine-home`, `USER=...`, `LOGNAME=...`
+  are set in same-UID mode (a uid without a passwd entry breaks
+  `getpass.getuser()` and ~-based caches). The cache-server PID
+  check now lives under `PERSIST=true` -- with
+  `KVP_PERSIST_ENABLED=false` BOTH cache checks are skipped, as the
+  comment promised.
   at the pre-flight with `PRODUCER_USER=NNNN:NNNN: command not
   found` -- bash does NOT treat `${var:+NAME=val}` as an assignment
   (the expanded word becomes a command name). The call now passes
@@ -688,7 +698,7 @@ reply -- vLLM waited 300s. NOT versions, NOT the RPC protocol
 * Docker mode: `start-cache.sh` warns that cache files are
   root-owned (purge/budget need sudo); `purge` prints the WHY and
   the HOW on PermissionError, not just the error.
-21 tests (247 unit / 266 offline / 281 total).
+25 tests (251 unit / 270 offline / 285 total).
 
 version alignment and the API fixes the engine STILL died at
 `register_kv_caches` (300s timeout) -- while the TCP pre-flight

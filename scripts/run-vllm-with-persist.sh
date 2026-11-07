@@ -57,7 +57,13 @@ ENGINE_CACHE_ARGS=(-e HF_HOME=/root/.cache/huggingface)
 _uid="$(id -u)"; _gid="$(id -g)"
 if [ "$KVP_SAME_UID" = "1" ]; then
   ENGINE_USER_ARGS=(--user "$_uid:$_gid")
-  ENGINE_CACHE_ARGS=(-e HF_HOME=/tmp/hf-cache -e XDG_CACHE_HOME=/tmp/xdg-cache -e TRITON_CACHE_DIR=/tmp/triton-cache)
+  # Round 45j (reviewer): a uid WITHOUT a passwd entry (or an unwritable
+  # image home) breaks getpass.getuser() and ~-based caches (torch
+  # inductor, flashinfer, vllm usage stats). Set HOME/USER/LOGNAME
+  # explicitly -- insurance for ANY uid, untested for uid 1000 in this
+  # image but harmless.
+  _me="$(id -un 2>/dev/null || true)"; _me="${_me:-uid$_uid}"
+  ENGINE_CACHE_ARGS=(-e HF_HOME=/tmp/hf-cache -e XDG_CACHE_HOME=/tmp/xdg-cache -e TRITON_CACHE_DIR=/tmp/triton-cache -e HOME=/tmp/engine-home -e "USER=$_me" -e "LOGNAME=$_me")
 fi
 # Review fix (round 26): try the documented clone layout first
 # (~/sikkatu-recipes/recipes/...), then the plain ~/recipes layout.
@@ -210,9 +216,11 @@ PIDF="$KVP_CACHE_ROOT/lmcache-server.pid"
 # register_kv_caches (300s wasted inside the container). Real liveness is a
 # TCP connect to the request port; the pid file stays as a fast negative
 # filter for the "not started at all" case.
-if [ ! -f "$PIDF" ] || ! kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; then
-  die "lmcache server not running -- start it first: bash scripts/start-cache.sh"
-fi
+# Review fix (round 45j): this check must be under PERSIST=true -- the
+# comment below promises BOTH checks are skipped when the persistent KV
+# connector is disabled, and without the connector there is no cache
+# server to wait for. Moved into the PERSIST block.
+KVP_PIDF="$PIDF"
 # Review fix (round 13): the identity gate inspects the RUNNING container. On a
 # first run there is no container yet -- gate AFTER launch instead of failing
 # with INCONCLUSIVE. On reruns the gate checks the container that is about to
@@ -234,6 +242,12 @@ esac
 # present and well-formed BEFORE anything is launched. The engine-side match
 # (container args) runs right after docker run below.
 if [ "$PERSIST" = "true" ]; then
+  # Round 45j (reviewer): the cache-server check lives HERE, under
+  # PERSIST=true -- the comment below promises both checks are skipped
+  # when the persistent KV connector is disabled.
+  if [ ! -f "$KVP_PIDF" ] || ! kill -0 "$(cat "$KVP_PIDF" 2>/dev/null)" 2>/dev/null; then
+    die "lmcache server not running -- start it first: bash scripts/start-cache.sh"
+  fi
   echo "-- identity gate (pre-launch): verifying identity config is complete --"
   bash "$HERE/verify-engine-identity.sh" --check-config-only \
     || die "identity config incomplete/invalid -- fix configs/${KVP_MODEL_CONFIG}/identity.env(.local)"
