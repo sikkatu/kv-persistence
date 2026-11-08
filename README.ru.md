@@ -75,6 +75,9 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # заполнение И проверка пинов идентичности
 bash scripts/preflight.sh               # проверка хоста, хранилища и идентичности
 bash scripts/start-all.sh              # ОДНА команда: мониторинг + кэш + движок
+#   KVP_ENGINE=recipe  делегирует шаг движка аппаратно проверенному
+#   лаунчеру рецепта (sikkatu/recipes, KV_PERSIST=1) -- тот же стек одной
+#   командой. ДЕФОЛТ: KVP_ENGINE=kv (собственный лаунчер репо).
 #   (или пошагово: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
 bash scripts/stop-all.sh                # остановить всё (данные сохраняются)
 
@@ -95,6 +98,22 @@ lossless zstd (отключение: `USE_LOSSLESS_SERDE=0`).
 
 Постоянный переключатель в production-рецепте — `KV_PERSIST=1` в `tp4.env`
 (см. вики «Интеграция с рецептами»); откат — удаление этой одной строки.
+
+**Делегирование движка (`KVP_ENGINE`).** `start-all.sh` умеет выполнять шаг
+движка любым из двух путей:
+
+* `KVP_ENGINE=kv` (ДЕФОЛТ) -- `run-vllm-with-persist.sh` этого репо;
+* `KVP_ENGINE=recipe` -- аппаратно проверенный `run-tp4-hotsplit.sh` из
+  `sikkatu/recipes` с `KV_PERSIST=1`, одной командой, без ручных шагов.
+
+Оба пути делят один ключ (`~/.config/kvp/api_key`, автогенерация на loopback
+на ОБЕИХ путях), один дефолт бюджета горячих экспертов и одну запись имени
+контейнера (`live/engine_container` пишется при каждом запуске -- поэтому
+`stop-engine.sh` / `kvp down` останавливают именно запущенное).
+Делегирование пинит `KV_CACHE_DTYPE=bfloat16` (дефолт рецепта `auto`
+резолвится в dtype модели -- ТОТ ЖЕ namespace кэша, проверено
+поведенчески). Дефолт НЕ переключается, пока прогон на железе не
+подтвердит рецептный путь.
 
 ## Lossless-хранение
 

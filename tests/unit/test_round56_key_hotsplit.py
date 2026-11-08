@@ -51,8 +51,12 @@ def test_env_has_shared_key_helpers():
 
 def test_launcher_uses_the_shared_key():
     t = _read("run-vllm-with-persist.sh")
-    assert "_kvp_load_api_key" in t, "the launcher must read the shared key"
-    assert "_kvp_save_api_key" in t, "the launcher must save to the shared path"
+    # Round 71 (review): generation/save live in env.sh (_kvp_ensure_api_key);
+    # the launcher calls the shared ensure step (same contract the delegated
+    # recipe path runs).
+    assert "_kvp_ensure_api_key" in t, "the launcher must call the shared ensure step"
+    e = _read("env.sh")
+    assert "_kvp_save_api_key" in e, "the shared library must save to the shared path"
 
 
 # ---------------------------------------------------------------- hotsplit by default
@@ -72,10 +76,14 @@ def test_launcher_mounts_hotsplit_machinery():
 def test_launcher_passes_hotsplit_env_defaults():
     t = _read("run-vllm-with-persist.sh")
     # Round 59: the env defaults live in the SHARED module; the launcher sources
-    # it and only sets its own profile default (HOT_GIB=30).
-    assert "hotsplit_env.sh" in t, "the launcher must source the shared module"
-    assert 'HOTSPLIT_HOT_GIB=${HOTSPLIT_HOT_GIB:-30}' in t or 'HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-30}"' in t, (
-        "the hot budget default must match the recipe (30 GiB)")
+    # it. Round 71 (review): the hot-bank default moved to ONE shared place
+    # (env.sh _kvp_hotsplit_hot_gib_default=30) so the kv path and the
+    # delegated recipe path cannot drift.
+    assert "_kvp_hotsplit_hot_gib_default" in t, (
+        "the launcher must take the hot-bank default from the shared helper")
+    e = _read("env.sh")
+    assert 'HOTSPLIT_HOT_GIB:-30' in e, (
+        "the shared helper must default to the recipe's 30 GiB")
     _mod = _read_module()
     assert 'HOTSPLIT_DYNAMIC=${HOTSPLIT_DYNAMIC:-1}' in _mod, (
         "dynamic hot experts must be the default (recipe default)")

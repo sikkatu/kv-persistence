@@ -72,6 +72,9 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # 填写并核验身份固定项
 bash scripts/preflight.sh               # 校验主机、存储与身份
 bash scripts/start-all.sh              # 一条命令：监控 + 缓存 + 引擎
+#   KVP_ENGINE=recipe  把引擎步骤委托给经硬件验证的 recipe 启动器
+#   （sikkatu/recipes，KV_PERSIST=1）——同一条栈，一条命令。
+#   默认：KVP_ENGINE=kv（本仓库自带的启动器）。
 #   （或分步：start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh）
 bash scripts/stop-all.sh                # 全部停止（数据保留）
 
@@ -90,6 +93,19 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 
 生产配方中的常驻开关是 `tp4.env` 里的 `KV_PERSIST=1`
 （见 wiki「配方集成」）；回滚只需删除这一行。
+
+**引擎委托（`KVP_ENGINE`）：** `start-all.sh` 可以通过任一路径执行引擎步骤：
+
+* `KVP_ENGINE=kv`（默认）——本仓库的 `run-vllm-with-persist.sh`；
+* `KVP_ENGINE=recipe`——`sikkatu/recipes` 中经硬件验证的
+  `run-tp4-hotsplit.sh`（`KV_PERSIST=1`），一条命令，无需手工步骤。
+
+两条路径共用一个密钥（`~/.config/kvp/api_key`，两条路径在 loopback 绑定下
+都会自动生成）、一个热专家预算默认值和一条容器名记录
+（每次启动都写 `live/engine_container`，因此 `stop-engine.sh` / `kvp down`
+停止的正是已启动的容器）。委托固定 `KV_CACHE_DTYPE=bfloat16`（recipe 的默认
+`auto` 解析为模型 dtype——相同的缓存 namespace，经行为验证）。在硬件运行
+确认 recipe 路径之前不切换默认值。
 ## 无损持久化
 L2 层**只支持无损**。NVMe 上的 KV 块始终被解码为引擎产生的原始字节：项目中
 不存在 fp8 / turboquant / lbq 量化，任何此类编解码在启动时都会被明确拒绝。

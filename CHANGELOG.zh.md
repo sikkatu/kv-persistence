@@ -10,6 +10,39 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 72 轮（行为级 dtype 测试、带 allowlist 的完整持久化 parity）
+* KV_CACHE_DTYPE——替换本身（审阅：旧测试只检查注释）：
+  `tests/test_engine_delegation.py` 现在对伪造 `config.json`
+  （`torch_dtype: bfloat16`）运行真正的 `resolve_effective_identity`：
+  `auto` 与固定的 `bfloat16` 解析出相同的值、因而相同的缓存 namespace
+  （真实 `CacheIdentity`），而 `fp8` 有自己的。固定值不会移动已预热缓存的
+  namespace——通过行为验证，而非注释。
+* 持久化开启下的启动器 parity（清单第 5 项）：
+  `tests/test_launcher_parity.py::test_full_docker_run_parity_with_persist`
+  在连接器挂载状态下运行两个启动器，逐 token 比较整个 `docker run`，
+  并使用显式 allowlist（容器名、env-file /live 路径、root 与 same-UID
+  缓存、显式 HOTSPLIT 默认值）。审阅者测得的差异列表被固定为数据；
+  超出清单的任何差异都会使测试失败。两侧必备参数：
+  `--kv-transfer-config`、`--block-size`、`--enable-prompt-tokens-details`。
+* kv 启动器支持环境变量 `KVP_MODEL_NAME`（recipe 的 `KV_PERSIST_NAMESPACE`
+  的精确对应物）——两条路径在同一固定 namespace 下运行（parity 钩子）；
+  显式覆盖始终是操作员的决定（已文档化的逃生口），绝不作为默认值。
+## 第 71 轮（委托缺陷：hot bank、engine_container 记录、首次启动密钥）
+* 委托路径不再静默禁用热专家（探针 A）：`HOTSPLIT_HOT_GIB` 在
+  `scripts/env.sh` 中只有一个默认值（30 GiB，`_kvp_hotsplit_hot_gib_default`），
+  两条引擎路径都取它；解析为空时 `start-all.sh` 拒绝启动。此前 kv 路径设 30，
+  而 recipe 路径什么都不传——recipe 启动器警告 “split is a no-op”，
+  并以空热集运行。
+* 唯一的容器名记录（探针 B）：两个分支都把有效名称写入
+  `live/engine_container`。此前 recipe 运行后接 kv 运行会留下旧名字——
+  `stop-engine.sh` / `kvp down|logs|status` 停错了容器，活着的 kv 引擎继续运行。
+* 全新机器的首次启动在两条路径上都生成密钥（探针 C）：生成契约
+  （`_kvp_gen_key` + `_kvp_ensure_api_key`）位于 `scripts/env.sh`，
+  由 kv 启动器和委托的 recipe 分支共同调用（recipe 路径此前以
+  “no API key found” 退出）。安全契约不变：自动生成仅限 loopback，
+  非 loopback 绑定始终要求显式密钥。
+* 审阅者的探针文件 `test_review_round70_probes.py`（测试 A/B/C）
+  已纳入 recipes 测试集，针对这些修复全部通过。
 ## 第 70 轮（委托：KVP_ENGINE=recipe，默认关闭）
 
 * 一个引擎启动，两条路径：`start-all.sh` 现在支持 `KVP_ENGINE`
@@ -33,41 +66,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * `tests/test_engine_delegation.py`（6 个测试）覆盖清单；强制的
   identity-gate 被桩替换（与 test_kv_persist_behaviour 相同的装置）——
   真正的 identity 属于 kv-persistence 的领域。
-
-## 第 69 轮（步骤 2 准备：recipe 启动器激活检查、契约快照）
-
-* recipe 启动器（`run-tp4-hotsplit.sh`）现在在宣布成功前执行与 kv 引擎
-  启动器（第 59 轮）相同的 hotsplit/NUMA 激活检查：boot-hook 标记（ACTIVE
-  或使用模型补丁时的有意 INACTIVE）、`step hook installed`、
-  `live counter:`、NUMA 启用时的 `HOOK STATUS numa_bind=ACTIVE`、无空 bank、
-  无事务错误。缺少标记即 exit 1。这在 `KVP_ENGINE=recipe` 出现之前就
-  堵住了「委托会丢失检查」的缺口。关闭：`KVP_SKIP_HOTSPLIT_CHECK=1`。
-* docker run 契约快照（`tests/fixtures/launcher-docker-run.txt`，测试
-  `test_snapshot_contract`）：没有委托标志时最终的 `docker run` 必须与
-  记录的契约逐字节一致。仅故意更新：`KVP_UPDATE_SNAPSHOT=1`。
-* 激活负向测试（`tests/test_activation_negative.py`）：缺少标记 -> exit 1
-  并列出每个 `[MISSING]` 行；标记完整 -> exit 0；跳过开关有效。启动器的
-  返回码就是 start-all.sh / kvp up 看到的（它们在前台运行它）。
-* 旧测试套件使用已文档化的 opt-out（它们的 docker 桩不输出标记且断言
-  其他行为）；检查本身由专用测试覆盖。
-
-## 第 68 轮（lz4 边界修复、行为级解析器测试）
-
-* lz4 边界 bug（审阅者发现）：`max_length=cap - len(out)` 在上限处变成 0——
-  而在 lz4 流式 API 中 0 表示无限制，100 MiB 炸弹在一次无界调用中返回。
-  已修复为 `cap + 1 - len(out)`（当 len(out) <= cap 时永不 <= 0；多余字节
-  触发溢出检查）。诚实帧不受影响。转发测试的桩现在记录每次调用并在炸弹、
-  边界和诚实路径上断言 max_length > 0 且 chunk <= cap+1。
-* 行为级解析器测试（审阅者发现：子字符串检查无法捕获漂移）：
-  `tests/test_parser_behaviour.py` 在同一个 tp4.env 上运行两个解析器
-  （kv-persistence env.sh 和配方的 kvp-common.sh）并逐键比较结果环境。
-  测试用例覆盖所有棘手规则（$HOME 展开、引号、行内注释、值中的 #、
-  export 前缀、缩进注释、无效标识符）。测试立即捕获了一个共同的语义
-  缺陷：`KEY = value` 在值中保留了前导空格——两个解析器现在都去除前导
-  和尾随空白（5 个文件同步更新；逐字节一致性契约测试保证同步）。
-* 真实编解码器仍未验证（CI 中没有 zstandard/lz4）：zstandard 在头部大小
-  超过 max_output_size 时的确切行为、lz4 的真实边界语义。在安装了包的
-  主机上 `pytest tests/unit/test_decompress_bomb.py -rs` 应显示 0 个
-  SKIPPED。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

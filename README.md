@@ -85,6 +85,9 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
 bash scripts/start-all.sh              # ONE command: monitoring + cache + engine
+#   KVP_ENGINE=recipe  delegates the engine step to the hardware-verified
+#   recipe launcher (sikkatu/recipes, KV_PERSIST=1) -- same stack, one command.
+#   DEFAULT: KVP_ENGINE=kv (this repo's own launcher).
 #   (or step by step: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
 bash scripts/stop-all.sh                # stop everything (data kept)
 
@@ -108,6 +111,21 @@ physical NVMe device and `test-recovery.sh` ends with a machine verdict.
 
 Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 (see wiki *Recipes Integration*); rollback is removing that one line.
+
+**Engine delegation (`KVP_ENGINE`).** `start-all.sh` can run the engine step
+through either path:
+
+* `KVP_ENGINE=kv` (DEFAULT) -- this repo's `run-vllm-with-persist.sh`;
+* `KVP_ENGINE=recipe` -- the hardware-verified `run-tp4-hotsplit.sh` of
+  `sikkatu/recipes` with `KV_PERSIST=1`, one command, no manual steps.
+
+Both paths share one key (`~/.config/kvp/api_key`, auto-generated on a
+loopback bind on BOTH paths), one hot-expert budget default and one
+container-name record (`live/engine_container`, written by each launch, so
+`stop-engine.sh` / `kvp down` stop exactly what was started). The delegation
+pins `KV_CACHE_DTYPE=bfloat16` (the recipe default `auto` resolves to the
+model dtype -- the SAME cache namespace, verified behaviourally). The
+default is NOT switched until a hardware run confirms the recipe path.
 
 ## Lossless persistence
 

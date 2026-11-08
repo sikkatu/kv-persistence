@@ -310,6 +310,62 @@ KVP_COMPAT_VERSION=1
 _kvp_api_key_file(){
   printf '%s' "${KVP_API_KEY_FILE:-$HOME/.config/kvp/api_key}"
 }
+# _kvp_gen_key -- generate a 48-hex API key (the one generator, round 71:
+# both engine paths must produce keys the same way). Tries openssl, python3,
+# /dev/urandom in that order; prints the key on stdout.
+_kvp_gen_key(){
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import secrets; print(secrets.token_hex(24))'
+  else
+    head -c 24 /dev/urandom | od -An -tx1 | tr -d '[:space:]'
+  fi
+}
+
+# _kvp_ensure_api_key [<legacy-dir>] -- the key resolution/generation contract
+# shared by BOTH engine paths (round 71, review probe C): read the canonical
+# key, else generate ONE for a loopback bind and save it (canonical + legacy
+# mirror). Prints the key. Returns 1 with a message on stderr when a
+# non-loopback bind has no key (fail-safe: a public server is always
+# authenticated -- never auto-generate for it).
+_kvp_ensure_api_key(){
+  _kvp_ek_bind="${BIND:-127.0.0.1}"
+  _kvp_ek_key="$(_kvp_load_api_key "$1")"
+  if [ -n "$_kvp_ek_key" ]; then
+    printf '%s' "$_kvp_ek_key"
+    return 0
+  fi
+  case "$_kvp_ek_bind" in
+    127.0.0.1|\[::1\]|::1)
+      _kvp_ek_key="$(_kvp_gen_key)"
+      case "$_kvp_ek_key" in
+        *[!0-9a-f]*|'')
+          echo "ERROR: failed to generate an API key (openssl/python3/urandom all unavailable)" >&2
+          return 1 ;;
+      esac
+      [ "${#_kvp_ek_key}" -ge 32 ] || {
+        echo "ERROR: generated API key is too short (${#_kvp_ek_key} chars)" >&2
+        return 1; }
+      _kvp_save_api_key "$_kvp_ek_key" "$1"
+      echo "API key auto-generated for the loopback server and saved to $(_kvp_api_key_file)" >&2
+      printf '%s' "$_kvp_ek_key"
+      return 0 ;;
+    *)
+      echo "ERROR: API_KEY required for a non-loopback bind ($_kvp_ek_bind) -- that is a public unauthenticated API.
+Set API_KEY explicitly (openssl rand -hex 24) or bind loopback (BIND=127.0.0.1)." >&2
+      return 1 ;;
+  esac
+}
+
+# The hot-expert budget default -- ONE place (round 71, review probe A): both
+# engine paths must plan the SAME hot bank (30 GiB per rank, the recipe's
+# documented value). An EMPTY HOTSPLIT_HOT_GIB with full UVA offload plans an
+# EMPTY hot set -- the split becomes a silent no-op.
+_kvp_hotsplit_hot_gib_default(){
+  printf '%s' "${HOTSPLIT_HOT_GIB:-30}"
+}
+
 _kvp_load_api_key(){ # prints the key (empty when none exists yet)
   _kvp_kf="$(_kvp_api_key_file)"
   if [ -f "$_kvp_kf" ]; then

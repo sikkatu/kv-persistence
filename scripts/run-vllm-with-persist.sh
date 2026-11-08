@@ -161,34 +161,27 @@ fi
 # the same contract as the recipe launchers. A non-loopback bind always needs
 # an EXPLICIT key (fail-safe: a server on a routable address is always
 # authenticated). Loopback is strictly 127.0.0.1 or ::1.
-gen_key() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 24
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import secrets; print(secrets.token_hex(24))'
-  else
-    head -c 24 /dev/urandom | od -An -tx1 | tr -d '[:space:]'; echo
-  fi
-}
+# Round 71 (review): the generator lives in env.sh (_kvp_gen_key) -- both
+# engine paths produce keys identically.
 LOOPBACK=0
 case "$BIND" in
   127.0.0.1|\[::1\]|::1) LOOPBACK=1 ;;
 esac
-if [ -z "$API_KEY" ] && [ "$LOOPBACK" = "1" ]; then
-  API_KEY="$(gen_key)"
-  case "$API_KEY" in
-    *[!0-9a-f]*|'') die "failed to generate an API key (openssl/python3/urandom all unavailable)" ;;
-  esac
-  [ "${#API_KEY}" -ge 32 ] || die "generated API key is too short (${#API_KEY} chars)"
-  umask 077
-  mkdir -p "$ROOT/live"
-  _kvp_save_api_key "$API_KEY" "$ROOT/live"
-  chmod 600 "$ROOT/live/api_key"
-  echo "API key auto-generated for the loopback server and saved to $ROOT/live/api_key"
+# Round 71 (review probe C): the ensure/generate contract lives in env.sh --
+# the same step the delegated recipe path runs. Loopback-only auto-generation
+# (non-loopback ALWAYS requires an explicit key -- fail-safe).
+if [ -z "$API_KEY" ]; then
+  API_KEY="$(_kvp_ensure_api_key "$ROOT/live")" || die "API key setup failed (see above)"
 fi
 [ -n "$API_KEY" ] || die "API_KEY required for a non-loopback bind ($BIND) -- that is a public unauthenticated API.
 Set API_KEY explicitly (openssl rand -hex 24) or bind loopback (BIND=127.0.0.1)."
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
+# Round 71 (review probe B): ONE container-name source -- record the effective
+# name in live/engine_container so stop-engine.sh / kvp down/status/logs stop
+# whatever THIS launch started (a stale record from a previous recipe run used
+# to make stop-engine.sh stop the wrong container).
+mkdir -p "$ROOT/live"
+printf '%s\n' "$CONTAINER" > "$ROOT/live/engine_container"
 # NOTE on REQUESTED settings from the task brief vs the VERIFIED recipe:
 #  KV_CACHE_DTYPE: BFLOAT16 is the effective dtype of this project. The value
 #  MUST be the vLLM CacheDType spelling `bfloat16` (review fix): `bf16` is NOT
@@ -516,8 +509,14 @@ if [ "$PERSIST" = "true" ]; then
   # settings (resolved by the shared effective-identity code) -- the namespace
   # therefore follows what the engine is actually started with, exactly like
   # the recipe KV_PERSIST=1 branch.
-  KVP_MODEL_NAME="$(python3 -m kvpersist.cli model-name ${KVP_TENANT_DISCRIMINATOR:+--discriminator "$KVP_TENANT_DISCRIMINATOR"})" \
-    || die "cannot derive LMCache model_name from the identity config"
+  # Round 72 (review parity): KVP_MODEL_NAME from the environment is honoured
+  # -- the exact analogue of the recipe's KV_PERSIST_NAMESPACE escape hatch,
+  # so both launchers can be compared under ONE pinned namespace. An explicit
+  # override is an operator decision (documented escape hatch), not a default.
+  if [ -z "${KVP_MODEL_NAME:-}" ]; then
+    KVP_MODEL_NAME="$(python3 -m kvpersist.cli model-name ${KVP_TENANT_DISCRIMINATOR:+--discriminator "$KVP_TENANT_DISCRIMINATOR"})" \
+      || die "cannot derive LMCache model_name from the identity config"
+  fi
   [ -n "$KVP_MODEL_NAME" ] || die "empty LMCache model_name -- identity config incomplete"
   # `/models/<name>` where <name> encodes the identity namespace (no '/' in it).
   MODEL_MOUNT="/models/$KVP_MODEL_NAME"
@@ -679,7 +678,10 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
         HOTSPLIT_STRICT_HOOK="$(normalize_bool "${HOTSPLIT_STRICT_HOOK:-0}" HOTSPLIT_STRICT_HOOK)"
         HOTSPLIT_NUMA_STRICT="$(normalize_bool "${HOTSPLIT_NUMA_STRICT:-0}" HOTSPLIT_NUMA_STRICT)"
         HOTSPLIT_DYN_LOG="$(normalize_bool "${HOTSPLIT_DYN_LOG:-1}" HOTSPLIT_DYN_LOG)"
-        HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-30}"
+        # Round 71 (review probe A): ONE shared hot-bank default (env.sh) -- the
+        # delegated recipe path uses the same value; an empty HOT_GIB plans an
+        # empty hot set ("the split is a no-op").
+        HOTSPLIT_HOT_GIB="$(_kvp_hotsplit_hot_gib_default)"
         # Round 60 (review): BOOT_HOOK=0 -- the replaced mimo_v2.py
         # (mimo_v2_hotsplit.py) ALREADY calls hotsplit.apply_hotsplit itself.
         # Setting HOTSPLIT_BOOT_HOOK=1 would make sitecustomize wrap the same

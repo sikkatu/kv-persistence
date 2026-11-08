@@ -82,19 +82,23 @@ case "$KVP_ENGINE" in
     # Record the EFFECTIVE name in live/engine_container so stop-engine.sh,
     # stop-all.sh and kvp down/status/logs stop exactly what is started here.
     KVP_ENGINE_CONTAINER="${KVP_ENGINE_CONTAINER:-mimo-pro-tp4-hotsplit}"
+    # Round 71 (review probe A): the SAME hot-bank default as the kv path --
+    # an empty HOTSPLIT_HOT_GIB with full UVA offload plans an EMPTY hot set
+    # ("the split is a no-op"); the split must not be silently disabled here.
+    export HOTSPLIT_HOT_GIB="$(_kvp_hotsplit_hot_gib_default)"
+    [ -n "$HOTSPLIT_HOT_GIB" ] || { echo "ERROR: HOTSPLIT_HOT_GIB resolved empty -- refusing the delegated launch" >&2; exit 1; }
     mkdir -p "$ROOT/live"
     printf '%s\n' "$KVP_ENGINE_CONTAINER" > "$ROOT/live/engine_container"
 
-    # ---- ONE key source (checklist): export the shared key from
-    # ~/.config/kvp/api_key so the recipe launcher REUSES it and never
-    # generates a second one. The key travels in the environment -- it must
-    # never appear in argv (`ps`).
+    # ---- ONE key source (checklist + review probe C): the shared ensure step
+    # (env.sh) generates the key for a fresh machine exactly like the kv path
+    # does -- loopback-only, saved to ~/.config/kvp/api_key, mirrored to
+    # $ROOT/live. The key travels in the environment, never in argv (ps).
     if [ -z "${API_KEY:-}" ]; then
-      API_KEY="$(_kvp_load_api_key "$ROOT")"
-    fi
-    if [ -z "$API_KEY" ]; then
-      echo "ERROR: no API key found ($HOME/.config/kvp/api_key) -- refusing the recipe path without a key" >&2
-      exit 1
+      API_KEY="$(_kvp_ensure_api_key "$ROOT/live")" || {
+        echo "ERROR: API key setup failed (see above)" >&2
+        exit 1
+      }
     fi
     export API_KEY
 
