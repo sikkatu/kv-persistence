@@ -11,6 +11,29 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 65 (kvp_curl: key on a pipe -- no file, no ps, no unbound vars)
+
+* Round 64's `.curl-header` file approach caused three regressions -- all
+  fixed by the reviewer's suggestion: NO key file at all. A tiny `kvp_curl()`
+  sends the bearer key on a stdin pipe (`printf | curl -K -`; printf is a
+  bash builtin, invisible in `ps`) and runs plain `curl` when no key is set
+  (the documented ALLOW_NO_AUTH loopback mode).
+* manage.sh / check-tp4-api.sh no longer die with "LIVE_DIR: unbound
+  variable" (they never define LIVE_DIR; the round-64 `-K "$LIVE_DIR/..."`
+  referenced it under `set -u`).
+* The uva no-auth mode works again: without a key the old code called
+  `curl -K <missing-file>` (exit 26), so the readiness loop could never
+  succeed. `kvp_curl` sends no header when no key is set.
+* manage.sh `status` with a stopped server no longer exits 7 under `set -e`
+  (long-standing bug: `code="$(curl ...)"` killed the script before the
+  "not reachable" branch). The assignment is guarded.
+* test-recovery.sh: the mktemp header file is removed via `trap ... EXIT`
+  (no key material left in /tmp), and the shared canonical key
+  (`~/.config/kvp/api_key`) now WINS over a stale `$PWD/live/api_key`.
+* kv-persistence env.sh gained the same `kvp_curl()` helper; the engine
+  launcher uses it for the readiness loop (no `.curl-header` file anywhere).
+* Tests updated to the kvp_curl contract.
+
 ## Round 64 (one parser, auth out of ps everywhere, codec opt-out restored)
 
 * ONE env-file parser (`_kvp_seed_env_file` in scripts/env.sh) replaces the two
@@ -71,17 +94,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   the codec now gets lossless zstd, raw needs an explicit `LMCACHE_L2_SERDE=none`.
 * Tests: recipe launcher tests assert the env-file contract (the key must NOT
   be a command-line argument) and follow `~/recipes` as a lookup layout.
-
-## Round 62 (float knob ranges + fresh CI counts)
-
-* The float knob validation now enforces the plan code's REAL ranges on the
-  host: `HOTSPLIT_DYN_DECAY` must be 0..1 and `HOTSPLIT_DYN_MARGIN` >= 1
-  (hotsplit.py `_dyn_float` bounds). Before, only "is a number" was checked,
-  so `DYN_DECAY=2` / `DYN_MARGIN=0.5` passed host validation and were rejected
-  inside the container after the model load. Pure-bash range arithmetic (no
-  external tools, no fail-open).
-* CI counts refreshed after the cross-repo path fix: recipes CI is now
-  **336 passed + 7 skipped** (was 330+13 in the round-61 note); kv-persistence
-  CI unchanged at 344 passed + 4 skipped. Docs cite the current figures.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

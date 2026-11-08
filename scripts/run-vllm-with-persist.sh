@@ -806,12 +806,10 @@ fi
 # env-file (docker --env-file) and use a curl config file for the bearer
 # header instead of `-H "Authorization: Bearer $API_KEY"` on the command line.
 _kvp_key_envfile="$ROOT/live/.engine-env"
-_kvp_key_header="$ROOT/live/.curl-header"
 umask 077
 printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$_kvp_key_envfile"
 chmod 600 "$_kvp_key_envfile"
-printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" > "$_kvp_key_header"
-chmod 600 "$_kvp_key_header"
+# Round 65: no .curl-header file -- kvp_curl (env.sh) sends the key on a pipe.
 echo "starting $CONTAINER with persistent KV connector (lmcache $LMCACHE_HOST:$LMCACHE_PORT)"
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
@@ -944,7 +942,7 @@ for _ in $(seq 1 300); do
   else
     printf '[%3ds] still loading (no new log lines)\n' "$(( $(date +%s) - START_TS ))"
   fi
-  if curl -fsS --max-time 3 -K "$_kvp_key_header" "http://$URLHOST:$PORT/v1/models" >/dev/null 2>&1; then
+  if kvp_curl -fsS --max-time 3 "http://$URLHOST:$PORT/v1/models" >/dev/null 2>&1; then
     echo "API is up with the persistent KV connector attached."
     # Round 59 (review): /v1/models answering is NOT proof that the hot experts
     # actually work. Verify the hotsplit ACTIVATION in the engine log before

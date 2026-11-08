@@ -359,6 +359,19 @@ _kvp_save_api_key(){ # _kvp_save_api_key <key> [<legacy-dir>]
 #   * $HOME / ${HOME} are expanded;
 #   * only VALID shell identifiers are exported -- anything else is skipped
 #     silently (an indented comment like "  # X=1" must NOT abort the caller).
+# kvp_curl [curl args...] -- curl with the API key sent as a stdin config.
+# Round 65 (review): NO key file at all -- `printf` is a bash builtin (invisible
+# in `ps`), and the key travels on the pipe, not on a command line or in a
+# world-readable file. Without a key the request goes out unauthenticated (the
+# documented ALLOW_NO_AUTH loopback mode).
+kvp_curl(){
+  if [ -n "${API_KEY:-}" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" | curl -K - "$@"
+  else
+    curl "$@"
+  fi
+}
+
 _kvp_seed_env_file(){
   _kvp_sf="$1"
   [ -f "$_kvp_sf" ] || return 0

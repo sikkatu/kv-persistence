@@ -10,6 +10,27 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 65 轮（kvp_curl：密钥走管道——无文件、无 ps、无 unbound 变量）
+
+* 第 64 轮的 `.curl-header` 文件方案导致了三个回归——按审阅者的建议全部
+  修复：不再有任何密钥文件。小小的 `kvp_curl()` 通过 stdin 管道发送 bearer
+  密钥（`printf | curl -K -`；printf 是 bash 内建命令，在 `ps` 中不可见），
+  未设置密钥时执行普通 `curl`（已文档化的 ALLOW_NO_AUTH 回环模式）。
+* manage.sh / check-tp4-api.sh 不再因 "LIVE_DIR: unbound variable" 崩溃
+  （它们从不定义 LIVE_DIR，而第 64 轮的 `-K "$LIVE_DIR/..."` 在 `set -u` 下
+  引用了它）。
+* uva 的无认证模式恢复工作：没有密钥时旧代码调用 `curl -K <缺失文件>`
+  （退出码 26），就绪循环永远无法成功。`kvp_curl` 在无密钥时不发送头部。
+* manage.sh `status` 在服务器停止时不再在 `set -e` 下以退出码 7 终止
+  （长期存在的 bug：`code="$(curl ...)"` 在 "not reachable" 分支之前就杀死了
+  脚本）。赋值已加保护。
+* test-recovery.sh：mktemp 的 header 文件通过 `trap ... EXIT` 删除（/tmp 中
+  不留密钥材料），共享的规范密钥（`~/.config/kvp/api_key`）现在优先于
+  过时的 `$PWD/live/api_key`。
+* kv-persistence env.sh 增加了相同的 `kvp_curl()` 辅助函数；引擎启动器在
+  就绪循环中使用它（任何地方都不再有 `.curl-header` 文件）。
+* 测试已更新为 kvp_curl 契约。
+
 ## 第 64 轮（统一解析器、auth 全面不进 ps、编解码退出恢复）
 
 * 一个 env-文件解析器（scripts/env.sh 中的 `_kvp_seed_env_file`）取代了两个
@@ -60,16 +81,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   变量得到无损 zstd，raw 需要显式 `LMCACHE_L2_SERDE=none`。
 * 测试：recipe 启动器测试现在遵循 env-file 契约（密钥不应是命令行参数）
   并考虑 `~/recipes` 查找布局。
-
-## 第 62 轮（浮点参数范围 + 新 CI 计数）
-
-* 浮点参数验证现在在主机上强制执行计划代码的真实范围：
-  `HOTSPLIT_DYN_DECAY` 必须是 0..1，`HOTSPLIT_DYN_MARGIN` >= 1
-  （hotsplit.py 的 `_dyn_float` 边界）。之前只检查「是否为数字」，因此
-  `DYN_DECAY=2` / `DYN_MARGIN=0.5` 能通过主机验证，在模型加载后才被容器内
-  拒绝。范围计算使用纯 bash（无外部工具，无 fail-open）。
-* 修复 cross-repo 路径后刷新 CI 计数：recipes CI 现在是 **336 passed +
-  7 skipped**（第 61 轮注释中为 330+13）；kv-persistence CI 不变 ——
-  344 passed + 4 skipped。文档引用当前数字。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。
