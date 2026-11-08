@@ -11,6 +11,32 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 66 (small fixes + decompression cap + launcher parity)
+
+* Small fixes (separate commit per the reviewer): test-recovery.sh key
+  priority is now env > shared canonical key > local mirror (an explicit
+  API_KEY is never overwritten); `kvp_curl` escapes `\` and `"` before the
+  curl config file so ANY key bytes reach the server intact (a raw quote or
+  backslash used to be silently mangled); the dead `AUTH=()` in
+  check-tp4-api.sh is gone; the env.sh doc comment is split cleanly.
+* Decompression size cap in compress_serde (deferred item 1): before running
+  the codec, `plain_len` is checked against the destination buffer AND a
+  configurable ceiling (`KVP_DECOMPRESS_MAX_BYTES`, default 1 GiB); zstd
+  gets `max_output_size`, lz4 the streaming `max_length` bound. A lying
+  plain_len or a decompression bomb now raises a clean ValueError (cache
+  MISS) with no unbounded allocation. Codec errors are wrapped into
+  ValueError (the cache-MISS contract). 6 new tests incl. a real zstd bomb.
+* Launcher parity test (deferred item 2, step 1): `tests/test_launcher_parity.py`
+  runs BOTH engine launchers against a stub docker and compares the final
+  `docker run` -- caps, compilation-config, /w mounts, /live mount and the
+  key via --env-file must match. It caught (and this commit fixes) a silent
+  divergence: the KV launcher's readiness loop was hard-coded (`seq 1 300`,
+  `sleep 10`) and ignored `WAIT_TRIES`/`WAIT_SLEEP` that the recipe launcher
+  honours -- now both honour them.
+* The reviewer's repro-round65.sh is now `tests/test_manage_check_http.py`
+  (scenarios A-F: check-tp4-api with/without key, status with right/wrong
+  key, dead server exit 0, no-auth mode, special-character keys).
+
 ## Round 65 (kvp_curl: key on a pipe -- no file, no ps, no unbound vars)
 
 * Round 64's `.curl-header` file approach caused three regressions -- all
@@ -64,35 +90,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   above it).
 * Tests updated to the new contracts: the codec default must yield to the
   opt-out switches, auth must go through the curl config file.
-
-## Round 63 (parser parity, key out of ps, /live mount, kvp CLI)
-
-* `_tp4_seed` in the engine launcher now has the recipe parser's exact
-  semantics: `$HOME`/`${HOME}` are expanded, surrounding quotes stripped, inline
-  comments cut only at " #", and non-identifier lines (an indented comment)
-  are skipped instead of aborting with "invalid variable name".
-* The API key no longer appears in `ps` output (all 5 recipe launchers, the
-  KV launcher and test-recovery.sh): it travels via `docker --env-file`
-  (chmod 600) and `curl -K` config files instead of `-e VLLM_API_KEY=<value>`
-  and `-H "Authorization: Bearer ..."` command-line arguments.
-* `/live` is mounted in the KV launcher (`$ROOT/live:/live`) so the routing
-  counters persist; the activation check now also fails on
-  "live snapshot failed" and verifies `HOOK STATUS numa_bind=ACTIVE` when
-  NUMA binding is on.
-* Key migration actually writes the canonical `~/.config/kvp/api_key` (the
-  "migrate below" promise in `_kvp_load_api_key` was never implemented -- two
-  repos kept using different keys).
-* `USE_LOSSLESS_SERDE`/`LMCACHE_L2_SERDE` from tp4.env now reach the single
-  codec decision (start-all seeds tp4.env BEFORE resolving), and a
-  user-supplied `VLLM_EXTRA_ARGS` no longer silently removes the MiMo
-  parsers (opt out: `KVP_MIMO_PARSERS=0`).
-* `KVP_COMPAT_VERSION` pin file added to kv-persistence (the recipe launcher
-  already checked it); `KVP_REPO`/`KVP_REPO_ROOT` are both accepted.
-* `kvp` CLI on PATH (`scripts/install-kvp.sh` -> `~/.local/bin/kvp`):
-  `kvp up|down|status|logs`, repo locations remembered in `~/.config/kvp/`.
-* Stale docs fixed (README EN/RU/ZH + lmcache-server.env comments): omitting
-  the codec now gets lossless zstd, raw needs an explicit `LMCACHE_L2_SERDE=none`.
-* Tests: recipe launcher tests assert the env-file contract (the key must NOT
-  be a command-line argument) and follow `~/recipes` as a lookup layout.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

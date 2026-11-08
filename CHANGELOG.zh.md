@@ -10,6 +10,29 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 66 轮（小修复 + 解压上限 + 启动器对等）
+
+* 小修复（按审阅者要求单独提交）：test-recovery.sh 的密钥优先级现在是
+  环境 > 共享规范密钥 > 本地镜像（显式 API_KEY 永不被覆盖）；
+  `kvp_curl` 在写入 curl 配置文件前转义 `\` 和 `"`，确保任何密钥字节
+  完整到达服务器（裸引号/反斜杠此前被静默篡改）；check-tp4-api.sh 中
+  死代码 `AUTH=()` 已删除；env.sh 文档注释干净拆分。
+* compress_serde 解压大小上限（延期项 1）：在调用编解码器之前，`plain_len`
+  与目标缓冲区和可配置上限（`KVP_DECOMPRESS_MAX_BYTES`，默认 1 GiB）
+  比对；zstd 传入 `max_output_size`，lz4 使用流式 `max_length` 界限。
+  虚假的 plain_len 或解压炸弹现在产生干净的 ValueError（缓存 MISS），
+  不会无界分配。编解码器错误包装为 ValueError（缓存 MISS 契约）。
+  6 个新测试，包括真实 zstd 炸弹。
+* 启动器对等测试（延期项 2，步骤 1）：`tests/test_launcher_parity.py`
+  在 docker 桩上运行两个引擎启动器并比较最终的 `docker run`——能力、
+  compilation-config、/w 挂载、/live 挂载和 --env-file 传递的密钥必须
+  一致。它发现（本次提交修复）了一个隐蔽分歧：KV 启动器的就绪循环是
+  硬编码的（`seq 1 300`、`sleep 10`），忽略了 recipe 启动器遵循的
+  `WAIT_TRIES`/`WAIT_SLEEP`——现在两者都遵循。
+* 审阅者的 repro-round65.sh 已转化为 `tests/test_manage_check_http.py`
+  （场景 A–F：带/不带密钥的 check-tp4-api、正确/错误密钥的 status、
+  服务器宕机时 exit 0、无认证模式、特殊字符密钥）。
+
 ## 第 65 轮（kvp_curl：密钥走管道——无文件、无 ps、无 unbound 变量）
 
 * 第 64 轮的 `.curl-header` 文件方案导致了三个回归——按审阅者的建议全部
@@ -55,31 +78,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   安装器使用符号链接而非复制（`git pull` 立即更新命令）。
 * hotsplit_env.sh：shebang 恢复为第一行（兼容性钉定注释被加在它上面了）。
 * 测试已更新为新契约：编解码默认值让位于退出开关，auth 通过 curl 配置文件。
-
-## 第 63 轮（解析器一致性、密钥不进 ps、/live 挂载、kvp CLI）
-
-* 引擎启动器中的 `_tp4_seed` 现在与 recipe 的解析器逐字节一致：`$HOME`/
-  `${HOME}` 被展开，外围引号被去掉，行内注释只在 " #" 处截断，没有有效
-  标识符的行（带缩进的注释）被跳过而不是以 "invalid variable name" 崩溃。
-* API 密钥不再出现在 `ps` 输出中（全部 5 个 recipe 启动器、KV 启动器和
-  test-recovery.sh）：通过 `docker --env-file`（chmod 600）和 `curl -K`
-  配置文件传递，而不是 `-e VLLM_API_KEY=<value>` 和
-  `-H "Authorization: Bearer ..."` 命令行参数。
-* KV 启动器挂载 `/live`（`$ROOT/live:/live`）以便路由计数器持久化；激活
-  检查现在也会在 "live snapshot failed" 时失败，并在启用 NUMA 绑定时验证
-  `HOOK STATUS numa_bind=ACTIVE`。
-* 密钥迁移现在真正写入规范文件 `~/.config/kvp/api_key`（`_kvp_load_api_key`
-  中的 "migrate below" 承诺从未实现——两个仓库一直在用不同的密钥）。
-* tp4.env 中的 `USE_LOSSLESS_SERDE`/`LMCACHE_L2_SERDE` 现在能到达统一的
-  编解码决策（start-all 在解析之前先 seed tp4.env），用户提供的
-  `VLLM_EXTRA_ARGS` 不再悄悄移除 MiMo 解析器（关闭：`KVP_MIMO_PARSERS=0`）。
-* kv-persistence 中添加了 `KVP_COMPAT_VERSION` 钉定文件（recipe 启动器
-  已经在检查它）；`KVP_REPO`/`KVP_REPO_ROOT` 两种拼写都被接受。
-* PATH 上的 `kvp` CLI（`scripts/install-kvp.sh` -> `~/.local/bin/kvp`）：
-  `kvp up|down|status|logs`，仓库位置记忆在 `~/.config/kvp/`。
-* 修正过时文档（README EN/RU/ZH + lmcache-server.env 注释）：省略编解码器
-  变量得到无损 zstd，raw 需要显式 `LMCACHE_L2_SERDE=none`。
-* 测试：recipe 启动器测试现在遵循 env-file 契约（密钥不应是命令行参数）
-  并考虑 `~/recipes` 查找布局。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

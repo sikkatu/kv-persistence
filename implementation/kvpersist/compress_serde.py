@@ -89,6 +89,7 @@ Usage (host, systemd and docker -- same as the salt patch launcher):
 
 from __future__ import annotations
 
+import os
 import struct
 import sys
 import zlib
@@ -148,10 +149,31 @@ def _compress_lz4(data: bytes) -> bytes:
     return lz4.frame.compress(data)
 
 
-def _decompress_lz4(data: bytes) -> bytes:
+def _decompress_lz4(data: bytes, max_len: int) -> bytes:
+    """Decompress with a HARD output cap (round 66): the streaming API's
+    max_length bounds every step, so a decompression bomb cannot allocate
+    more than `max_len` bytes before we reject it. Codec errors are wrapped
+    into ValueError (the deserializer's cache-MISS contract)."""
     import lz4.frame  # type: ignore
 
-    return lz4.frame.decompress(data)
+    try:
+        d = lz4.frame.LZ4FrameDecompressor()
+        out = b""
+        while not d.eof:
+            chunk = d.decompress(data if not out else b"", max_length=max_len - len(out))
+            if not chunk:
+                break
+            out += chunk
+            if len(out) > max_len:
+                raise ValueError(
+                    "kvp compress serde: lz4 output exceeds the allowed "
+                    f"{max_len} bytes (decompression bomb?)"
+                )
+        return out
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"kvp compress serde: lz4 decompression failed: {e}") from e
 
 
 def _compress_zstd(data: bytes, level: int) -> bytes:
@@ -160,10 +182,17 @@ def _compress_zstd(data: bytes, level: int) -> bytes:
     return zstandard.ZstdCompressor(level=level).compress(data)
 
 
-def _decompress_zstd(data: bytes) -> bytes:
+def _decompress_zstd(data: bytes, max_len: int) -> bytes:
+    """Decompress with a HARD output cap (round 66): max_output_size makes
+    zstd refuse to emit more than `max_len` bytes -- a lying plain_len in the
+    frame header or a decompression bomb raises cleanly, no big allocation.
+    Codec errors are wrapped into ValueError (the cache-MISS contract)."""
     import zstandard  # type: ignore
 
-    return zstandard.ZstdDecompressor().decompress(data)
+    try:
+        return zstandard.ZstdDecompressor().decompress(data, max_output_size=max_len)
+    except Exception as e:
+        raise ValueError(f"kvp compress serde: zstd decompression failed: {e}") from e
 
 
 # ---------------------------------------------------------------------------
@@ -258,13 +287,30 @@ class LosslessCompressDeserializer:
             raise ValueError("kvp compress serde: negative length in header")
         if len(blob) < HEADER_LEN + payload_len:
             raise ValueError("kvp compress serde: truncated payload")
+        # Round 66 (review): bound the decompression BEFORE running it. A frame
+        # may lie about plain_len (the "decompression bomb": a few payload bytes
+        # claiming an enormous size), so check the claimed size against the
+        # destination buffer AND a configurable ceiling, then pass that bound
+        # to the codec as a hard output cap.
+        _max_plain = int(
+            os.environ.get("KVP_DECOMPRESS_MAX_BYTES", str(1 << 30))
+        )
+        out = memoryview(dst.byte_array).cast("B")
+        if plain_len > _max_plain:
+            raise ValueError(
+                "kvp compress serde: declared plain size "
+                f"{plain_len} exceeds the allowed {_max_plain} bytes "
+                "(KVP_DECOMPRESS_MAX_BYTES) -- refusing to decompress"
+            )
+        if plain_len > len(out):
+            raise ValueError("kvp compress serde: destination buffer too small")
         payload = blob[HEADER_LEN : HEADER_LEN + payload_len]
         if codec_id == CODEC_RAW:
             data = payload
         elif codec_id == CODEC_LZ4:
-            data = _decompress_lz4(payload)
+            data = _decompress_lz4(payload, _max_plain)
         else:
-            data = _decompress_zstd(payload)
+            data = _decompress_zstd(payload, _max_plain)
         if len(data) != plain_len:
             raise ValueError(
                 "kvp compress serde: decompressed size mismatch "
@@ -275,9 +321,7 @@ class LosslessCompressDeserializer:
                 "kvp compress serde: CRC32 mismatch -- frame is corrupt "
                 "(reported as a cache miss, never returned as KV)"
             )
-        out = memoryview(dst.byte_array).cast("B")
-        if len(out) < plain_len:
-            raise ValueError("kvp compress serde: destination buffer too small")
+        # (the destination-size check ran before decompression, round 66)
         out[:plain_len] = data
 
 

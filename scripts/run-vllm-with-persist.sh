@@ -864,6 +864,11 @@ configs/${KVP_MODEL_CONFIG}/identity.env(.local) and rerun."
 fi
 echo "launched; model load takes ~13-16 min. progress every 10s:"
 URLHOST=127.0.0.1; case "$BIND" in 0.0.0.0) URLHOST=127.0.0.1 ;; *:*) URLHOST="[$BIND]" ;; *) URLHOST="$BIND" ;; esac
+# Round 66 (parity): the readiness poll must honor WAIT_TRIES / WAIT_SLEEP like
+# the recipe launcher (run-tp4-hotsplit.sh) -- tests override these; the old
+# hard-coded `seq 1 300` / `sleep 10` was one more silent divergence.
+WAIT_TRIES="${WAIT_TRIES:-300}"
+WAIT_SLEEP="${WAIT_SLEEP:-10}"
 LOG_SHOWN=0; START_TS=$(date +%s)
 # Review fix (round 45): fail fast. The engine waits 300s for
 # register_kv_caches, but the server may have ALREADY failed with
@@ -873,7 +878,7 @@ LOG_SHOWN=0; START_TS=$(date +%s)
 _kvp_slog="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log"
 _kvp_slog_before=0
 if [ -f "$_kvp_slog" ]; then _kvp_slog_before=$(wc -c < "$_kvp_slog"); fi
-for _ in $(seq 1 300); do
+for _ in $(seq 1 "$WAIT_TRIES"); do
   # fail fast (round 45): a fresh server-side handler error is fatal
   if [ -f "$_kvp_slog" ]; then
     _kvp_serr="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" 2>/dev/null | grep -m1 'Error handling operation' || true)"
@@ -999,6 +1004,6 @@ for _ in $(seq 1 300); do
     fi
     exit 0
   fi
-  sleep 10
+  sleep "$WAIT_SLEEP"
 done
 echo "startup timed out"; docker logs --tail 200 "$CONTAINER" >&2; exit 1
