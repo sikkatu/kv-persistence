@@ -10,6 +10,24 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 67 轮（codec cap = plain_len、统一 shell 库、对等三要素）
+
+* 解压上限已修复（审阅者的发现）：编解码器输出界限现在是帧的
+  **plain_len**（已与目标缓冲区和 KVP_DECOMPRESS_MAX_BYTES 上限校验），
+  而不是上限值。向下撒谎的帧（声明 2 KiB，内部是炸弹）不能再先膨胀到
+  上限。plain_len == 0 获得 1 字节界限（zstandard 将 max_output_size=0
+  读作「未设置」）。通过间谍测试（断言编解码器收到 plain_len）和空帧
+  测试验证。
+* 统一 shell 库：每个配方的 `scripts/kvp-common.sh` 包含 `kvp_curl`
+  （管道传密钥、已转义）和 `_kvp_seed_env_file`（tp4.env 解析器）。
+  12 个内联 `kvp_curl` 副本和 2 个内联解析器块已删除——每个脚本都
+  source 共享文件。配方保持独立（每配方一份副本），
+  `test_cross_repo_contract.py` 强制副本逐字节相同；第二个测试保持
+  kv-persistence scripts/env.sh 函数同步（转义行必须完全一致）。
+* 对等测试现在在两个启动器上检查审阅者明确要求的三要素：`/live` 计数器
+  挂载、`--env-file` 密钥传输和 argv 中无密钥。加上共享的 HOTSPLIT_* 环境
+  和 caps/compilation-config 配置。
+
 ## 第 66 轮（小修复 + 解压上限 + 启动器对等）
 
 * 小修复（按审阅者要求单独提交）：test-recovery.sh 的密钥优先级现在是
@@ -53,30 +71,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * kv-persistence env.sh 增加了相同的 `kvp_curl()` 辅助函数；引擎启动器在
   就绪循环中使用它（任何地方都不再有 `.curl-header` 文件）。
 * 测试已更新为 kvp_curl 契约。
-
-## 第 64 轮（统一解析器、auth 全面不进 ps、编解码退出恢复）
-
-* 一个 env-文件解析器（scripts/env.sh 中的 `_kvp_seed_env_file`）取代了两个
-  分化的 `_tp4_seed` 副本。start-all 中的副本缺少标识符验证，在带缩进的
-  注释上崩溃（"  # X=1" -> "invalid variable name"）；两个调用者现在使用
-  同一个函数，语义与 recipe 完全一致。start-all 还在加载配置层之前 seed
-  tp4.env，因此 tp4.env 中的 `LMCACHE_L2_SERDE=lz4|none` 不再被静默忽略
-  （lmcache-server.env 会预先填入 zstd）。
-* Bearer 密钥已从所有脚本的 `ps` 输出中移除（第 63 轮的说法不完整）：全部
-  5 个配方的 uva 启动器、manage.sh 和 check-tp4-api.sh 现在使用
-  `curl -K <chmod-600 配置文件>` 而不是 `-H "Authorization: Bearer ..."`；
-  之前写入但未使用的 `.curl-header` 文件现已接入。test-recovery.sh 也读取
-  共享的 `~/.config/kvp/api_key`（可在仓库目录外工作），其 header 文件放在
-  /tmp 而不是缓存数据目录中。
-* 配方启动器中的编解码退出已恢复：`export LMCACHE_L2_SERDE` 现在只在
-  LMCACHE_L2_SERDE / KVP_L2_SERDE / USE_LOSSLESS_SERDE 都未设置时发生——
-  `USE_LOSSLESS_SERDE=0` 和 `KVP_L2_SERDE=none` 再次到达 identity gate
-  （第 63 轮的无条件 export 用 zstd 覆盖了它们）。
-* `kvp up` 传递记住的 recipe 位置（`export RECIPE_DIR=`）——自定义克隆位置
-  不再以 "production recipe not found" 失败。`kvp` 仅在首次使用或显式指定
-  时写入保存的路径（一次性的 `KVP_REPO=/tmp/x kvp status` 不会重写配置），
-  安装器使用符号链接而非复制（`git pull` 立即更新命令）。
-* hotsplit_env.sh：shebang 恢复为第一行（兼容性钉定注释被加在它上面了）。
-* 测试已更新为新契约：编解码默认值让位于退出开关，auth 通过 curl 配置文件。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

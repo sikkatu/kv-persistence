@@ -13,6 +13,8 @@ Covered:
 from __future__ import annotations
 import os
 import struct
+import sys
+import types
 import zlib
 
 import pytest
@@ -95,9 +97,9 @@ def test_zstd_decompression_bomb_is_capped(monkeypatch):
 
 
 def test_zstd_lie_about_size_after_the_cap(monkeypatch):
-    """plain_len passes the ceiling but the REAL output is larger -- the codec
-    cap (max_output_size=plain_len) stops it, and the length check catches any
-    remaining mismatch."""
+    """A frame lying DOWNWARD (plain_len=2 KiB, real output 4 KiB) must be
+    refused by the codec cap at plain_len bytes -- it must NOT be allowed to
+    inflate up to the ceiling first (round 67: the bound is plain_len)."""
     zstandard = pytest.importorskip("zstandard")
     monkeypatch.delenv("KVP_DECOMPRESS_MAX_BYTES", raising=False)
     real = b"\x01" * 4096
@@ -108,6 +110,48 @@ def test_zstd_lie_about_size_after_the_cap(monkeypatch):
                    crc=zlib.crc32(real) & 0xFFFFFFFF)
     with pytest.raises(ValueError):
         des.deserialize(_FakeMem(len(frame), frame), _FakeMem(1 << 20), None)
+
+
+def test_codec_cap_is_plain_len_not_the_ceiling(monkeypatch):
+    """Round 67 (review): the OUTPUT BOUND forwarded to the codec must be the
+    frame's plain_len -- the round-66 code passed KVP_DECOMPRESS_MAX_BYTES,
+    so a downward-lying frame could inflate to the ceiling first."""
+    calls = []
+
+    class _SpyDecompressor:
+        def decompress(self, data, max_output_size=0):
+            calls.append(max_output_size)
+            return b"\x00" * max_output_size
+
+    stub = types.ModuleType("zstandard")
+    stub.ZstdDecompressor = _SpyDecompressor
+    monkeypatch.setitem(sys.modules, "zstandard", stub)
+    monkeypatch.setenv("KVP_DECOMPRESS_MAX_BYTES", str(1 << 30))  # huge ceiling
+    des = LosslessCompressDeserializer()
+    frame = _frame(2048, b"payload", codec=CODEC_ZSTD, crc=zlib.crc32(b"\x00" * 2048) & 0xFFFFFFFF)
+    des.deserialize(_FakeMem(len(frame), frame), _FakeMem(1 << 20), None)
+    assert calls == [2048], f"codec got {calls}, want [2048] (plain_len, not the ceiling)"
+
+
+def test_empty_frame_never_asks_for_unbounded_output(monkeypatch):
+    """zstandard reads max_output_size=0 as 'not set' -- plain_len == 0 must
+    be capped to 1 byte instead (an empty frame yields b"", anything bigger is
+    refused by the codec before it allocates)."""
+    calls = []
+
+    class _SpyDecompressor:
+        def decompress(self, data, max_output_size=0):
+            calls.append(max_output_size)
+            return b""
+
+    stub = types.ModuleType("zstandard")
+    stub.ZstdDecompressor = _SpyDecompressor
+    monkeypatch.setitem(sys.modules, "zstandard", stub)
+    monkeypatch.delenv("KVP_DECOMPRESS_MAX_BYTES", raising=False)
+    des = LosslessCompressDeserializer()
+    frame = _frame(0, b"", codec=CODEC_ZSTD, crc=zlib.crc32(b"") & 0xFFFFFFFF)
+    des.deserialize(_FakeMem(len(frame), frame), _FakeMem(64), None)
+    assert calls == [1], f"empty frame must cap at 1 byte, got {calls}"
 
 
 def test_honest_frame_still_roundtrips(monkeypatch):

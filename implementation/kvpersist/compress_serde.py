@@ -156,18 +156,21 @@ def _decompress_lz4(data: bytes, max_len: int) -> bytes:
     into ValueError (the deserializer's cache-MISS contract)."""
     import lz4.frame  # type: ignore
 
+    # max_length=0 means "unlimited" in the lz4 streaming API -- for a plain_len
+    # of 0 bound each step to 1 byte (an empty frame yields b"" immediately).
+    cap = max_len if max_len > 0 else 1
     try:
         d = lz4.frame.LZ4FrameDecompressor()
         out = b""
         while not d.eof:
-            chunk = d.decompress(data if not out else b"", max_length=max_len - len(out))
+            chunk = d.decompress(data if not out else b"", max_length=cap - len(out))
             if not chunk:
                 break
             out += chunk
             if len(out) > max_len:
                 raise ValueError(
                     "kvp compress serde: lz4 output exceeds the allowed "
-                    f"{max_len} bytes (decompression bomb?)"
+                    f"{cap} bytes (decompression bomb?)"
                 )
         return out
     except ValueError:
@@ -189,8 +192,12 @@ def _decompress_zstd(data: bytes, max_len: int) -> bytes:
     Codec errors are wrapped into ValueError (the cache-MISS contract)."""
     import zstandard  # type: ignore
 
+    # zstandard treats max_output_size=0 as "not set" -- for a plain_len of 0
+    # bound the output to 1 byte instead: an empty frame yields b"", anything
+    # larger is refused by the codec BEFORE it allocates.
+    cap = max_len if max_len > 0 else 1
     try:
-        return zstandard.ZstdDecompressor().decompress(data, max_output_size=max_len)
+        return zstandard.ZstdDecompressor().decompress(data, max_output_size=cap)
     except Exception as e:
         raise ValueError(f"kvp compress serde: zstd decompression failed: {e}") from e
 
@@ -308,9 +315,12 @@ class LosslessCompressDeserializer:
         if codec_id == CODEC_RAW:
             data = payload
         elif codec_id == CODEC_LZ4:
-            data = _decompress_lz4(payload, _max_plain)
+            # Round 67 (review): the OUTPUT BOUND is plain_len (validated above),
+            # not the ceiling -- a frame lying downward (2 KiB declared, a bomb
+            # inside) must not be allowed to inflate to the ceiling first.
+            data = _decompress_lz4(payload, plain_len)
         else:
-            data = _decompress_zstd(payload, _max_plain)
+            data = _decompress_zstd(payload, plain_len)
         if len(data) != plain_len:
             raise ValueError(
                 "kvp compress serde: decompressed size mismatch "

@@ -11,6 +11,26 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 67 (codec cap = plain_len, one shell library, parity trio)
+
+* Decompression cap fixed (the reviewer's finding): the codec output bound is
+  now the frame's **plain_len** (already validated against the destination
+  buffer and the KVP_DECOMPRESS_MAX_BYTES ceiling), NOT the ceiling. A frame
+  lying downward (2 KiB declared, a bomb inside) can no longer inflate to the
+  ceiling first. plain_len == 0 gets a 1-byte bound (zstandard reads
+  max_output_size=0 as "not set"). Verified by a spy test that asserts the
+  codec receives plain_len, and an empty-frame test.
+* ONE shell library: `scripts/kvp-common.sh` per recipe carries `kvp_curl`
+  (key on a pipe, escaped) and `_kvp_seed_env_file` (the tp4.env parser).
+  The 12 inline `kvp_curl` copies and the 2 inline parser blocks are gone --
+  every script sources the shared file. Recipes stay standalone (copy per
+  recipe) and `test_cross_repo_contract.py` enforces BYTE-IDENTICAL copies;
+  a second test keeps kv-persistence's scripts/env.sh functions in sync
+  (the escape lines must match exactly).
+* Parity test now checks the review's explicit trio on BOTH launchers: the
+  `/live` counters mount, `--env-file` key transport and NO key in argv.
+  Plus the shared HOTSPLIT_* env and the caps/compilation-config profile.
+
 ## Round 66 (small fixes + decompression cap + launcher parity)
 
 * Small fixes (separate commit per the reviewer): test-recovery.sh key
@@ -59,36 +79,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
 * kv-persistence env.sh gained the same `kvp_curl()` helper; the engine
   launcher uses it for the readiness loop (no `.curl-header` file anywhere).
 * Tests updated to the kvp_curl contract.
-
-## Round 64 (one parser, auth out of ps everywhere, codec opt-out restored)
-
-* ONE env-file parser (`_kvp_seed_env_file` in scripts/env.sh) replaces the two
-  diverging `_tp4_seed` copies. The start-all copy lacked identifier
-  validation and aborted on an indented comment ("  # X=1" -> "invalid
-  variable name"); both callers now use the same function with the recipe's
-  exact semantics. start-all also seeds tp4.env BEFORE loading the config
-  layer, so `LMCACHE_L2_SERDE=lz4|none` from tp4.env is no longer silently
-  ignored (lmcache-server.env used to pre-fill zstd).
-* The bearer key is out of `ps` output in ALL scripts (the round-63 claim was
-  incomplete): uva launchers, manage.sh and check-tp4-api.sh of all 5 recipes
-  now use `curl -K <chmod-600 config>` instead of `-H "Authorization: Bearer
-  ..."`; the `.curl-header` files that were written but never used are wired
-  in. test-recovery.sh reads the shared `~/.config/kvp/api_key` too (works
-  outside the repo directory) and keeps its header file in /tmp, not in the
-  cache data dir.
-* Codec opt-out restored in the recipe launchers: `export LMCACHE_L2_SERDE`
-  now happens only when NONE of LMCACHE_L2_SERDE / KVP_L2_SERDE /
-  USE_LOSSLESS_SERDE is set -- `USE_LOSSLESS_SERDE=0` and `KVP_L2_SERDE=none`
-  reach the identity gate again (round 63's unconditional export overrode
-  them with zstd).
-* `kvp up` passes the remembered recipe location (`export RECIPE_DIR=`) --
-  a custom clone location no longer fails with "production recipe not found".
-  `kvp` only writes the saved paths on first use or when explicitly given
-  (a one-off `KVP_REPO=/tmp/x kvp status` no longer rewrites the config), and
-  the installer symlinks instead of copying (a `git pull` updates the command).
-* hotsplit_env.sh: shebang first again (the compat pin comment was prepended
-  above it).
-* Tests updated to the new contracts: the codec default must yield to the
-  opt-out switches, auth must go through the curl config file.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.
