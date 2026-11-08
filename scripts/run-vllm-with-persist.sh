@@ -612,7 +612,14 @@ print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
         # builds the env + docker flags -- identical to the recipe launcher's.
         # Profile default: HOT_GIB=30 (empty plan = empty hot set in the recipe).
         HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-30}"
-        HOTSPLIT_BOOT_HOOK=1
+        # Round 60 (review): BOOT_HOOK=0 -- the replaced mimo_v2.py
+        # (mimo_v2_hotsplit.py) ALREADY calls hotsplit.apply_hotsplit itself.
+        # Setting HOTSPLIT_BOOT_HOOK=1 would make sitecustomize wrap the same
+        # loader a SECOND time. The recipe launcher makes exactly this choice
+        # (BOOT_HOOK=0 when PATCH_MODEL_FILES=1); this launcher always mounts
+        # the model patches, so the equivalent value is 0. Opt back in:
+        # HOTSPLIT_BOOT_HOOK=1 explicitly.
+        HOTSPLIT_BOOT_HOOK="${HOTSPLIT_BOOT_HOOK:-0}"
         . "$RECIPE/scripts/hotsplit_env.sh"
         HOTSPLIT_ENV_ARGS=("${HOTSPLIT_ENVS[@]}")
         HOTSPLIT_CAP_ARGS=("${HOTSPLIT_DOCKER_CAPS[@]}")
@@ -637,7 +644,12 @@ if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
       *[!0-9]*|'') echo "ERROR: HOTSPLIT_HOT_GIB must be a whole number of GiB (e.g. 30), got '$HOTSPLIT_HOT_GIB'" >&2; _hs_ok=0 ;;
     esac
   fi
-  for _kv in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_DYN_PRIOR_TOKENS HOTSPLIT_MAX_TOKENS; do
+  # Every numeric knob the shared module passes through. Round 60: TOPK,
+  # LIVE_DECODE_MAX, DYN_MAX_PLAN_ERRORS, DYN_MAX_COMMIT_ERRORS,
+  # VRAM_RESERVE_GIB and LIVE_SECS were NOT validated here before -- a wrong
+  # value failed only inside the container, after the 13-16 minute model load.
+  # (DYN_MAX_SWAPS was already covered; an older build was reviewed.)
+  for _kv in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_DYN_PRIOR_TOKENS              HOTSPLIT_MAX_TOKENS HOTSPLIT_TOPK HOTSPLIT_LIVE_DECODE_MAX              HOTSPLIT_DYN_MAX_PLAN_ERRORS HOTSPLIT_DYN_MAX_COMMIT_ERRORS              HOTSPLIT_VRAM_RESERVE_GIB HOTSPLIT_LIVE_SECS; do
     _val="${!_kv:-}"
     if [ -n "$_val" ]; then
       case "$_val" in
@@ -821,7 +833,17 @@ for _ in $(seq 1 300); do
           _hs_fail=1
         fi
       }
-      check_marker "boot hook" "HOOK STATUS boot_hook=ACTIVE" "the /w machinery loaded at interpreter start"
+      # The boot hook is EXPECTED only when HOTSPLIT_BOOT_HOOK=1. With the
+      # model patches mounted the launcher uses BOOT_HOOK=0 (the replaced
+      # mimo_v2.py calls apply_hotsplit itself) and sitecustomize prints
+      # HOOK STATUS boot_hook=INACTIVE -- that is the CORRECT state, not a
+      # failure. Check whichever marker the configuration implies.
+      _bh="${HOTSPLIT_BOOT_HOOK:-0}"
+      if [ "$_bh" = "1" ]; then
+        check_marker "boot hook" "HOOK STATUS boot_hook=ACTIVE" "the /w machinery loaded at interpreter start"
+      else
+        check_marker "boot hook (intentionally inactive)" "HOOK STATUS boot_hook=INACTIVE" "the replaced mimo_v2.py calls apply_hotsplit itself; the boot hook is not requested"
+      fi
       if [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ]; then
         check_marker "dynamic hook" "step hook installed" "dynamic hot/cold mode is active"
         check_marker "live counters" "live counter:" "routing counters are collected (basis for the plan)"

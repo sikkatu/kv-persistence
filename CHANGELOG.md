@@ -11,6 +11,24 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 60 (CI module path, BOOT_HOOK equivalence, full validation)
+
+* kv-persistence CI now checks out `sikkatu/recipes` (path: `recipes`) and the
+  test helper resolves the shared `hotsplit_env.sh` module relative to the
+  checkout FIRST (developer home paths remain as fallbacks) -- the two tests
+  that failed on every CI run now read the real module.
+* `HOTSPLIT_BOOT_HOOK` is no longer forced to 1: with the model patches
+  mounted the replaced `mimo_v2_hotsplit.py` already calls
+  `hotsplit.apply_hotsplit`, so the launcher defaults the boot hook to 0 --
+  the same decision the recipe launcher makes (no double wrapper on the same
+  loader). The activation health check follows the configured value:
+  `boot_hook=INACTIVE` is the CORRECT state at 0.
+* Host-side HotSplit validation now covers every numeric knob the shared
+  module passes through: DYN_STEPS, DYN_MAX_SWAPS, DYN_PRIOR_TOKENS,
+  MAX_TOKENS, TOPK, LIVE_DECODE_MAX, DYN_MAX_PLAN_ERRORS,
+  DYN_MAX_COMMIT_ERRORS, VRAM_RESERVE_GIB, LIVE_SECS (the last six were not
+  validated before). Regression tests lock all three fixes.
+
 ## Round 59 (HotSplit launcher equivalence + CI/contract fixes)
 
 * The kv-persistence engine launcher now runs the FULL hardware-verified
@@ -62,16 +80,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
 * Compression documentation harmonized (EN/RU/ZH + config comments): lossless
   zstd is the DEFAULT everywhere, lz4 is the alternative, byte-exact raw is an
   explicit opt-out (`LMCACHE_L2_SERDE=none`) only.
-
-## Round 57 (verdict + docs honesty)
-
-* The recovery-acceptance verdict is **PASS** in docs/final-report.*: the
-  cache device auto-detection (round 55) makes the independent NVMe byte
-  counters available in the same run -- no manual `KVP_CACHE_DEVICE` needed
-  (override remains available).
-* CHANGELOG no longer carries verbatim request quotes -- changes are
-  described directly.
-* Documentation for `start-all.sh` / `stop-all.sh` and the shared API key
-  (`$HOME/.config/kvp/api_key`) added to both repos' READMEs (EN/RU/ZH).
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

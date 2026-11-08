@@ -10,6 +10,21 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 60 轮（CI 模块路径、BOOT_HOOK 等价性、完整验证）
+
+* kv-persistence CI 现在检出 `sikkatu/recipes`（路径 `recipes`），测试辅助
+  函数首先相对于 checkout 解析共享模块 `hotsplit_env.sh`（开发者主目录
+  路径作为后备）—— 每次 CI 运行都失败的两个测试现在读取真实模块。
+* `HOTSPLIT_BOOT_HOOK` 不再强制为 1：挂载模型补丁后，替换的
+  `mimo_v2_hotsplit.py` 已经调用 `hotsplit.apply_hotsplit`，因此启动器
+  默认 boot hook = 0 —— 与 recipe 启动器的决定相同（同一加载器不会有双重
+  包装）。激活健康检查遵循配置值：`boot_hook=INACTIVE` 在 0 时是正确状态。
+* 主机端 HotSplit 验证现在覆盖共享模块传递的所有数值 knobs：
+  DYN_STEPS、DYN_MAX_SWAPS、DYN_PRIOR_TOKENS、MAX_TOKENS、TOPK、
+  LIVE_DECODE_MAX、DYN_MAX_PLAN_ERRORS、DYN_MAX_COMMIT_ERRORS、
+  VRAM_RESERVE_GIB、LIVE_SECS（后六项之前未验证）。回归测试锁定全部三个
+  修复。
+
 ## 第 59 轮（HotSplit 启动器等价性 + CI/契约修复）
 
 * kv-persistence 引擎启动器现在运行完整的、经硬件验证的 HotSplit 配置
@@ -54,14 +69,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   HotSplit 文件必须在两个仓库中一致——一个仓库的更改不会再悄悄破坏另一个。
 * 压缩文档统一（EN/RU/ZH + 配置注释）：无损 zstd 到处是默认值，lz4 是
   备选，逐字节精确原始模式仅为显式关闭（`LMCACHE_L2_SERDE=none`）。
-
-## 第 57 轮（判定 + 文档诚实性）
-
-* 恢复验收判定在 docs/final-report.* 中为 **PASS**：缓存设备自动检测
-  （第 55 轮）使独立 NVMe 字节计数器在同一轮可用——无需手动
-  `KVP_CACHE_DEVICE`（覆盖项仍可用）。
-* CHANGELOG 不再包含逐字请求引用——变更直接描述。
-* `start-all.sh` / `stop-all.sh` 和共享 API 密钥（`$HOME/.config/kvp/api_key`）
-  的文档已添加到两个仓库的 README（EN/RU/ZH）。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

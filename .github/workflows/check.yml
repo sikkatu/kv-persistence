@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: checkout recipes (shared hotsplit module for tests)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          repository: sikkatu/recipes
+          path: recipes
       - name: shellcheck (every launcher script)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck

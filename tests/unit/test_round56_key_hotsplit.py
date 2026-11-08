@@ -17,7 +17,12 @@ SCRIPTS = ROOT / "scripts"
 
 def _read_module() -> str:
     """Read the shared hotsplit env module from the recipe checkout."""
+    # Round 60: resolve relative to THIS file first (works in CI where the
+    # workflows clone sikkatu/recipes into ./recipes next to the kv-persistence
+    # checkout), then fall back to the developer layouts.
     candidates = [
+        Path(__file__).resolve().parents[2] / "recipes" / "recipes"
+        / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit" / "scripts" / "hotsplit_env.sh",
         Path.home() / "sikkatu-recipes" / "recipes" / "rtx-pro-6000"
         / "mimo-v2.6-pro-hotsplit" / "scripts" / "hotsplit_env.sh",
         Path("/home/review/recipes/recipes/rtx-pro-6000"
