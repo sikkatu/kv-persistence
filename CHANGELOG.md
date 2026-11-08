@@ -11,6 +11,28 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 69 (step-2 prep: activation check in the recipe launcher, contract snapshot)
+
+* The recipe launcher (`run-tp4-hotsplit.sh`) now runs the SAME hotsplit/NUMA
+  activation check as the kv engine launcher (round 59) before declaring
+  success: boot-hook marker (ACTIVE or the intentional INACTIVE with model
+  patches), `step hook installed`, `live counter:`, `HOOK STATUS
+  numa_bind=ACTIVE` when NUMA is on, no empty-bank and no transaction errors.
+  A missing marker is exit 1. This closes the "delegation will lose the
+  check" gap BEFORE `KVP_ENGINE=recipe` exists. Opt out:
+  `KVP_SKIP_HOTSPLIT_CHECK=1`.
+* Docker-run contract snapshot (`tests/fixtures/launcher-docker-run.txt`,
+  test `test_snapshot_contract`): without the delegation flag the final
+  `docker run` must stay byte-identical to the recorded contract. Regenerate
+  intentionally with `KVP_UPDATE_SNAPSHOT=1`.
+* Negative activation tests (`tests/test_activation_negative.py`): missing
+  marker -> exit 1 with each `[MISSING]` line listed; complete markers ->
+  exit 0; the skip switch works. The launcher's exit code is the one
+  start-all.sh / kvp up see (they run it in the foreground).
+* Older test suites use the documented opt-out (their docker stub logs no
+  markers and they assert other behaviour); the check itself is covered by
+  the dedicated tests.
+
 ## Round 68 (lz4 boundary fix, behavioural parser test)
 
 * lz4 boundary bug (review): `max_length=cap - len(out)` became 0 at the cap
@@ -54,31 +76,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
 * Parity test now checks the review's explicit trio on BOTH launchers: the
   `/live` counters mount, `--env-file` key transport and NO key in argv.
   Plus the shared HOTSPLIT_* env and the caps/compilation-config profile.
-
-## Round 66 (small fixes + decompression cap + launcher parity)
-
-* Small fixes (separate commit per the reviewer): test-recovery.sh key
-  priority is now env > shared canonical key > local mirror (an explicit
-  API_KEY is never overwritten); `kvp_curl` escapes `\` and `"` before the
-  curl config file so ANY key bytes reach the server intact (a raw quote or
-  backslash used to be silently mangled); the dead `AUTH=()` in
-  check-tp4-api.sh is gone; the env.sh doc comment is split cleanly.
-* Decompression size cap in compress_serde (deferred item 1): before running
-  the codec, `plain_len` is checked against the destination buffer AND a
-  configurable ceiling (`KVP_DECOMPRESS_MAX_BYTES`, default 1 GiB); zstd
-  gets `max_output_size`, lz4 the streaming `max_length` bound. A lying
-  plain_len or a decompression bomb now raises a clean ValueError (cache
-  MISS) with no unbounded allocation. Codec errors are wrapped into
-  ValueError (the cache-MISS contract). 6 new tests incl. a real zstd bomb.
-* Launcher parity test (deferred item 2, step 1): `tests/test_launcher_parity.py`
-  runs BOTH engine launchers against a stub docker and compares the final
-  `docker run` -- caps, compilation-config, /w mounts, /live mount and the
-  key via --env-file must match. It caught (and this commit fixes) a silent
-  divergence: the KV launcher's readiness loop was hard-coded (`seq 1 300`,
-  `sleep 10`) and ignored `WAIT_TRIES`/`WAIT_SLEEP` that the recipe launcher
-  honours -- now both honour them.
-* The reviewer's repro-round65.sh is now `tests/test_manage_check_http.py`
-  (scenarios A-F: check-tp4-api with/without key, status with right/wrong
-  key, dead server exit 0, no-auth mode, special-character keys).
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

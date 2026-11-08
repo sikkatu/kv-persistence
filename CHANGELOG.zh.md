@@ -10,6 +10,23 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 69 轮（步骤 2 准备：recipe 启动器激活检查、契约快照）
+
+* recipe 启动器（`run-tp4-hotsplit.sh`）现在在宣布成功前执行与 kv 引擎
+  启动器（第 59 轮）相同的 hotsplit/NUMA 激活检查：boot-hook 标记（ACTIVE
+  或使用模型补丁时的有意 INACTIVE）、`step hook installed`、
+  `live counter:`、NUMA 启用时的 `HOOK STATUS numa_bind=ACTIVE`、无空 bank、
+  无事务错误。缺少标记即 exit 1。这在 `KVP_ENGINE=recipe` 出现之前就
+  堵住了「委托会丢失检查」的缺口。关闭：`KVP_SKIP_HOTSPLIT_CHECK=1`。
+* docker run 契约快照（`tests/fixtures/launcher-docker-run.txt`，测试
+  `test_snapshot_contract`）：没有委托标志时最终的 `docker run` 必须与
+  记录的契约逐字节一致。仅故意更新：`KVP_UPDATE_SNAPSHOT=1`。
+* 激活负向测试（`tests/test_activation_negative.py`）：缺少标记 -> exit 1
+  并列出每个 `[MISSING]` 行；标记完整 -> exit 0；跳过开关有效。启动器的
+  返回码就是 start-all.sh / kvp up 看到的（它们在前台运行它）。
+* 旧测试套件使用已文档化的 opt-out（它们的 docker 桩不输出标记且断言
+  其他行为）；检查本身由专用测试覆盖。
+
 ## 第 68 轮（lz4 边界修复、行为级解析器测试）
 
 * lz4 边界 bug（审阅者发现）：`max_length=cap - len(out)` 在上限处变成 0——
@@ -46,28 +63,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * 对等测试现在在两个启动器上检查审阅者明确要求的三要素：`/live` 计数器
   挂载、`--env-file` 密钥传输和 argv 中无密钥。加上共享的 HOTSPLIT_* 环境
   和 caps/compilation-config 配置。
-
-## 第 66 轮（小修复 + 解压上限 + 启动器对等）
-
-* 小修复（按审阅者要求单独提交）：test-recovery.sh 的密钥优先级现在是
-  环境 > 共享规范密钥 > 本地镜像（显式 API_KEY 永不被覆盖）；
-  `kvp_curl` 在写入 curl 配置文件前转义 `\` 和 `"`，确保任何密钥字节
-  完整到达服务器（裸引号/反斜杠此前被静默篡改）；check-tp4-api.sh 中
-  死代码 `AUTH=()` 已删除；env.sh 文档注释干净拆分。
-* compress_serde 解压大小上限（延期项 1）：在调用编解码器之前，`plain_len`
-  与目标缓冲区和可配置上限（`KVP_DECOMPRESS_MAX_BYTES`，默认 1 GiB）
-  比对；zstd 传入 `max_output_size`，lz4 使用流式 `max_length` 界限。
-  虚假的 plain_len 或解压炸弹现在产生干净的 ValueError（缓存 MISS），
-  不会无界分配。编解码器错误包装为 ValueError（缓存 MISS 契约）。
-  6 个新测试，包括真实 zstd 炸弹。
-* 启动器对等测试（延期项 2，步骤 1）：`tests/test_launcher_parity.py`
-  在 docker 桩上运行两个引擎启动器并比较最终的 `docker run`——能力、
-  compilation-config、/w 挂载、/live 挂载和 --env-file 传递的密钥必须
-  一致。它发现（本次提交修复）了一个隐蔽分歧：KV 启动器的就绪循环是
-  硬编码的（`seq 1 300`、`sleep 10`），忽略了 recipe 启动器遵循的
-  `WAIT_TRIES`/`WAIT_SLEEP`——现在两者都遵循。
-* 审阅者的 repro-round65.sh 已转化为 `tests/test_manage_check_http.py`
-  （场景 A–F：带/不带密钥的 check-tp4-api、正确/错误密钥的 status、
-  服务器宕机时 exit 0、无认证模式、特殊字符密钥）。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。
