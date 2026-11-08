@@ -53,12 +53,16 @@ def test_every_numeric_knob_is_validated_on_the_host():
     numeric knob the shared module passes through -- a bad value must fail on
     the host, not inside the container after a 13-16 minute load."""
     t = _read(LAUNCHER)
-    # find the integer-validation loop
-    m = re.search(r"for _kv in (HOTSPLIT_[A-Z_0-9 ]+?); do", t)
-    assert m, "the launcher must have a numeric knob validation loop"
-    covered = set(m.group(1).split())
+    # ALL validation loops (integer + float; round 61 splits float GiB knobs out)
+    loops = re.findall(r"for _kv in ([^;]+?); do", t, re.S)
+    assert loops, "the launcher must have knob validation loops"
+    covered = set()
+    for m in loops:
+        covered.update(m.split())
     for knob in ("HOTSPLIT_DYN_STEPS", "HOTSPLIT_DYN_MAX_SWAPS", "HOTSPLIT_DYN_PRIOR_TOKENS",
                  "HOTSPLIT_MAX_TOKENS", "HOTSPLIT_TOPK", "HOTSPLIT_LIVE_DECODE_MAX",
                  "HOTSPLIT_DYN_MAX_PLAN_ERRORS", "HOTSPLIT_DYN_MAX_COMMIT_ERRORS",
-                 "HOTSPLIT_VRAM_RESERVE_GIB", "HOTSPLIT_LIVE_SECS"):
+                 "HOTSPLIT_VRAM_RESERVE_GIB", "HOTSPLIT_LIVE_SECS", "HOTSPLIT_HOST_FLOOR_GIB"):
         assert knob in covered, f"{knob} must be validated on the host before the model load"
+    # boolean normalization must exist (round 61): the recipe's normalize_bool contract
+    assert "normalize_bool" in t, "the launcher must normalize boolean knobs like the recipe"

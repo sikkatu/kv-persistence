@@ -10,6 +10,28 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 61 轮（cross-repo CI 路径、布尔等价性、兼容性探测）
+
+* recipes CI 中的跨仓库契约测试现在实际执行：测试首先在 workspace 内部查找
+  kv-persistence checkout（`RECIPES/kv-persistence`，GitHub Actions 布局），
+  然后才回退到开发者主目录路径。六个契约测试不再在 CI 中跳过。
+* KV 启动器中的布尔 HotSplit 参数与 recipe 启动器完全一致地归一化
+  （`normalize_bool`：true/yes/on -> 1，false/no/off -> 0），在 source 共享
+  模块之前执行。HotSplit 组件与字符串 "1" 比较（`HOTSPLIT_NUMA == "1"`），
+  因此原始的 `true` 会静默禁用功能。覆盖 DYNAMIC / DRYRUN / NUMA /
+  ALLOW_STATIC_FALLBACK / STRICT_HOOK / NUMA_STRICT / DYN_LOG。
+* KV 启动器现在执行与 recipe 启动器相同 model-补丁兼容性探测（base_loader
+  接缝、model_loader.utils 定义、mimo_v2/mimo_v2_omni 的 `load_weights`），
+  在挂载替换文件之前执行，并记录被遮蔽原文件的 provenance SHA-256。镜像
+  digest 变化会在 13-16 分钟模型加载之前被捕获，而不是之后。
+* 验证完整性（P2）：`HOTSPLIT_HOST_FLOOR_GIB` 和 `HOTSPLIT_VRAM_RESERVE_GIB`
+  作为非负浮点数验证；整数 knobs 带范围（DYN_STEPS/TOPK/LIVE_SECS/
+  DECODE_MAX/错误限制 >= 1，DYN_MAX_SWAPS 1..1024 —— 计划代码自身的边界）；
+  MAX_TOKENS / DYN_PRIOR_TOKENS 允许 0。
+* 测试计数诚实性：sandbox 运行（346+2 / 338+5）与 CI 运行（344+4 / 330+13）
+  不同，因为 CI 缺少可选依赖（wiki checkout、lz4 绑定）。文档引用 CI 数字；
+  两套测试均通过。
+
 ## 第 60 轮（CI 模块路径、BOOT_HOOK 等价性、完整验证）
 
 * kv-persistence CI 现在检出 `sikkatu/recipes`（路径 `recipes`），测试辅助
@@ -44,30 +66,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   HOT_GIB / DYN_* / NUMA_MAP 立即失败），`--v1/models` 响应后运行强制的
   激活健康检查：boot hook ACTIVE、dynamic hook 已安装、live 计数器存在、
   无空 bank 或事务错误。仅 HTTP 200 不再被视为热专家工作的证明。
-
-## 第 58 轮（统一配置层 + 共享密钥回归修复）
-
-* 共享 API 密钥回归已修复（recipes）：启动器现在每次启动都将规范文件
-  `$HOME/.config/kvp/api_key` 镜像到 `live/api_key`，因此 `manage.sh` /
-  `check-tp4-api.sh` 不会在密钥存在时报「需要密钥」。全部五个配方启动器
-  使用同一密钥架构；辅助脚本优先读取规范文件且不再依赖 `tr`/`head`
-  （纯 bash 读取）。
-* 统一编解码决策：`start-all.sh` 只解析一次有效 L2 编解码（共享折叠），
-  并将同一值传给缓存和引擎——identity.env 中的编解码钉定不会再让两侧
-  使用不同编解码。
-* 统一配置层：`start-all.sh` 在任何决策之前加载 cache.env /
-  lmcache-server.env / identity.env——缓存 PID 探测使用有效的
-  `KVP_CACHE_ROOT`，自定义路径上的缓存会被识别为正在运行。
-  `run-vllm-with-persist.sh` 现在读取配方的 `tp4.env`（环境变量优先于
-  文件），因此通过 `start-all.sh` 启动时 HOTSPLIT_* / MAX_MODEL_LEN /
-  MAX_NUM_SEQS / MOE_BACKEND 能到达引擎。
-* 统一入口：recipes 中的 `scripts/start-all.sh` 委托到 kv-persistence
-  —— 同一命令可在任何工作目录下运行。`run-tp4-hotsplit.sh` 仍是配方的
-  独立启动器。
-* 跨仓库契约测试（`tests/test_cross_repo_contract.py`，recipes）：
-  编解码语义、lmcache 版本钉定（0.5.6）、端口、namespace 钉定和挂载的
-  HotSplit 文件必须在两个仓库中一致——一个仓库的更改不会再悄悄破坏另一个。
-* 压缩文档统一（EN/RU/ZH + 配置注释）：无损 zstd 到处是默认值，lz4 是
-  备选，逐字节精确原始模式仅为显式关闭（`LMCACHE_L2_SERDE=none`）。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

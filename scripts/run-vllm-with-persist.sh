@@ -585,6 +585,68 @@ print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
   # its loader.
   case "${KVP_MODEL_CONFIG:-mimo-v2.6-pro}" in
     mimo-v2.6-pro*)
+      # Round 61 (review): probe the IMAGE's own model files for patch
+      # compatibility BEFORE mounting the replacements -- the recipe launcher
+      # does this (run-tp4-hotsplit.sh PROBE_CMD); without it a changed image
+      # digest would pair an incompatible vLLM build with the patches and the
+      # breakage would only surface after the 13-16 minute model load.
+      PROBE_CMD='import importlib.util,re,sys
+ok=True
+def flat(s):
+    return re.sub(r"\s+","",s)
+try:
+    bl=importlib.util.find_spec("vllm.model_executor.model_loader.base_loader")
+    if bl is None:
+        print("MISSING base_loader"); ok=False
+    else:
+        src=open(bl.origin).read()
+        f=flat(src)
+        bound=("process_weights_after_loading" in src)
+        called=bool(re.search(r"(?<![.\w])process_weights_after_loading\(", f))
+        if bound and called:
+            print("SEAM base_loader->utils.process_weights_after_loading: present")
+        else:
+            print("SEAM base_loader->utils.process_weights_after_loading: ABSENT"); ok=False
+except Exception as e:
+    print("ERROR base_loader: %r" % e); ok=False
+try:
+    u=importlib.util.find_spec("vllm.model_executor.model_loader.utils")
+    if u is None:
+        print("MISSING model_loader.utils"); ok=False
+    elif "def process_weights_after_loading" in open(u.origin).read():
+        print("DEF model_loader.utils.process_weights_after_loading: present")
+    else:
+        print("DEF model_loader.utils.process_weights_after_loading: ABSENT"); ok=False
+except Exception as e:
+    print("ERROR model_loader.utils: %r" % e); ok=False
+for mod,name in [("vllm.model_executor.models.mimo_v2","mimo_v2"),("vllm.model_executor.models.mimo_v2_omni","mimo_v2_omni")]:
+    try:
+        m=importlib.util.find_spec(mod)
+        if m is None:
+            print("MISSING %s" % name); ok=False; continue
+        src=open(m.origin).read()
+        if "def load_weights" in src:
+            print("API %s.load_weights: present" % name)
+        else:
+            print("API %s.load_weights: ABSENT" % name); ok=False
+    except Exception as e:
+        print("ERROR %s: %r" % (name, e)); ok=False
+sys.exit(0 if ok else 3)'
+      echo "Probing the image's own model files for patch compatibility..."
+      if ! docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$PROBE_CMD"; then
+        die "the image's vLLM model files do not match what patches/mimo_v2_hotsplit.py expects.
+The patches replace load_weights / process_weights_after_loading wholesale; if those methods are
+missing or renamed in this build the mount will break the model. Rebase the patches onto this
+exact vLLM build (or set KVP_HOTSPLIT=0 to run without the model patches)."
+      fi
+      HASH_CMD='import hashlib,importlib.util
+for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mimo_v2_omni"]:
+    s=importlib.util.find_spec(mod)
+    if s and s.origin:
+        h=hashlib.sha256(open(s.origin,"rb").read()).hexdigest()
+        print("%s  %s" % (h, s.origin))'
+      echo "Original module SHA-256 (for provenance; compare with your known-good list):"
+      docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$HASH_CMD" || true
       MOUNTS+=(
         -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
         -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
@@ -611,6 +673,25 @@ print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
         # Round 59: ONE shared module (scripts/hotsplit_env.sh in the recipe)
         # builds the env + docker flags -- identical to the recipe launcher's.
         # Profile default: HOT_GIB=30 (empty plan = empty hot set in the recipe).
+        # Round 61 (review): normalize boolean knobs EXACTLY like the recipe
+        # launcher (normalize_bool: 1/true/yes/on -> 1, 0/false/no/off -> 0).
+        # HotSplit components compare against the STRING "1" (sitecustomize:
+        # os.environ.get("HOTSPLIT_NUMA") == "1"), so passing "true" through
+        # raw would silently disable the feature.
+        normalize_bool() {
+          case "${1:-}" in
+            1|true|TRUE|yes|YES|on|ON) echo 1 ;;
+            0|false|FALSE|no|NO|off|OFF|'') echo 0 ;;
+            *) echo "ERROR: ${2} must be 1/0 (also accepts true/false, yes/no, on/off), got '${1}'" >&2; exit 1 ;;
+          esac
+        }
+        HOTSPLIT_DYNAMIC="$(normalize_bool "${HOTSPLIT_DYNAMIC:-1}" HOTSPLIT_DYNAMIC)"
+        HOTSPLIT_DRYRUN="$(normalize_bool "${HOTSPLIT_DRYRUN:-0}" HOTSPLIT_DRYRUN)"
+        HOTSPLIT_NUMA="$(normalize_bool "${HOTSPLIT_NUMA:-1}" HOTSPLIT_NUMA)"
+        HOTSPLIT_ALLOW_STATIC_FALLBACK="$(normalize_bool "${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}" HOTSPLIT_ALLOW_STATIC_FALLBACK)"
+        HOTSPLIT_STRICT_HOOK="$(normalize_bool "${HOTSPLIT_STRICT_HOOK:-0}" HOTSPLIT_STRICT_HOOK)"
+        HOTSPLIT_NUMA_STRICT="$(normalize_bool "${HOTSPLIT_NUMA_STRICT:-0}" HOTSPLIT_NUMA_STRICT)"
+        HOTSPLIT_DYN_LOG="$(normalize_bool "${HOTSPLIT_DYN_LOG:-1}" HOTSPLIT_DYN_LOG)"
         HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-30}"
         # Round 60 (review): BOOT_HOOK=0 -- the replaced mimo_v2.py
         # (mimo_v2_hotsplit.py) ALREADY calls hotsplit.apply_hotsplit itself.
@@ -649,14 +730,38 @@ if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
   # VRAM_RESERVE_GIB and LIVE_SECS were NOT validated here before -- a wrong
   # value failed only inside the container, after the 13-16 minute model load.
   # (DYN_MAX_SWAPS was already covered; an older build was reviewed.)
-  for _kv in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_DYN_PRIOR_TOKENS              HOTSPLIT_MAX_TOKENS HOTSPLIT_TOPK HOTSPLIT_LIVE_DECODE_MAX              HOTSPLIT_DYN_MAX_PLAN_ERRORS HOTSPLIT_DYN_MAX_COMMIT_ERRORS              HOTSPLIT_VRAM_RESERVE_GIB HOTSPLIT_LIVE_SECS; do
+  # Round 61 (P2): HOST_FLOOR_GIB / VRAM_RESERVE_GIB are floats (GiB); the
+  # integer knobs carry ranges where 0 or negatives make no sense. These match
+  # the plan code's own _dyn_int/_dyn_float bounds, so a bad value fails on the
+  # HOST, not inside the container after the 13-16 minute model load.
+  for _kv in HOTSPLIT_HOST_FLOOR_GIB HOTSPLIT_VRAM_RESERVE_GIB; do
+    _val="${!_kv:-}"
+    if [ -n "$_val" ] && ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+      echo "ERROR: $_kv must be a non-negative number of GiB (e.g. 128), got '$_val'" >&2
+      _hs_ok=0
+    fi
+  done
+  for _kv in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_TOPK \
+             HOTSPLIT_LIVE_DECODE_MAX HOTSPLIT_DYN_MAX_PLAN_ERRORS \
+             HOTSPLIT_DYN_MAX_COMMIT_ERRORS HOTSPLIT_LIVE_SECS \
+             HOTSPLIT_MAX_TOKENS HOTSPLIT_DYN_PRIOR_TOKENS; do
     _val="${!_kv:-}"
     if [ -n "$_val" ]; then
       case "$_val" in
         *[!0-9]*|'') echo "ERROR: $_kv must be a non-negative integer, got '$_val'" >&2; _hs_ok=0 ;;
+        0)
+          case "$_kv" in
+            HOTSPLIT_MAX_TOKENS|HOTSPLIT_DYN_PRIOR_TOKENS) : ;;   # 0 is legal (means "unlimited"/"no prior")
+            *) echo "ERROR: $_kv must be >= 1, got 0" >&2; _hs_ok=0 ;;
+          esac ;;
       esac
     fi
   done
+  # plan-code upper bound (hotsplit.py _dyn_int("HOTSPLIT_DYN_MAX_SWAPS", lo=1, hi=1024))
+  if [ -n "${HOTSPLIT_DYN_MAX_SWAPS:-}" ] && [ "${HOTSPLIT_DYN_MAX_SWAPS}" -gt 1024 ] 2>/dev/null; then
+    echo "ERROR: HOTSPLIT_DYN_MAX_SWAPS must be 1..1024, got '$HOTSPLIT_DYN_MAX_SWAPS'" >&2
+    _hs_ok=0
+  fi
   for _kv in HOTSPLIT_DYN_DECAY HOTSPLIT_DYN_MARGIN; do
     _val="${!_kv:-}"
     if [ -n "$_val" ]; then

@@ -11,6 +11,32 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 61 (cross-repo CI path, boolean equivalence, compatibility probe)
+
+* Cross-repo contract tests in the recipes CI actually execute now: the test
+  looks for the kv-persistence checkout INSIDE the workspace first
+  (`RECIPES/kv-persistence`, the GitHub Actions layout) before falling back to
+  developer home paths. The six contract tests no longer skip in CI.
+* Boolean HotSplit knobs are normalized on the KV launcher exactly like the
+  recipe launcher (`normalize_bool`: true/yes/on -> 1, false/no/off -> 0)
+  before the shared module is sourced. The HotSplit components compare
+  against the string "1" (`HOTSPLIT_NUMA == "1"`), so a raw `true` used to
+  silently disable the feature. Covers DYNAMIC / DRYRUN / NUMA /
+  ALLOW_STATIC_FALLBACK / STRICT_HOOK / NUMA_STRICT / DYN_LOG.
+* The KV launcher now runs the SAME model-patch compatibility probe as the
+  recipe launcher (base_loader seam, model_loader.utils definition,
+  mimo_v2/mimo_v2_omni `load_weights`) BEFORE mounting the replacements,
+  plus provenance SHA-256 of the shadowed originals. A changed image digest
+  is caught before the 13-16 minute model load, not after.
+* Validation completeness (P2): `HOTSPLIT_HOST_FLOOR_GIB` and
+  `HOTSPLIT_VRAM_RESERVE_GIB` are validated as non-negative floats; integer
+  knobs carry ranges (DYN_STEPS/TOPK/LIVE_SECS/DECODE_MAX/error limits >= 1,
+  DYN_MAX_SWAPS 1..1024 -- the plan code's own bounds); MAX_TOKENS /
+  DYN_PRIOR_TOKENS allow 0.
+* Test-count honesty: sandbox runs (346+2 / 338+5) and CI runs (344+4 /
+  330+13) differ because CI lacks optional dependencies (wiki checkout, lz4
+  bindings). The docs cite the CI figures; both suites are green.
+
 ## Round 60 (CI module path, BOOT_HOOK equivalence, full validation)
 
 * kv-persistence CI now checks out `sikkatu/recipes` (path: `recipes`) and the
@@ -51,34 +77,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   activation health check runs after `--v1/models` answers: boot hook ACTIVE,
   dynamic hook installed, live counters present, no empty-bank or transaction
   errors. HTTP 200 alone is no longer treated as proof the hot experts work.
-
-## Round 58 (one config layer + shared-key regression fix)
-
-* Shared API key regression fixed (recipes): the launcher now ALWAYS mirrors
-  the canonical `$HOME/.config/kvp/api_key` into `live/api_key` on every
-  launch, so `manage.sh` / `check-tp4-api.sh` never report "requires a key"
-  when the key exists. All five recipe launchers use the same key
-  architecture; helpers read the canonical file first and no longer need
-  `tr`/`head` (pure-bash reads).
-* ONE codec decision: `start-all.sh` resolves the effective L2 codec ONCE
-  (the shared fold) and hands the same value to the cache and the engine --
-  a codec pin in identity.env can no longer split the two sides into
-  different codecs.
-* ONE config layer: `start-all.sh` loads cache.env / lmcache-server.env /
-  identity.env BEFORE any decision -- the cache-PID probe uses the effective
-  `KVP_CACHE_ROOT`, so a cache on a custom path is detected as running.
-  `run-vllm-with-persist.sh` now seeds the recipe's `tp4.env` (environment
-  wins over file), so HOTSPLIT_* / MAX_MODEL_LEN / MAX_NUM_SEQS / MOE_BACKEND
-  reach the engine when launched via `start-all.sh`.
-* ONE entry point: `scripts/start-all.sh` in recipes delegates to
-  kv-persistence -- the same command works from any working directory.
-  `run-tp4-hotsplit.sh` remains the independent recipe-only launcher.
-* Cross-repo contract test (`tests/test_cross_repo_contract.py`, recipes):
-  codec semantics, lmcache version pin (0.5.6), ports, namespace pins and the
-  mounted HotSplit files must agree in both repositories -- a change in one
-  repo can no longer silently break the other.
-* Compression documentation harmonized (EN/RU/ZH + config comments): lossless
-  zstd is the DEFAULT everywhere, lz4 is the alternative, byte-exact raw is an
-  explicit opt-out (`LMCACHE_L2_SERDE=none`) only.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.
