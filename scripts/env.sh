@@ -300,6 +300,11 @@ _kvp_resolve_cache_device(){
 }
 
 # Round 56 (user): ONE API key for ALL launchers (kv-persistence + recipes).
+# Cross-repo compatibility pin (round 63): kv-persistence and the recipes
+# repo are developed together; this number marks the compatible pair and the
+# cross-repo contract test asserts BOTH sides carry the same value.
+KVP_COMPAT_VERSION=1
+
 # Canonical path: $HOME/.config/kvp/api_key. Legacy per-repo live/api_key is
 # migrated on first use. The key is generated once and reused.
 _kvp_api_key_file(){
@@ -311,13 +316,23 @@ _kvp_load_api_key(){ # prints the key (empty when none exists yet)
     head -n1 "$_kvp_kf" | tr -d '[:space:]'
     return 0
   fi
-  # legacy locations (migrate below)
-  local _root="${1:-}" _cand
+  # legacy locations -- migrate: write the first legacy key to the canonical
+  # file (round 63: the promise "migrate below" was never implemented, so two
+  # repos with their own old keys kept using DIFFERENT keys).
+  local _root="${1:-}" _cand _found=""
   for _cand in "$_root/live/api_key" "$HOME/kv-persistence/live/api_key"; do
     [ -n "$_cand" ] && [ -f "$_cand" ] || continue
-    head -n1 "$_cand" | tr -d '[:space:]'
-    return 0
+    _found="$(head -n1 "$_cand" | tr -d '[:space:]')"
+    break
   done
+  if [ -n "$_found" ]; then
+    mkdir -p "$(dirname "$_kvp_kf")"
+    umask 077
+    printf '%s\n' "$_found" > "$_kvp_kf"
+    chmod 600 "$_kvp_kf"
+    echo "API key migrated to the shared location: $_kvp_kf" >&2
+    printf '%s' "$_found"
+  fi
   return 0
 }
 _kvp_save_api_key(){ # _kvp_save_api_key <key> [<legacy-dir>]

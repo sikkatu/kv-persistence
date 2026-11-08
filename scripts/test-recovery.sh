@@ -22,6 +22,12 @@ ROOT="$(cd "$HERE/.." && pwd)"
 _kvp_load_env "$ROOT"
 API="${API_BASE:-http://127.0.0.1:30007}"
 KEY="${API_KEY:-}"; [ -f "$PWD/live/api_key" ] && [ -z "$KEY" ] && KEY="$(head -n1 "$PWD/live/api_key" | tr -d '[:space:]')"
+# Round 63 (review): the bearer key must not appear in `ps` -- write it to a
+# chmod-600 curl config file and use curl -K instead of -H on the command line.
+_kvp_curl_header="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/live/.curl-header-test"
+mkdir -p "$(dirname "$_kvp_curl_header")"
+umask 077; printf 'header = "Authorization: Bearer %s"\n' "$KEY" > "$_kvp_curl_header"; chmod 600 "$_kvp_curl_header"
+
 [ -n "$KEY" ] || PA pre "API_KEY unavailable (live/api_key)"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
 # Review fix: the served model name is deployment-specific, not a project
@@ -98,7 +104,7 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
          echo "         check: docker logs --tail 60 $CONTAINER" >&2
          return 2 ;;
     esac
-    curl -fsS --max-time 3 -H "Authorization: Bearer $KEY" "$API/v1/models" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 3 -K "$_kvp_curl_header" "$API/v1/models" >/dev/null 2>&1 && return 0
     [ $((i % 6)) -eq 0 ] && echo "  waiting for API... $((i*10))s (container $_st)"
     sleep 10; done
   return 1; }

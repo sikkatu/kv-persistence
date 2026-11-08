@@ -105,18 +105,46 @@ _tp4_seed(){
   [ -f "$_f" ] || return 0
   while IFS= read -r _line || [ -n "$_line" ]; do
     case "$_line" in
-      ''|'#'*) continue ;;
+      ''|[[:space:]]*'#'*) continue ;;   # blanks and comment lines (incl. indented)
     esac
     _line="${_line#export }"
     _name="${_line%%=*}"
     [ "$_name" = "$_line" ] && continue
     _name="$(printf '%s' "$_name" | tr -d ' ')"
     [ -z "$_name" ] && continue
+    case "$_name" in
+      '#'*) continue ;;   # comment after whitespace stripping
+    esac
     if [ -z "${!_name:-}" ]; then
       _val="${_line#*=}"
-      _val="${_val%%#*}"
-      _val="$(printf '%s' "$_val" | sed -e 's/[[:space:]]*$//')"
-      export "$_name=$_val"
+      # Round 63 (review): the OLD parser kept quotes, kept "$HOME" literal and
+      # cut at ANY '#'. Use the recipe's semantics:
+      #   * inline comment only at " #" (a '#' inside a value is kept),
+      #   * trailing whitespace stripped,
+      #   * surrounding double quotes stripped,
+      #   * $HOME / ${HOME} expanded,
+      #   * only VALID shell identifiers are exported (an indented comment like
+      #     "  # X=1" used to die with "invalid variable name").
+      case "$_name" in
+        [A-Za-z_]*)
+          _ok=1 ;;
+        *)
+          _ok=0 ;;   # not an identifier -- skip the line silently
+      esac
+      if [ "$_ok" = "1" ] && ! printf '%s' "$_name" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+        _ok=0
+      fi
+      if [ "$_ok" = "1" ]; then
+        _val="${_val%% #*}"                    # strip inline comment " # ..."
+        _val="${_val%"${_val##*[![:space:]]}"}"  # strip trailing whitespace
+        _val="${_val//\"/}"                    # strip double quotes
+        case "$_val" in
+          *'$HOME'*|*'${HOME}'*)
+            _val="${_val//\$HOME/$HOME}"
+            _val="${_val//\$\{HOME\}/$HOME}" ;;
+        esac
+        export "$_name=$_val"
+      fi
     fi
   done < "$_f"
   echo "recipe settings seeded from $_f (environment values win)"
@@ -280,8 +308,12 @@ HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"; SITE="${SITE:-}"
 # cannot carry an array), e.g.
 #   export VLLM_EXTRA_ARGS="--reasoning-parser my-model --tool-call-parser my-model"
 # It is split into a real array here so flags with spaces survive.
-if [ "${KVP_MODEL_CONFIG:-mimo-v2.6-pro}" = "mimo-v2.6-pro" ] && [ -z "${VLLM_EXTRA_ARGS:-}" ]; then
-  VLLM_EXTRA_ARGS="--reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice"
+# Round 63 (review): a user-supplied VLLM_EXTRA_ARGS used to REPLACE the MiMo
+# parsers entirely (they silently vanished). The parsers are now always kept
+# for the MiMo config; user flags are appended. Opt out of the parsers with
+# KVP_MIMO_PARSERS=0.
+if [ "${KVP_MODEL_CONFIG:-mimo-v2.6-pro}" = "mimo-v2.6-pro" ] && [ "${KVP_MIMO_PARSERS:-1}" = "1" ]; then
+  VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-} --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice"
 fi
 # Review fix (critical): without --enable-prompt-tokens-details the engine
 # returns usage.prompt_tokens_details = None, so `cached_tokens` -- the ONLY
@@ -665,6 +697,12 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
           -v "$RECIPE/patches/sitecustomize.py:/w/sitecustomize.py:ro"
           -v "$RECIPE/patches/expert_hist_mix.json:/w/expert_hist_mix.json:ro"
         )
+        # Round 63 (review): mount the live counters dir -- the shared module
+        # passes HOTSPLIT_LIVE_COUNTS=/live/counts.json and the recipe launcher
+        # mounts $LIVE_DIR:/live. Without this mount the counters never persist
+        # and the engine logs "live snapshot failed" warnings every interval.
+        mkdir -p "$ROOT/live"
+        MOUNTS+=(-v "$ROOT/live:/live")
         echo "hotsplit: dynamic hot experts ON (KVP_HOTSPLIT=1, recipe default) -- /w boot hook mounted"
         # The recipe's container env (run-tp4-hotsplit.sh, tp4.env.example):
         # HOTSPLIT_DYNAMIC=1 is the default; HOT_GIB is REQUIRED for real
@@ -813,6 +851,18 @@ docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ]; then
   _kvp_gpu_preflight 2048 || die "GPU memory is still held after the old engine was removed -- leaked processes block the new engine (see the PIDs above). Fix: stop the cache service too (bash scripts/stop-cache.sh && bash scripts/start-cache.sh) and rerun."
 fi
+# Round 63 (review): the API key must NOT appear in `ps` output. `docker run
+# -e VLLM_API_KEY=<value>` exposes it to every local user (the key protects
+# the loopback API precisely from other UIDs). Write it to a chmod-600
+# env-file (docker --env-file) and use a curl config file for the bearer
+# header instead of `-H "Authorization: Bearer $API_KEY"` on the command line.
+_kvp_key_envfile="$ROOT/live/.engine-env"
+_kvp_key_header="$ROOT/live/.curl-header"
+umask 077
+printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$_kvp_key_envfile"
+chmod 600 "$_kvp_key_envfile"
+printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" > "$_kvp_key_header"
+chmod 600 "$_kvp_key_header"
 echo "starting $CONTAINER with persistent KV connector (lmcache $LMCACHE_HOST:$LMCACHE_PORT)"
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
@@ -823,7 +873,7 @@ docker run -d --name "$CONTAINER" --restart no \
   "${ENGINE_CACHE_ARGS[@]}" \
   -e VLLM_USE_DEEP_GEMM=0 \
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 \
-  -e "VLLM_API_KEY=$API_KEY" \
+  --env-file "$_kvp_key_envfile" \
   "${MOUNTS[@]}" "$IMAGE" \
   --model "$MODEL_MOUNT" \
   --served-model-name "$KVP_SERVED_MODEL_NAME" \
@@ -945,7 +995,7 @@ for _ in $(seq 1 300); do
   else
     printf '[%3ds] still loading (no new log lines)\n' "$(( $(date +%s) - START_TS ))"
   fi
-  if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" >/dev/null 2>&1; then
+  if curl -fsS --max-time 3 -K "$_kvp_key_header" "http://$URLHOST:$PORT/v1/models" >/dev/null 2>&1; then
     echo "API is up with the persistent KV connector attached."
     # Round 59 (review): /v1/models answering is NOT proof that the hot experts
     # actually work. Verify the hotsplit ACTIVATION in the engine log before
@@ -977,8 +1027,15 @@ for _ in $(seq 1 300); do
         check_marker "dynamic hook" "step hook installed" "dynamic hot/cold mode is active"
         check_marker "live counters" "live counter:" "routing counters are collected (basis for the plan)"
       fi
+      if [ "${HOTSPLIT_NUMA:-1}" = "1" ]; then
+        check_marker "numa hook" "HOOK STATUS numa_bind=ACTIVE" "NUMA binding installed (review 63: on a VM HOTSPLIT_NUMA_MAP is required)"
+      fi
       if printf '%s' "$_hs_log" | grep -q "no eligible MXFP4 MoE layers found"; then
         echo "  [ERROR] no MoE layers were split -- the hot bank would be empty" >&2
+        _hs_fail=1
+      fi
+      if [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ] && printf '%s' "$_hs_log" | grep -q "live snapshot failed"; then
+        echo "  [ERROR] live counter snapshots are failing (is /live mounted and writable?)" >&2
         _hs_fail=1
       fi
       if printf '%s' "$_hs_log" | grep -qE "commit failed|rollback ALSO failed"; then

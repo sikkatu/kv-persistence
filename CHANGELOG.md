@@ -11,6 +11,36 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 63 (parser parity, key out of ps, /live mount, kvp CLI)
+
+* `_tp4_seed` in the engine launcher now has the recipe parser's exact
+  semantics: `$HOME`/`${HOME}` are expanded, surrounding quotes stripped, inline
+  comments cut only at " #", and non-identifier lines (an indented comment)
+  are skipped instead of aborting with "invalid variable name".
+* The API key no longer appears in `ps` output (all 5 recipe launchers, the
+  KV launcher and test-recovery.sh): it travels via `docker --env-file`
+  (chmod 600) and `curl -K` config files instead of `-e VLLM_API_KEY=<value>`
+  and `-H "Authorization: Bearer ..."` command-line arguments.
+* `/live` is mounted in the KV launcher (`$ROOT/live:/live`) so the routing
+  counters persist; the activation check now also fails on
+  "live snapshot failed" and verifies `HOOK STATUS numa_bind=ACTIVE` when
+  NUMA binding is on.
+* Key migration actually writes the canonical `~/.config/kvp/api_key` (the
+  "migrate below" promise in `_kvp_load_api_key` was never implemented -- two
+  repos kept using different keys).
+* `USE_LOSSLESS_SERDE`/`LMCACHE_L2_SERDE` from tp4.env now reach the single
+  codec decision (start-all seeds tp4.env BEFORE resolving), and a
+  user-supplied `VLLM_EXTRA_ARGS` no longer silently removes the MiMo
+  parsers (opt out: `KVP_MIMO_PARSERS=0`).
+* `KVP_COMPAT_VERSION` pin file added to kv-persistence (the recipe launcher
+  already checked it); `KVP_REPO`/`KVP_REPO_ROOT` are both accepted.
+* `kvp` CLI on PATH (`scripts/install-kvp.sh` -> `~/.local/bin/kvp`):
+  `kvp up|down|status|logs`, repo locations remembered in `~/.config/kvp/`.
+* Stale docs fixed (README EN/RU/ZH + lmcache-server.env comments): omitting
+  the codec now gets lossless zstd, raw needs an explicit `LMCACHE_L2_SERDE=none`.
+* Tests: recipe launcher tests assert the env-file contract (the key must NOT
+  be a command-line argument) and follow `~/recipes` as a lookup layout.
+
 ## Round 62 (float knob ranges + fresh CI counts)
 
 * The float knob validation now enforces the plan code's REAL ranges on the
@@ -48,23 +78,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
 * Test-count honesty: sandbox runs (346+2 / 338+5) and CI runs (344+4 /
   336+7) differ because CI lacks optional dependencies (wiki checkout, lz4
   bindings). The docs cite the CI figures; both suites are green.
-
-## Round 60 (CI module path, BOOT_HOOK equivalence, full validation)
-
-* kv-persistence CI now checks out `sikkatu/recipes` (path: `recipes`) and the
-  test helper resolves the shared `hotsplit_env.sh` module relative to the
-  checkout FIRST (developer home paths remain as fallbacks) -- the two tests
-  that failed on every CI run now read the real module.
-* `HOTSPLIT_BOOT_HOOK` is no longer forced to 1: with the model patches
-  mounted the replaced `mimo_v2_hotsplit.py` already calls
-  `hotsplit.apply_hotsplit`, so the launcher defaults the boot hook to 0 --
-  the same decision the recipe launcher makes (no double wrapper on the same
-  loader). The activation health check follows the configured value:
-  `boot_hook=INACTIVE` is the CORRECT state at 0.
-* Host-side HotSplit validation now covers every numeric knob the shared
-  module passes through: DYN_STEPS, DYN_MAX_SWAPS, DYN_PRIOR_TOKENS,
-  MAX_TOKENS, TOPK, LIVE_DECODE_MAX, DYN_MAX_PLAN_ERRORS,
-  DYN_MAX_COMMIT_ERRORS, VRAM_RESERVE_GIB, LIVE_SECS (the last six were not
-  validated before). Regression tests lock all three fixes.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

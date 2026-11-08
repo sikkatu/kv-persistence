@@ -10,6 +10,32 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 63 轮（解析器一致性、密钥不进 ps、/live 挂载、kvp CLI）
+
+* 引擎启动器中的 `_tp4_seed` 现在与 recipe 的解析器逐字节一致：`$HOME`/
+  `${HOME}` 被展开，外围引号被去掉，行内注释只在 " #" 处截断，没有有效
+  标识符的行（带缩进的注释）被跳过而不是以 "invalid variable name" 崩溃。
+* API 密钥不再出现在 `ps` 输出中（全部 5 个 recipe 启动器、KV 启动器和
+  test-recovery.sh）：通过 `docker --env-file`（chmod 600）和 `curl -K`
+  配置文件传递，而不是 `-e VLLM_API_KEY=<value>` 和
+  `-H "Authorization: Bearer ..."` 命令行参数。
+* KV 启动器挂载 `/live`（`$ROOT/live:/live`）以便路由计数器持久化；激活
+  检查现在也会在 "live snapshot failed" 时失败，并在启用 NUMA 绑定时验证
+  `HOOK STATUS numa_bind=ACTIVE`。
+* 密钥迁移现在真正写入规范文件 `~/.config/kvp/api_key`（`_kvp_load_api_key`
+  中的 "migrate below" 承诺从未实现——两个仓库一直在用不同的密钥）。
+* tp4.env 中的 `USE_LOSSLESS_SERDE`/`LMCACHE_L2_SERDE` 现在能到达统一的
+  编解码决策（start-all 在解析之前先 seed tp4.env），用户提供的
+  `VLLM_EXTRA_ARGS` 不再悄悄移除 MiMo 解析器（关闭：`KVP_MIMO_PARSERS=0`）。
+* kv-persistence 中添加了 `KVP_COMPAT_VERSION` 钉定文件（recipe 启动器
+  已经在检查它）；`KVP_REPO`/`KVP_REPO_ROOT` 两种拼写都被接受。
+* PATH 上的 `kvp` CLI（`scripts/install-kvp.sh` -> `~/.local/bin/kvp`）：
+  `kvp up|down|status|logs`，仓库位置记忆在 `~/.config/kvp/`。
+* 修正过时文档（README EN/RU/ZH + lmcache-server.env 注释）：省略编解码器
+  变量得到无损 zstd，raw 需要显式 `LMCACHE_L2_SERDE=none`。
+* 测试：recipe 启动器测试现在遵循 env-file 契约（密钥不应是命令行参数）
+  并考虑 `~/recipes` 查找布局。
+
 ## 第 62 轮（浮点参数范围 + 新 CI 计数）
 
 * 浮点参数验证现在在主机上强制执行计划代码的真实范围：
@@ -42,20 +68,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * 测试计数诚实性：sandbox 运行（346+2 / 338+5）与 CI 运行（344+4 / 336+7）
   不同，因为 CI 缺少可选依赖（wiki checkout、lz4 绑定）。文档引用 CI 数字；
   两套测试均通过。
-
-## 第 60 轮（CI 模块路径、BOOT_HOOK 等价性、完整验证）
-
-* kv-persistence CI 现在检出 `sikkatu/recipes`（路径 `recipes`），测试辅助
-  函数首先相对于 checkout 解析共享模块 `hotsplit_env.sh`（开发者主目录
-  路径作为后备）—— 每次 CI 运行都失败的两个测试现在读取真实模块。
-* `HOTSPLIT_BOOT_HOOK` 不再强制为 1：挂载模型补丁后，替换的
-  `mimo_v2_hotsplit.py` 已经调用 `hotsplit.apply_hotsplit`，因此启动器
-  默认 boot hook = 0 —— 与 recipe 启动器的决定相同（同一加载器不会有双重
-  包装）。激活健康检查遵循配置值：`boot_hook=INACTIVE` 在 0 时是正确状态。
-* 主机端 HotSplit 验证现在覆盖共享模块传递的所有数值 knobs：
-  DYN_STEPS、DYN_MAX_SWAPS、DYN_PRIOR_TOKENS、MAX_TOKENS、TOPK、
-  LIVE_DECODE_MAX、DYN_MAX_PLAN_ERRORS、DYN_MAX_COMMIT_ERRORS、
-  VRAM_RESERVE_GIB、LIVE_SECS（后六项之前未验证）。回归测试锁定全部三个
-  修复。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

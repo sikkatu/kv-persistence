@@ -265,7 +265,7 @@ effective codec to `$KVP_CACHE_ROOT/engine-identity.env` and standalone
 scripts read it automatically (switch > `KVP_L2_SERDE` pin > the file), so a
 fresh terminal no longer reports a false `identity=none != engine/config=zstd`
 mismatch. You can still pin `KVP_L2_SERDE` in `identity.env.local` explicitly.
-Omit it everywhere to stay on the byte-exact raw mode.
+Omit it everywhere to get the default lossless zstd; set `LMCACHE_L2_SERDE=none` explicitly for byte-exact raw.
 
 ## Repository layout
 

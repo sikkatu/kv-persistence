@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# kvp -- one-command control for the kv-persistence stack (round 63).
+# Installed by scripts/install-kvp.sh into ~/.local/bin/kvp. Remembers the
+# repo locations in ~/.config/kvp/paths, so it works from any directory.
+set -Eeuo pipefail
+CFG="$HOME/.config/kvp"
+mkdir -p "$CFG"
+# remember/resolve the two repo locations
+KVP_HOME="${KVP_REPO:-$(cat "$CFG/kv_repo" 2>/dev/null || echo "$HOME/kv-persistence")}"
+RECIPES_HOME="${RECIPES_REPO:-$(cat "$CFG/recipes_repo" 2>/dev/null || echo "$HOME/sikkatu-recipes")}"
+printf '%s' "$KVP_HOME" > "$CFG/kv_repo"
+printf '%s' "$RECIPES_HOME" > "$CFG/recipes_repo"
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  up)
+    exec bash "$KVP_HOME/scripts/start-all.sh" "$@" ;;
+  down)
+    exec bash "$KVP_HOME/scripts/stop-all.sh" "$@" ;;
+  status)
+    echo "kv-persistence: $KVP_HOME"
+    echo "recipes:        $RECIPES_HOME"
+    echo "api key:        $(cat "$CFG/api_key" 2>/dev/null | sed 's/./*/g' | head -c 12) (chmod 600, ~/.config/kvp/api_key)"
+    docker ps --format '{{.Names}}\t{{.Status}}' 2>/dev/null | grep -E 'grafana|prometheus|lmcache|tp4' || echo "(no stack containers running)" ;;
+  logs)
+    docker logs -f "${1:-mimo-pro-tp4-kvp}" ;;
+  "")
+    echo "usage: kvp up|down|status|logs [args]"
+    echo "  up      start the whole stack (monitoring + cache + engine)"
+    echo "  down    stop everything (cache data is kept)"
+    echo "  status  show repo paths, key presence, running containers"
+    echo "  logs    follow the engine container log"
+    exit 1 ;;
+  *)
+    echo "kvp: unknown subcommand '$cmd'" >&2
+    exit 2 ;;
+esac

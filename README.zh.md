@@ -206,7 +206,7 @@ bash scripts/run-vllm-with-persist.sh
 启动器还将有效编解码器写入 `$KVP_CACHE_ROOT/engine-identity.env`，独立脚本会自动读取
 （开关 > `KVP_L2_SERDE` 固定值 > 文件）——新终端不会再报假的
 `identity=none != engine/config=zstd` 不匹配。仍可显式在 `identity.env.local` 中固定
-`KVP_L2_SERDE`。不设置该变量即保持逐字节精确的原始模式。
+`KVP_L2_SERDE`。不设置该变量即使用默认的无损 zstd；要逐字节精确的原始模式请显式设置 `LMCACHE_L2_SERDE=none`。
 ## 仓库结构
 | 路径 | 内容 |
 |---|---|
