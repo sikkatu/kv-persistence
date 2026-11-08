@@ -762,14 +762,38 @@ if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
     echo "ERROR: HOTSPLIT_DYN_MAX_SWAPS must be 1..1024, got '$HOTSPLIT_DYN_MAX_SWAPS'" >&2
     _hs_ok=0
   fi
-  for _kv in HOTSPLIT_DYN_DECAY HOTSPLIT_DYN_MARGIN; do
-    _val="${!_kv:-}"
-    if [ -n "$_val" ]; then
-      if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
-        echo "ERROR: $_kv must be a number (e.g. 0.25), got '$_val'" >&2; _hs_ok=0
+  # Round 62 (review): these floats carry REAL ranges in the plan code
+  # (hotsplit.py _dyn_float): DYN_DECAY is 0.0..1.0 (routing share decay),
+  # DYN_MARGIN is >= 1.0 (hot-bank admission margin). A bare "is a number"
+  # check let DYN_DECAY=2 / DYN_MARGIN=0.5 through here and the container
+  # rejected them AFTER the model load -- enforce the ranges on the host.
+  # Range checks in pure bash (no external tools, no fail-open): the integer
+  # part decides (a fraction is always < 1). "1" and "1.0" are legal for both.
+  _val="${HOTSPLIT_DYN_DECAY:-}"
+  if [ -n "$_val" ]; then
+    if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+      echo "ERROR: HOTSPLIT_DYN_DECAY must be a number in 0..1 (e.g. 0.5), got '$_val'" >&2; _hs_ok=0
+    else
+      _ip="${_val%%.*}"
+      _fp=""; case "$_val" in *.*) _fp="${_val#*.}" ;; esac
+      _ipn=$((10#${_ip:-0}))
+      if [ "$_ipn" -gt 1 ] || { [ "$_ipn" -eq 1 ] && [ -n "$_fp" ] && [ -n "${_fp//0/}" ]; }; then
+        echo "ERROR: HOTSPLIT_DYN_DECAY must be in 0..1 (hotsplit.py range), got '$_val'" >&2; _hs_ok=0
       fi
     fi
-  done
+  fi
+  _val="${HOTSPLIT_DYN_MARGIN:-}"
+  if [ -n "$_val" ]; then
+    if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+      echo "ERROR: HOTSPLIT_DYN_MARGIN must be a number >= 1 (e.g. 1.25), got '$_val'" >&2; _hs_ok=0
+    else
+      _ip="${_val%%.*}"
+      _ipn=$((10#${_ip:-0}))
+      if [ "$_ipn" -lt 1 ]; then
+        echo "ERROR: HOTSPLIT_DYN_MARGIN must be >= 1 (hotsplit.py range), got '$_val'" >&2; _hs_ok=0
+      fi
+    fi
+  fi
   if [ "${HOTSPLIT_NUMA:-1}" = "1" ] && [ -n "${HOTSPLIT_NUMA_MAP:-}" ]; then
     if ! printf '%s' "$HOTSPLIT_NUMA_MAP" | grep -Eq '^[0-9]+:[0-9]+(,[0-9]+)*(;[0-9]+:[0-9]+(,[0-9]+)*)*$'; then
       echo "ERROR: HOTSPLIT_NUMA_MAP must look like '0:0,1,2,3;1:4,5,6,7', got '$HOTSPLIT_NUMA_MAP'" >&2

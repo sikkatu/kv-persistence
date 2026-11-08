@@ -11,7 +11,7 @@
 实现已完成，离线测试全绿（329 个单元测试 + 19 个离线测试 = 348 个离线收集，
 346 通过 + 2 跳过；共收集 363 个，含集成（10）与 recovery（5）测试；另有伴生仓库
 `sikkatu/recipes` 338 通过 + 5 跳过 / 343
-（CI 运行略有不同 -- kv-persistence 344+4，recipes 330+13 --
+（CI 运行略有不同 -- kv-persistence 344+4，recipes 336+7 --
 因为 GitHub runner 缺少可选依赖：wiki checkout、lz4 绑定；两套均通过））。**重启后恢复的硬件验收已通过
 （4x RTX PRO 6000，MiMo-V2.6-Pro-MOPD，same-UID 模式，2026-11-07）**：
 * 场景 A（仅重启 vLLM）：`cached_tokens=2560`，ttft 0s（冷启动 17.53s），

@@ -11,6 +11,18 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 62 (float knob ranges + fresh CI counts)
+
+* The float knob validation now enforces the plan code's REAL ranges on the
+  host: `HOTSPLIT_DYN_DECAY` must be 0..1 and `HOTSPLIT_DYN_MARGIN` >= 1
+  (hotsplit.py `_dyn_float` bounds). Before, only "is a number" was checked,
+  so `DYN_DECAY=2` / `DYN_MARGIN=0.5` passed host validation and were rejected
+  inside the container after the model load. Pure-bash range arithmetic (no
+  external tools, no fail-open).
+* CI counts refreshed after the cross-repo path fix: recipes CI is now
+  **336 passed + 7 skipped** (was 330+13 in the round-61 note); kv-persistence
+  CI unchanged at 344 passed + 4 skipped. Docs cite the current figures.
+
 ## Round 61 (cross-repo CI path, boolean equivalence, compatibility probe)
 
 * Cross-repo contract tests in the recipes CI actually execute now: the test
@@ -34,7 +46,7 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   DYN_MAX_SWAPS 1..1024 -- the plan code's own bounds); MAX_TOKENS /
   DYN_PRIOR_TOKENS allow 0.
 * Test-count honesty: sandbox runs (346+2 / 338+5) and CI runs (344+4 /
-  330+13) differ because CI lacks optional dependencies (wiki checkout, lz4
+  336+7) differ because CI lacks optional dependencies (wiki checkout, lz4
   bindings). The docs cite the CI figures; both suites are green.
 
 ## Round 60 (CI module path, BOOT_HOOK equivalence, full validation)
@@ -54,28 +66,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   MAX_TOKENS, TOPK, LIVE_DECODE_MAX, DYN_MAX_PLAN_ERRORS,
   DYN_MAX_COMMIT_ERRORS, VRAM_RESERVE_GIB, LIVE_SECS (the last six were not
   validated before). Regression tests lock all three fixes.
-
-## Round 59 (HotSplit launcher equivalence + CI/contract fixes)
-
-* The kv-persistence engine launcher now runs the FULL hardware-verified
-  HotSplit profile (P1): `--cap-add IPC_LOCK/SYS_NICE`,
-  `--compilation-config FULL_DECODE_ONLY` and the complete `HOTSPLIT_*` env
-  (NUMA_MAP, LIVE_COUNTS/SECS, DYN_STEPS/MAX_SWAPS/MARGIN/DECAY/
-  PRIOR_TOKENS, MAX_TOKENS, ...) are no longer missing. ONE shared module
-  (`scripts/hotsplit_env.sh` in the recipe) builds the env + docker flags for
-  BOTH launchers -- no hand-maintained duplicate lists to drift apart.
-* Cross-repo contract tests actually run in CI (P1): the workflow now
-  checks out kv-persistence as a second repository, so the 6 contract tests
-  compare real files instead of skipping.
-* The recipes delegator (`scripts/start-all.sh`) exports `RECIPE_DIR` pointing
-  at its own recipe checkout (P1) -- launches work from arbitrary clone
-  locations, no `~/sikkatu-recipes` guessing.
-* The engine launcher's header comment no longer claims "UVA BASELINE only"
-  (P2) -- it describes the actual hotsplit-by-default behaviour.
-* Host-side HotSplit config validation runs BEFORE the 13-16 minute model
-  load (bad HOT_GIB / DYN_* / NUMA_MAP values fail fast), and a mandatory
-  activation health check runs after `--v1/models` answers: boot hook ACTIVE,
-  dynamic hook installed, live counters present, no empty-bank or transaction
-  errors. HTTP 200 alone is no longer treated as proof the hot experts work.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

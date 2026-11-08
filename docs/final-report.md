@@ -16,7 +16,7 @@ offline tests pass
 346 passed + 2 skipped; 363 collected total including the live-`lmcache`
 integration (10) and recovery (5) tests; plus 338 passed + 5 skipped of 343 collected
 (CI runs differ slightly -- kv-persistence 344 passed + 4 skipped,
-recipes 330 passed + 13 skipped -- because GitHub runners lack the optional
+recipes 336 passed + 7 skipped -- because GitHub runners lack the optional
 dependencies some tests skip on: wiki checkout, lz4 bindings; both suites green)
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
