@@ -15,6 +15,19 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 
 
+def _read_module() -> str:
+    """Read the shared hotsplit env module from the recipe checkout."""
+    candidates = [
+        Path.home() / "sikkatu-recipes" / "recipes" / "rtx-pro-6000"
+        / "mimo-v2.6-pro-hotsplit" / "scripts" / "hotsplit_env.sh",
+        Path("/home/review/recipes/recipes/rtx-pro-6000"
+             "/mimo-v2.6-pro-hotsplit/scripts/hotsplit_env.sh"),
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c.read_text()
+    raise AssertionError("shared hotsplit_env.sh not found next to the kv-persistence checkout")
+
 def _read(name: str) -> str:
     return (SCRIPTS / name).read_text()
 
@@ -41,15 +54,23 @@ def test_launcher_mounts_hotsplit_machinery():
               "sitecustomize.py", "expert_hist_mix.json"):
         assert "/w/%s" % f in t, "the recipe's %s must be mounted at /w" % f
     assert 'KVP_HOTSPLIT:-1' in t, "hotsplit must be ON by default"
-    assert 'PYTHONPATH=/w' in t, "the /w boot hook needs PYTHONPATH=/w"
+    # Round 59: PYTHONPATH=/w comes from the SHARED module (scripts/hotsplit_env.sh
+    # in the recipe) that the launcher sources -- not a hand-written duplicate.
+    assert "hotsplit_env.sh" in t, "the launcher must source the shared hotsplit env module"
+    _mod = _read_module()
+    assert 'PYTHONPATH=/w' in _mod, "the shared module must set PYTHONPATH=/w"
 
 
 def test_launcher_passes_hotsplit_env_defaults():
     t = _read("run-vllm-with-persist.sh")
-    assert 'HOTSPLIT_DYNAMIC=${HOTSPLIT_DYNAMIC:-1}' in t, (
-        "dynamic hot experts must be the default (recipe default)")
-    assert 'HOTSPLIT_HOT_GIB=${HOTSPLIT_HOT_GIB:-30}' in t, (
+    # Round 59: the env defaults live in the SHARED module; the launcher sources
+    # it and only sets its own profile default (HOT_GIB=30).
+    assert "hotsplit_env.sh" in t, "the launcher must source the shared module"
+    assert 'HOTSPLIT_HOT_GIB=${HOTSPLIT_HOT_GIB:-30}' in t or 'HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-30}"' in t, (
         "the hot budget default must match the recipe (30 GiB)")
+    _mod = _read_module()
+    assert 'HOTSPLIT_DYNAMIC=${HOTSPLIT_DYNAMIC:-1}' in _mod, (
+        "dynamic hot experts must be the default (recipe default)")
     assert "HOTSPLIT_ENV_ARGS" in t
     # the env must reach the docker run
     assert '${HOTSPLIT_ENV_ARGS[@]+' in t

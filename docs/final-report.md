@@ -14,7 +14,7 @@ GitHub remote API).
 offline tests pass
 (325 unit tests + 34 more offline config/docs tests = 359 offline collected,
 342 passed + 2 skipped; 359 collected total including the live-`lmcache`
-integration (10) and recovery (5) tests; plus 337 passed + 5 skipped of 342 collected
+integration (10) and recovery (5) tests; plus 338 passed + 5 skipped of 343 collected
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. **Restart-recovery acceptance PASSED on the target GPU host

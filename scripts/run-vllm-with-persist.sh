@@ -6,12 +6,15 @@
 # Relationship to the recipe launchers (run-tp4-uva.sh / run-tp4-hotsplit.sh,
 # review fix round 19): the docker args are based on the same recipe baseline,
 # but NOT a byte-for-byte mirror. Review fix (round 26), HONEST SCOPE: this
-# launcher runs the UVA BASELINE only -- it mounts the loader patches
-# (mimo_v2*.py) but NOT the hotsplit machinery (sitecustomize.py, hotsplit.py,
-# --compilation-config FULL_DECODE_ONLY, --cap-add IPC_LOCK/SYS_NICE). The KV
-# values are the same as the recipe's, but the PERFORMANCE numbers measured on
-# hotsplit do NOT apply to runs of THIS launcher. For the hotsplit profile use
-# the recipe's run-tp4-hotsplit.sh. This launcher:
+# launcher runs the FULL hotsplit profile (round 59): it mounts the loader
+# patches (mimo_v2*.py) AND the hotsplit machinery (sitecustomize.py, hotsplit.py,
+# hotsplit_plan.py, numa_bind.py, expert_hist_mix.json) and passes the SAME
+# docker config as the recipe's run-tp4-hotsplit.sh -- --compilation-config
+# FULL_DECODE_ONLY, --cap-add IPC_LOCK/SYS_NICE and the full HOTSPLIT_* env --
+# via the shared module scripts/hotsplit_env.sh (no hand-maintained duplicates).
+# Opt out of hotsplit entirely: KVP_HOTSPLIT=0 (UVA baseline only). The KV
+# values and the engine config are the recipe's, so the PERFORMANCE numbers
+# measured on the recipe's hotsplit run DO apply here. This launcher:
 #   * mounts the model at /models/<cache-identity namespace> (not /model) --
 #     the recipe's KV_PERSIST=1 branch now does the same, but the plain
 #     recipe run does NOT (it intentionally has no cache identity);
@@ -605,19 +608,15 @@ print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
         # HOTSPLIT_DYNAMIC=1 is the default; HOT_GIB is REQUIRED for real
         # splits (empty plan = an empty hot set), so fall back to 30 GiB when
         # unset -- same value the recipe documents.
-        HOTSPLIT_ENV_ARGS=(
-          -e PYTHONPATH=/w
-          -e "HOTSPLIT_DYNAMIC=${HOTSPLIT_DYNAMIC:-1}"
-          -e "HOTSPLIT_DRYRUN=${HOTSPLIT_DRYRUN:-0}"
-          -e "HOTSPLIT_COUNTS=${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
-          -e "HOTSPLIT_WEIGHTS=${HOTSPLIT_WEIGHTS:-decode=1,prefill=0}"
-          -e "HOTSPLIT_HOT_GIB=${HOTSPLIT_HOT_GIB:-30}"
-          -e "HOTSPLIT_HOST_FLOOR_GIB=${HOTSPLIT_HOST_FLOOR_GIB:-128}"
-          -e "HOTSPLIT_NUMA=${HOTSPLIT_NUMA:-1}"
-          -e "HOTSPLIT_NUMA_POLICY=${HOTSPLIT_NUMA_POLICY:-preferred}"
-          -e "HOTSPLIT_ALLOW_STATIC_FALLBACK=${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}"
-          -e "HOTSPLIT_BOOT_HOOK=1"
-        )
+        # Round 59: ONE shared module (scripts/hotsplit_env.sh in the recipe)
+        # builds the env + docker flags -- identical to the recipe launcher's.
+        # Profile default: HOT_GIB=30 (empty plan = empty hot set in the recipe).
+        HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-30}"
+        HOTSPLIT_BOOT_HOOK=1
+        . "$RECIPE/scripts/hotsplit_env.sh"
+        HOTSPLIT_ENV_ARGS=("${HOTSPLIT_ENVS[@]}")
+        HOTSPLIT_CAP_ARGS=("${HOTSPLIT_DOCKER_CAPS[@]}")
+        HOTSPLIT_COMPILE="$HOTSPLIT_COMPILE_ARG"
       else
         echo "hotsplit: disabled by KVP_HOTSPLIT=0 (static placement only)"
         HOTSPLIT_ENV_ARGS=()
@@ -628,6 +627,42 @@ print(os.path.dirname(pkg))' | tail -1 | tr -d '\r')"
       ;;
   esac
 fi
+# Round 59 (review): validate the HotSplit config on the HOST, before the
+# 13-16 minute model load. A bad value that only explodes inside the container
+# wastes a full load cycle. Print the effective values once.
+if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
+  _hs_ok=1
+  if [ -n "${HOTSPLIT_HOT_GIB:-}" ]; then
+    case "$HOTSPLIT_HOT_GIB" in
+      *[!0-9]*|'') echo "ERROR: HOTSPLIT_HOT_GIB must be a whole number of GiB (e.g. 30), got '$HOTSPLIT_HOT_GIB'" >&2; _hs_ok=0 ;;
+    esac
+  fi
+  for _kv in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_DYN_PRIOR_TOKENS HOTSPLIT_MAX_TOKENS; do
+    _val="${!_kv:-}"
+    if [ -n "$_val" ]; then
+      case "$_val" in
+        *[!0-9]*|'') echo "ERROR: $_kv must be a non-negative integer, got '$_val'" >&2; _hs_ok=0 ;;
+      esac
+    fi
+  done
+  for _kv in HOTSPLIT_DYN_DECAY HOTSPLIT_DYN_MARGIN; do
+    _val="${!_kv:-}"
+    if [ -n "$_val" ]; then
+      if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+        echo "ERROR: $_kv must be a number (e.g. 0.25), got '$_val'" >&2; _hs_ok=0
+      fi
+    fi
+  done
+  if [ "${HOTSPLIT_NUMA:-1}" = "1" ] && [ -n "${HOTSPLIT_NUMA_MAP:-}" ]; then
+    if ! printf '%s' "$HOTSPLIT_NUMA_MAP" | grep -Eq '^[0-9]+:[0-9]+(,[0-9]+)*(;[0-9]+:[0-9]+(,[0-9]+)*)*$'; then
+      echo "ERROR: HOTSPLIT_NUMA_MAP must look like '0:0,1,2,3;1:4,5,6,7', got '$HOTSPLIT_NUMA_MAP'" >&2
+      _hs_ok=0
+    fi
+  fi
+  [ "$_hs_ok" = "1" ] || die "HotSplit configuration is invalid -- fix the values above and rerun (nothing was started)."
+  echo "hotsplit config OK: HOT_GIB=${HOTSPLIT_HOT_GIB:-stock} DYN_STEPS=${HOTSPLIT_DYN_STEPS:-default} NUMA=${HOTSPLIT_NUMA:-1}${HOTSPLIT_NUMA_MAP:+ map=$HOTSPLIT_NUMA_MAP}"
+fi
+
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 # Review fix (round 47): the GPU check runs AFTER the old container is
 # removed -- round 46 ran it earlier and refused on the OLD engine's legal
@@ -641,6 +676,7 @@ echo "starting $CONTAINER with persistent KV connector (lmcache $LMCACHE_HOST:$L
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
+  ${HOTSPLIT_CAP_ARGS[@]+"${HOTSPLIT_CAP_ARGS[@]}"} \
   ${ENGINE_USER_ARGS[@]+"${ENGINE_USER_ARGS[@]}"} \
   ${HOTSPLIT_ENV_ARGS[@]+"${HOTSPLIT_ENV_ARGS[@]}"} \
   "${ENGINE_CACHE_ARGS[@]}" \
@@ -668,6 +704,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --generation-config vllm \
   "$PROMPT_TOKENS_DETAILS_FLAG" \
   ${VLLM_EXTRA_ARGS_ARR[@]+"${VLLM_EXTRA_ARGS_ARR[@]}"} \
+  ${HOTSPLIT_COMPILE:+$HOTSPLIT_COMPILE} \
   --host "$BIND" --port "$PORT"
 # Post-launch identity gate (review round 13): now the container EXISTS and
 # carries the args we just passed -- verify them against the identity pins
@@ -768,7 +805,44 @@ for _ in $(seq 1 300); do
     printf '[%3ds] still loading (no new log lines)\n' "$(( $(date +%s) - START_TS ))"
   fi
   if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" >/dev/null 2>&1; then
-    echo "API is up with the persistent KV connector attached."; exit 0
+    echo "API is up with the persistent KV connector attached."
+    # Round 59 (review): /v1/models answering is NOT proof that the hot experts
+    # actually work. Verify the hotsplit ACTIVATION in the engine log before
+    # declaring success (KVP_HOTSPLIT=0 skips this -- no hotsplit expected).
+    if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
+      echo "hotsplit activation check:"
+      _hs_log="$(docker logs "$CONTAINER" 2>&1 || true)"
+      _hs_fail=0
+      check_marker() {
+        if printf '%s' "$_hs_log" | grep -qF "$2"; then
+          echo "  [ok] $1 -- $3"
+        else
+          echo "  [MISSING] $1 -- $3" >&2
+          _hs_fail=1
+        fi
+      }
+      check_marker "boot hook" "HOOK STATUS boot_hook=ACTIVE" "the /w machinery loaded at interpreter start"
+      if [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ]; then
+        check_marker "dynamic hook" "step hook installed" "dynamic hot/cold mode is active"
+        check_marker "live counters" "live counter:" "routing counters are collected (basis for the plan)"
+      fi
+      if printf '%s' "$_hs_log" | grep -q "no eligible MXFP4 MoE layers found"; then
+        echo "  [ERROR] no MoE layers were split -- the hot bank would be empty" >&2
+        _hs_fail=1
+      fi
+      if printf '%s' "$_hs_log" | grep -qE "commit failed|rollback ALSO failed"; then
+        echo "  [ERROR] hotsplit transaction errors in the engine log" >&2
+        _hs_fail=1
+      fi
+      if [ "$_hs_fail" = "0" ]; then
+        echo "hotsplit activation: VERIFIED (hooks active, no transaction errors)."
+      else
+        echo "hotsplit activation: NOT VERIFIED -- the API answers but the hot-expert machinery is not confirmed." >&2
+        echo "Check the engine log: docker logs $CONTAINER | grep -i hotsplit" >&2
+        exit 1
+      fi
+    fi
+    exit 0
   fi
   sleep 10
 done

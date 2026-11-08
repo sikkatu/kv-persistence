@@ -11,6 +11,29 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 59 (HotSplit launcher equivalence + CI/contract fixes)
+
+* The kv-persistence engine launcher now runs the FULL hardware-verified
+  HotSplit profile (P1): `--cap-add IPC_LOCK/SYS_NICE`,
+  `--compilation-config FULL_DECODE_ONLY` and the complete `HOTSPLIT_*` env
+  (NUMA_MAP, LIVE_COUNTS/SECS, DYN_STEPS/MAX_SWAPS/MARGIN/DECAY/
+  PRIOR_TOKENS, MAX_TOKENS, ...) are no longer missing. ONE shared module
+  (`scripts/hotsplit_env.sh` in the recipe) builds the env + docker flags for
+  BOTH launchers -- no hand-maintained duplicate lists to drift apart.
+* Cross-repo contract tests actually run in CI (P1): the workflow now
+  checks out kv-persistence as a second repository, so the 6 contract tests
+  compare real files instead of skipping.
+* The recipes delegator (`scripts/start-all.sh`) exports `RECIPE_DIR` pointing
+  at its own recipe checkout (P1) -- launches work from arbitrary clone
+  locations, no `~/sikkatu-recipes` guessing.
+* The engine launcher's header comment no longer claims "UVA BASELINE only"
+  (P2) -- it describes the actual hotsplit-by-default behaviour.
+* Host-side HotSplit config validation runs BEFORE the 13-16 minute model
+  load (bad HOT_GIB / DYN_* / NUMA_MAP values fail fast), and a mandatory
+  activation health check runs after `--v1/models` answers: boot hook ACTIVE,
+  dynamic hook installed, live counters present, no empty-bank or transaction
+  errors. HTTP 200 alone is no longer treated as proof the hot experts work.
+
 ## Round 58 (one config layer + shared-key regression fix)
 
 * Shared API key regression fixed (recipes): the launcher now ALWAYS mirrors
@@ -50,20 +73,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   described directly.
 * Documentation for `start-all.sh` / `stop-all.sh` and the shared API key
   (`$HOME/.config/kvp/api_key`) added to both repos' READMEs (EN/RU/ZH).
-
-## Round 56 (shared API key + dynamic hotsplit by default)
-
-* ONE API key for BOTH repos: both launchers (kv-persistence + recipes run-tp4-hotsplit.sh /
-  run-tp4-uva.sh) now read and write the canonical file
-  `$HOME/.config/kvp/api_key` (override: `KVP_API_KEY_FILE=`). A legacy
-  per-repo `live/api_key` is migrated on first use and kept as a mirror
-  for older tooling.
-* Dynamic hot/cold experts by default in kv-persistence: the launcher now mounts the recipe's `/w` machinery
-  (hotsplit.py, hotsplit_plan.py, numa_bind.py, sitecustomize.py,
-  expert_hist_mix.json) and passes `PYTHONPATH=/w` + the recipe's
-  HOTSPLIT_* defaults (HOTSPLIT_DYNAMIC=1, HOT_GIB=30). Opt out:
-  `KVP_HOTSPLIT=0`.
-* CHANGELOG trimmed to the last 3 rounds -- older notes live in the git
-  log of `main`.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.
