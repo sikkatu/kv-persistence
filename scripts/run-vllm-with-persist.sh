@@ -100,62 +100,11 @@ _kvp_load_env "$ROOT"
 # the recipe). Same contract as the recipe launcher: values already in the
 # environment WIN over the file -- only names that are not set are filled.
 # Priority chain: environment > tp4.env > tp4.env.example-derived defaults below.
-_tp4_seed(){
-  _f="$1"
-  [ -f "$_f" ] || return 0
-  while IFS= read -r _line || [ -n "$_line" ]; do
-    case "$_line" in
-      ''|[[:space:]]*'#'*) continue ;;   # blanks and comment lines (incl. indented)
-    esac
-    _line="${_line#export }"
-    _name="${_line%%=*}"
-    [ "$_name" = "$_line" ] && continue
-    _name="$(printf '%s' "$_name" | tr -d ' ')"
-    [ -z "$_name" ] && continue
-    case "$_name" in
-      '#'*) continue ;;   # comment after whitespace stripping
-    esac
-    if [ -z "${!_name:-}" ]; then
-      _val="${_line#*=}"
-      # Round 63 (review): the OLD parser kept quotes, kept "$HOME" literal and
-      # cut at ANY '#'. Use the recipe's semantics:
-      #   * inline comment only at " #" (a '#' inside a value is kept),
-      #   * trailing whitespace stripped,
-      #   * surrounding double quotes stripped,
-      #   * $HOME / ${HOME} expanded,
-      #   * only VALID shell identifiers are exported (an indented comment like
-      #     "  # X=1" used to die with "invalid variable name").
-      case "$_name" in
-        [A-Za-z_]*)
-          _ok=1 ;;
-        *)
-          _ok=0 ;;   # not an identifier -- skip the line silently
-      esac
-      if [ "$_ok" = "1" ] && ! printf '%s' "$_name" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
-        _ok=0
-      fi
-      if [ "$_ok" = "1" ]; then
-        _val="${_val%% #*}"                    # strip inline comment " # ..."
-        _val="${_val%"${_val##*[![:space:]]}"}"  # strip trailing whitespace
-        _val="${_val//\"/}"                    # strip double quotes
-        case "$_val" in
-          *'$HOME'*|*'${HOME}'*)
-            _val="${_val//\$HOME/$HOME}"
-            _val="${_val//\$\{HOME\}/$HOME}" ;;
-        esac
-        export "$_name=$_val"
-      fi
-    fi
-  done < "$_f"
-  echo "recipe settings seeded from $_f (environment values win)"
-}
-if [ -n "${RECIPE_DIR:-}" ] && [ -f "$RECIPE_DIR/tp4.env" ]; then
-  _tp4_seed "$RECIPE_DIR/tp4.env"
-elif [ -f "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" ]; then
-  _tp4_seed "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"
-elif [ -f "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" ]; then
-  _tp4_seed "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"
-fi
+# Round 64: ONE parser (scripts/env.sh _kvp_seed_env_file) -- the local copy is
+# gone so start-all and this launcher cannot drift apart.
+for _tp4 in "${RECIPE_DIR:-}/tp4.env" "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"; do
+  [ -f "$_tp4" ] && { _kvp_seed_env_file "$_tp4"; break; }
+done
 [ -d "$RECIPE" ] || die "production recipe not found at $RECIPE (set RECIPE_DIR)"
 # Round 48 (user): IMAGE and MODEL_DIR must not need manual exports -- a new
 # terminal just works. Resolution order for IMAGE:

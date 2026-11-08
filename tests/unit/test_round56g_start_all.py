@@ -64,8 +64,13 @@ def test_start_all_no_flags_needed():
 def test_recipe_launchers_default_to_zstd():
     for name in ("run-tp4-hotsplit.sh", "run-tp4-uva.sh"):
         t = _read(RECIPES / name)
-        assert 'LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-zstd}"' in t, (
-            "%s: lossless zstd must be the default codec" % name)
+        # Round 64: the default is applied ONLY when no opt-out switch is set
+        # (USE_LOSSLESS_SERDE=0 / KVP_L2_SERDE=none must reach the identity
+        # gate instead of being overridden by an exported zstd).
+        assert 'LMCACHE_L2_SERDE=zstd' in t, "%s: lossless zstd must be the default codec" % name
+        assert 'USE_LOSSLESS_SERDE:-}' in t, "%s: the codec default must yield to opt-out switches" % name
+        assert 'USE_LOSSLESS_SERDE:-}' in t, (
+            "%s: the codec default must yield to the documented opt-out switches" % name)
 
 
 @pytest.mark.skipif(not RECIPES.exists(), reason="sikkatu-recipes checkout not found")

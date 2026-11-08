@@ -10,6 +10,31 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 64 轮（统一解析器、auth 全面不进 ps、编解码退出恢复）
+
+* 一个 env-文件解析器（scripts/env.sh 中的 `_kvp_seed_env_file`）取代了两个
+  分化的 `_tp4_seed` 副本。start-all 中的副本缺少标识符验证，在带缩进的
+  注释上崩溃（"  # X=1" -> "invalid variable name"）；两个调用者现在使用
+  同一个函数，语义与 recipe 完全一致。start-all 还在加载配置层之前 seed
+  tp4.env，因此 tp4.env 中的 `LMCACHE_L2_SERDE=lz4|none` 不再被静默忽略
+  （lmcache-server.env 会预先填入 zstd）。
+* Bearer 密钥已从所有脚本的 `ps` 输出中移除（第 63 轮的说法不完整）：全部
+  5 个配方的 uva 启动器、manage.sh 和 check-tp4-api.sh 现在使用
+  `curl -K <chmod-600 配置文件>` 而不是 `-H "Authorization: Bearer ..."`；
+  之前写入但未使用的 `.curl-header` 文件现已接入。test-recovery.sh 也读取
+  共享的 `~/.config/kvp/api_key`（可在仓库目录外工作），其 header 文件放在
+  /tmp 而不是缓存数据目录中。
+* 配方启动器中的编解码退出已恢复：`export LMCACHE_L2_SERDE` 现在只在
+  LMCACHE_L2_SERDE / KVP_L2_SERDE / USE_LOSSLESS_SERDE 都未设置时发生——
+  `USE_LOSSLESS_SERDE=0` 和 `KVP_L2_SERDE=none` 再次到达 identity gate
+  （第 63 轮的无条件 export 用 zstd 覆盖了它们）。
+* `kvp up` 传递记住的 recipe 位置（`export RECIPE_DIR=`）——自定义克隆位置
+  不再以 "production recipe not found" 失败。`kvp` 仅在首次使用或显式指定
+  时写入保存的路径（一次性的 `KVP_REPO=/tmp/x kvp status` 不会重写配置），
+  安装器使用符号链接而非复制（`git pull` 立即更新命令）。
+* hotsplit_env.sh：shebang 恢复为第一行（兼容性钉定注释被加在它上面了）。
+* 测试已更新为新契约：编解码默认值让位于退出开关，auth 通过 curl 配置文件。
+
 ## 第 63 轮（解析器一致性、密钥不进 ps、/live 挂载、kvp CLI）
 
 * 引擎启动器中的 `_tp4_seed` 现在与 recipe 的解析器逐字节一致：`$HOME`/
@@ -46,27 +71,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * 修复 cross-repo 路径后刷新 CI 计数：recipes CI 现在是 **336 passed +
   7 skipped**（第 61 轮注释中为 330+13）；kv-persistence CI 不变 ——
   344 passed + 4 skipped。文档引用当前数字。
-
-## 第 61 轮（cross-repo CI 路径、布尔等价性、兼容性探测）
-
-* recipes CI 中的跨仓库契约测试现在实际执行：测试首先在 workspace 内部查找
-  kv-persistence checkout（`RECIPES/kv-persistence`，GitHub Actions 布局），
-  然后才回退到开发者主目录路径。六个契约测试不再在 CI 中跳过。
-* KV 启动器中的布尔 HotSplit 参数与 recipe 启动器完全一致地归一化
-  （`normalize_bool`：true/yes/on -> 1，false/no/off -> 0），在 source 共享
-  模块之前执行。HotSplit 组件与字符串 "1" 比较（`HOTSPLIT_NUMA == "1"`），
-  因此原始的 `true` 会静默禁用功能。覆盖 DYNAMIC / DRYRUN / NUMA /
-  ALLOW_STATIC_FALLBACK / STRICT_HOOK / NUMA_STRICT / DYN_LOG。
-* KV 启动器现在执行与 recipe 启动器相同 model-补丁兼容性探测（base_loader
-  接缝、model_loader.utils 定义、mimo_v2/mimo_v2_omni 的 `load_weights`），
-  在挂载替换文件之前执行，并记录被遮蔽原文件的 provenance SHA-256。镜像
-  digest 变化会在 13-16 分钟模型加载之前被捕获，而不是之后。
-* 验证完整性（P2）：`HOTSPLIT_HOST_FLOOR_GIB` 和 `HOTSPLIT_VRAM_RESERVE_GIB`
-  作为非负浮点数验证；整数 knobs 带范围（DYN_STEPS/TOPK/LIVE_SECS/
-  DECODE_MAX/错误限制 >= 1，DYN_MAX_SWAPS 1..1024 —— 计划代码自身的边界）；
-  MAX_TOKENS / DYN_PRIOR_TOKENS 允许 0。
-* 测试计数诚实性：sandbox 运行（346+2 / 338+5）与 CI 运行（344+4 / 336+7）
-  不同，因为 CI 缺少可选依赖（wiki checkout、lz4 绑定）。文档引用 CI 数字；
-  两套测试均通过。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

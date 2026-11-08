@@ -11,6 +11,37 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 64 (one parser, auth out of ps everywhere, codec opt-out restored)
+
+* ONE env-file parser (`_kvp_seed_env_file` in scripts/env.sh) replaces the two
+  diverging `_tp4_seed` copies. The start-all copy lacked identifier
+  validation and aborted on an indented comment ("  # X=1" -> "invalid
+  variable name"); both callers now use the same function with the recipe's
+  exact semantics. start-all also seeds tp4.env BEFORE loading the config
+  layer, so `LMCACHE_L2_SERDE=lz4|none` from tp4.env is no longer silently
+  ignored (lmcache-server.env used to pre-fill zstd).
+* The bearer key is out of `ps` output in ALL scripts (the round-63 claim was
+  incomplete): uva launchers, manage.sh and check-tp4-api.sh of all 5 recipes
+  now use `curl -K <chmod-600 config>` instead of `-H "Authorization: Bearer
+  ..."`; the `.curl-header` files that were written but never used are wired
+  in. test-recovery.sh reads the shared `~/.config/kvp/api_key` too (works
+  outside the repo directory) and keeps its header file in /tmp, not in the
+  cache data dir.
+* Codec opt-out restored in the recipe launchers: `export LMCACHE_L2_SERDE`
+  now happens only when NONE of LMCACHE_L2_SERDE / KVP_L2_SERDE /
+  USE_LOSSLESS_SERDE is set -- `USE_LOSSLESS_SERDE=0` and `KVP_L2_SERDE=none`
+  reach the identity gate again (round 63's unconditional export overrode
+  them with zstd).
+* `kvp up` passes the remembered recipe location (`export RECIPE_DIR=`) --
+  a custom clone location no longer fails with "production recipe not found".
+  `kvp` only writes the saved paths on first use or when explicitly given
+  (a one-off `KVP_REPO=/tmp/x kvp status` no longer rewrites the config), and
+  the installer symlinks instead of copying (a `git pull` updates the command).
+* hotsplit_env.sh: shebang first again (the compat pin comment was prepended
+  above it).
+* Tests updated to the new contracts: the codec default must yield to the
+  opt-out switches, auth must go through the curl config file.
+
 ## Round 63 (parser parity, key out of ps, /live mount, kvp CLI)
 
 * `_tp4_seed` in the engine launcher now has the recipe parser's exact
@@ -52,31 +83,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
 * CI counts refreshed after the cross-repo path fix: recipes CI is now
   **336 passed + 7 skipped** (was 330+13 in the round-61 note); kv-persistence
   CI unchanged at 344 passed + 4 skipped. Docs cite the current figures.
-
-## Round 61 (cross-repo CI path, boolean equivalence, compatibility probe)
-
-* Cross-repo contract tests in the recipes CI actually execute now: the test
-  looks for the kv-persistence checkout INSIDE the workspace first
-  (`RECIPES/kv-persistence`, the GitHub Actions layout) before falling back to
-  developer home paths. The six contract tests no longer skip in CI.
-* Boolean HotSplit knobs are normalized on the KV launcher exactly like the
-  recipe launcher (`normalize_bool`: true/yes/on -> 1, false/no/off -> 0)
-  before the shared module is sourced. The HotSplit components compare
-  against the string "1" (`HOTSPLIT_NUMA == "1"`), so a raw `true` used to
-  silently disable the feature. Covers DYNAMIC / DRYRUN / NUMA /
-  ALLOW_STATIC_FALLBACK / STRICT_HOOK / NUMA_STRICT / DYN_LOG.
-* The KV launcher now runs the SAME model-patch compatibility probe as the
-  recipe launcher (base_loader seam, model_loader.utils definition,
-  mimo_v2/mimo_v2_omni `load_weights`) BEFORE mounting the replacements,
-  plus provenance SHA-256 of the shadowed originals. A changed image digest
-  is caught before the 13-16 minute model load, not after.
-* Validation completeness (P2): `HOTSPLIT_HOST_FLOOR_GIB` and
-  `HOTSPLIT_VRAM_RESERVE_GIB` are validated as non-negative floats; integer
-  knobs carry ranges (DYN_STEPS/TOPK/LIVE_SECS/DECODE_MAX/error limits >= 1,
-  DYN_MAX_SWAPS 1..1024 -- the plan code's own bounds); MAX_TOKENS /
-  DYN_PRIOR_TOKENS allow 0.
-* Test-count honesty: sandbox runs (346+2 / 338+5) and CI runs (344+4 /
-  336+7) differ because CI lacks optional dependencies (wiki checkout, lz4
-  bindings). The docs cite the CI figures; both suites are green.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

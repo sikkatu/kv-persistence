@@ -7,7 +7,8 @@ ROOT="$(cd "$HERE/.." && pwd)"
 BIN="$HOME/.local/bin"
 CFG="$HOME/.config/kvp"
 mkdir -p "$BIN" "$CFG"
-cp "$HERE/kvp" "$BIN/kvp"
+# Symlink (not copy) so a `git pull` updates the installed command immediately.
+ln -sfn "$HERE/kvp" "$BIN/kvp"
 chmod 755 "$BIN/kvp"
 printf '%s' "$ROOT" > "$CFG/kv_repo"
 # remember the recipes clone if we can find it

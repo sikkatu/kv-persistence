@@ -21,6 +21,10 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # identity.env (env values win over files) BEFORE any decision, so the PID probe
 # below uses the EFFECTIVE KVP_CACHE_ROOT, not the built-in default.
 . "$HERE/env.sh"
+# tp4.env seeds FIRST (its values beat the config files), then the config layer.
+for _tp4 in "${RECIPE_DIR:-}/tp4.env" "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"; do
+  [ -f "$_tp4" ] && { _kvp_seed_env_file "$_tp4"; break; }
+done
 _kvp_load_env "$ROOT"
 
 # ONE codec decision (review round 58): resolve the effective L2 codec ONCE
@@ -31,36 +35,6 @@ _kvp_load_env "$ROOT"
 # a USE_LOSSLESS_SERDE=0 (or LMCACHE_L2_SERDE=lz4) set in tp4.env must reach the
 # single codec decision, otherwise it is silently ignored (the engine launcher
 # seeds later, after the value is already exported).
-_tp4_seed(){
-  _TP4_ENV="$1"
-if [ -f "$_TP4_ENV" ]; then
-  while IFS= read -r _line || [ -n "$_line" ]; do
-    case "$_line" in
-      ''|'#'*) continue ;;                 # skip blanks and comments
-    esac
-    _line="${_line#export }"               # allow 'export X=1' without gluing it into the name
-    _name="${_line%%=*}"
-    [ "$_name" = "$_line" ] && continue     # not an assignment
-    _name="$(printf '%s' "$_name" | tr -d ' ')"
-    [ -z "$_name" ] && continue
-    if [ -z "${!_name:-}" ]; then           # only fill values not already exported
-      _val="${_line#*=}"
-      _val="${_val%% #*}"                   # strip inline comment: everything after " # "
-      _val="${_val%"${_val##*[![:space:]]}"}"   # strip trailing whitespace
-      _val="${_val//\"/}"                  # strip surrounding double quotes if any
-      case "$_val" in
-        *'$HOME'*|*'${HOME}'*) _val="${_val//\$HOME/$HOME}"; _val="${_val//\$\{HOME\}/$HOME}" ;;
-      esac
-      export "$_name=$_val"
-    fi
-  done < "$_TP4_ENV"
-  echo "settings seeded from $_TP4_ENV (exported environment still wins)"
-fi
-
-}
-for _tp4 in "${RECIPE_DIR:-}/tp4.env" "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"; do
-  [ -f "$_tp4" ] && { _tp4_seed "$_tp4"; break; }
-done
 _kvp_resolve_l2_serde
 EFFECTIVE_SERDE="${LMCACHE_L2_SERDE:-zstd}"
 export LMCACHE_L2_SERDE="$EFFECTIVE_SERDE"

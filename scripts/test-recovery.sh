@@ -22,10 +22,14 @@ ROOT="$(cd "$HERE/.." && pwd)"
 _kvp_load_env "$ROOT"
 API="${API_BASE:-http://127.0.0.1:30007}"
 KEY="${API_KEY:-}"; [ -f "$PWD/live/api_key" ] && [ -z "$KEY" ] && KEY="$(head -n1 "$PWD/live/api_key" | tr -d '[:space:]')"
+# Round 64: also read the shared canonical key (~/.config/kvp/api_key) so the
+# test works outside the repo directory.
+if [ -z "${KEY:-}" ] && [ -f "$HOME/.config/kvp/api_key" ]; then
+  KEY="$(head -n1 "$HOME/.config/kvp/api_key" | tr -d '[:space:]')"
+fi
 # Round 63 (review): the bearer key must not appear in `ps` -- write it to a
 # chmod-600 curl config file and use curl -K instead of -H on the command line.
-_kvp_curl_header="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/live/.curl-header-test"
-mkdir -p "$(dirname "$_kvp_curl_header")"
+_kvp_curl_header="$(mktemp /tmp/kvp-curl-header.XXXXXX)"
 umask 077; printf 'header = "Authorization: Bearer %s"\n' "$KEY" > "$_kvp_curl_header"; chmod 600 "$_kvp_curl_header"
 
 [ -n "$KEY" ] || PA pre "API_KEY unavailable (live/api_key)"

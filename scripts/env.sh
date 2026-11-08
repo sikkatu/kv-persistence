@@ -348,6 +348,48 @@ _kvp_save_api_key(){ # _kvp_save_api_key <key> [<legacy-dir>]
   fi
 }
 
+# _kvp_seed_env_file <file> -- seed shell variables from an env-style file
+# (tp4.env contract, round 64): values already in the environment WIN; the
+# file only fills names that are not set. Exact semantics of the recipe's
+# parser (run-tp4-hotsplit.sh):
+#   * blank lines and comment lines (including INDENTED comments) are skipped;
+#   * "export X=1" is accepted (the prefix is stripped);
+#   * inline comments are cut only at " #" (a '#' inside a value is kept);
+#   * trailing whitespace and surrounding double quotes are stripped;
+#   * $HOME / ${HOME} are expanded;
+#   * only VALID shell identifiers are exported -- anything else is skipped
+#     silently (an indented comment like "  # X=1" must NOT abort the caller).
+_kvp_seed_env_file(){
+  _kvp_sf="$1"
+  [ -f "$_kvp_sf" ] || return 0
+  while IFS= read -r _kvp_line || [ -n "$_kvp_line" ]; do
+    case "$_kvp_line" in
+      ''|[[:space:]]*'#'*) continue ;;          # blanks + comment lines
+    esac
+    _kvp_line="${_kvp_line#export }"
+    _kvp_name="${_kvp_line%%=*}"
+    [ "$_kvp_name" = "$_kvp_line" ] && continue # not an assignment
+    _kvp_name="$(printf '%s' "$_kvp_name" | tr -d ' \t')"
+    case "$_kvp_name" in
+      ''|'#'*) continue ;;
+    esac
+    printf '%s' "$_kvp_name" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' || continue
+    if [ -z "${!_kvp_name:-}" ]; then
+      _kvp_val="${_kvp_line#*=}"
+      _kvp_val="${_kvp_val%% #*}"                       # inline comment at " #"
+      _kvp_val="${_kvp_val%"${_kvp_val##*[![:space:]]}"}"  # trailing whitespace
+      _kvp_val="${_kvp_val//\"/}"                       # surrounding double quotes
+      case "$_kvp_val" in
+        *'$HOME'*|*'${HOME}'*)
+          _kvp_val="${_kvp_val//\$HOME/$HOME}"
+          _kvp_val="${_kvp_val//\$\{HOME\}/$HOME}" ;;
+      esac
+      export "$_kvp_name=$_kvp_val"
+    fi
+  done < "$_kvp_sf"
+  return 0
+}
+
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
   # Remember whether LMCACHE_L2_SERDE / KVP_L2_SERDE were pre-exported in the

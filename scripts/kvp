@@ -8,12 +8,22 @@ mkdir -p "$CFG"
 # remember/resolve the two repo locations
 KVP_HOME="${KVP_REPO:-$(cat "$CFG/kv_repo" 2>/dev/null || echo "$HOME/kv-persistence")}"
 RECIPES_HOME="${RECIPES_REPO:-$(cat "$CFG/recipes_repo" 2>/dev/null || echo "$HOME/sikkatu-recipes")}"
-printf '%s' "$KVP_HOME" > "$CFG/kv_repo"
-printf '%s' "$RECIPES_HOME" > "$CFG/recipes_repo"
+# Only REMEMBER paths on first use (or when explicitly given) -- a one-off
+# "KVP_REPO=/tmp/x kvp status" must not rewrite the saved config forever.
+if [ ! -f "$CFG/kv_repo" ] || [ -n "${KVP_REPO:-}" ]; then
+  printf '%s' "$KVP_HOME" > "$CFG/kv_repo"
+fi
+if [ ! -f "$CFG/recipes_repo" ] || [ -n "${RECIPES_REPO:-}" ]; then
+  printf '%s' "$RECIPES_HOME" > "$CFG/recipes_repo"
+fi
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
   up)
+    # Round 64: pass the remembered recipe location -- without this the engine
+    # launcher fell back to ~/sikkatu-recipes or ~/recipes and failed with
+    # "production recipe not found" for a custom clone location.
+    export RECIPE_DIR="${RECIPE_DIR:-$RECIPES_HOME/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit}"
     exec bash "$KVP_HOME/scripts/start-all.sh" "$@" ;;
   down)
     exec bash "$KVP_HOME/scripts/stop-all.sh" "$@" ;;
