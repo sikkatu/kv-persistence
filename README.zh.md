@@ -94,17 +94,16 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 L2 层**只支持无损**。NVMe 上的 KV 块始终被解码为引擎产生的原始字节：项目中
 不存在 fp8 / turboquant / lbq 量化，任何此类编解码在启动时都会被明确拒绝。
 提供两种存储模式：
-* **逐字节精确的原始模式（默认）** —— `LMCACHE_L2_SERDE=none`。块按原样存储，
-  与未压缩的 upstream 路径完全一致。不做任何变换；缓存命中返回引擎的
-  原始 KV 字节。
-* **无损压缩（可选）** —— `LMCACHE_L2_SERDE=zstd` 或 `lz4`
-  （或 `USE_LOSSLESS_SERDE` 开关，见下）。块由 `implementation/kvpersist/
-  compress_serde.py` 注册的无损 `kvp-zstd` / `kvp-lz4` serde 压缩。
-  未能压缩变小的块按原样存储，因此块永远不会膨胀超过一个 4 KiB 页
-  （28 字节帧头加上填充到页边界）。真实 KV 负载上的预期缩减幅度温和 ——
-  常被引用的范围约 **1.1–1.4x**，但该数字是*估算值*，不是本仓库的实测结果：
-  这里尚未运行压缩率基准测试（见 `docs/final-report.md`）。请将其视为粗略的
-  规划参考，而非保证。
+* **无损 zstd（默认）** —— `LMCACHE_L2_SERDE=zstd`，未设置时使用。块由
+  `implementation/kvpersist/compress_serde.py` 注册的无损 `kvp-zstd` serde
+  压缩。未能压缩变小的块按原样存储，因此块永远不会膨胀超过一个 4 KiB 页。
+  真实 KV 负载上的预期缩减幅度温和 —— 常被引用的范围约 **1.1–1.4x**，但该
+  数字是*估算值*，不是本仓库的实测结果：这里尚未运行压缩率基准测试
+  （见 `docs/final-report.md`）。
+* **无损 lz4（备选）** —— `LMCACHE_L2_SERDE=lz4`。更快，压缩率更低。
+* **逐字节精确的原始模式（显式关闭）** —— `LMCACHE_L2_SERDE=none`。块按原样
+  存储，与未压缩的 upstream 路径完全一致；缓存命中返回引擎的原始 KV 字节。
+  这是关闭压缩的唯一方式 —— 绝不会被隐式选择。
 
 每个帧携带**未压缩负载的 CRC32**（`KVCZ` 格式 v2）：被截断的 DMA 读取、
 位翻转或用不同编解码写入的帧会在反序列化时被检测，并报告为缓存 **miss**

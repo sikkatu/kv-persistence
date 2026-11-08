@@ -10,6 +10,31 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 58 轮（统一配置层 + 共享密钥回归修复）
+
+* 共享 API 密钥回归已修复（recipes）：启动器现在每次启动都将规范文件
+  `$HOME/.config/kvp/api_key` 镜像到 `live/api_key`，因此 `manage.sh` /
+  `check-tp4-api.sh` 不会在密钥存在时报「需要密钥」。全部五个配方启动器
+  使用同一密钥架构；辅助脚本优先读取规范文件且不再依赖 `tr`/`head`
+  （纯 bash 读取）。
+* 统一编解码决策：`start-all.sh` 只解析一次有效 L2 编解码（共享折叠），
+  并将同一值传给缓存和引擎——identity.env 中的编解码钉定不会再让两侧
+  使用不同编解码。
+* 统一配置层：`start-all.sh` 在任何决策之前加载 cache.env /
+  lmcache-server.env / identity.env——缓存 PID 探测使用有效的
+  `KVP_CACHE_ROOT`，自定义路径上的缓存会被识别为正在运行。
+  `run-vllm-with-persist.sh` 现在读取配方的 `tp4.env`（环境变量优先于
+  文件），因此通过 `start-all.sh` 启动时 HOTSPLIT_* / MAX_MODEL_LEN /
+  MAX_NUM_SEQS / MOE_BACKEND 能到达引擎。
+* 统一入口：recipes 中的 `scripts/start-all.sh` 委托到 kv-persistence
+  —— 同一命令可在任何工作目录下运行。`run-tp4-hotsplit.sh` 仍是配方的
+  独立启动器。
+* 跨仓库契约测试（`tests/test_cross_repo_contract.py`，recipes）：
+  编解码语义、lmcache 版本钉定（0.5.6）、端口、namespace 钉定和挂载的
+  HotSplit 文件必须在两个仓库中一致——一个仓库的更改不会再悄悄破坏另一个。
+* 压缩文档统一（EN/RU/ZH + 配置注释）：无损 zstd 到处是默认值，lz4 是
+  备选，逐字节精确原始模式仅为显式关闭（`LMCACHE_L2_SERDE=none`）。
+
 ## 第 57 轮（判定 + 文档诚实性）
 
 * 恢复验收判定在 docs/final-report.* 中为 **PASS**：缓存设备自动检测
@@ -30,15 +55,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   `PYTHONPATH=/w` 和配方的 HOTSPLIT_* 默认值（HOTSPLIT_DYNAMIC=1、
   HOT_GIB=30）。关闭：`KVP_HOTSPLIT=0`。
 * CHANGELOG 精简为最近 3 轮——较早的记录见 `main` 分支的 git 日志。
-
-## 第 55 轮（KVP_CACHE_DEVICE 自动检测）
-
-* `KVP_CACHE_DEVICE` 无需手动猜测（VM + LUKS 友好）：env.sh 中的共享助手 `_kvp_resolve_cache_device` 从 `live/cache_device`
-  （记住）或缓存根的 `findmnt SOURCE` 解析后备设备——支持 VM 磁盘
-  （`/dev/vda1`）、LUKS mapper 节点（`/dev/mapper/cryptroot`，经 readlink）
-  和 NVMe 分区。test-recovery.sh 与 preflight.sh 使用；显式固定仍优先。
-  选择记录在 `live/cache_device`。
-* docs/final-report.md 余项清理：LMCache runtime、version-pin 和
-  serde end-to-end 行现为 VERIFIED（硬件 2026-11-07）。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

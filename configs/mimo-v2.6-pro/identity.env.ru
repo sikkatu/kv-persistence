@@ -84,7 +84,8 @@ KVP_MULTIMODAL_COMPONENTS=
 # значение, с которым стартовал кэш-сервер (то же, что USE_LOSSLESS_SERDE /
 # LMCACHE_L2_SERDE для start-cache.sh). Гейт сверяет этот пин с фактическим
 # кодеком СЕРВЕРА (из <cache-root>/l2-adapter.rendered.json): расхождение
-# это MISMATCH, а не повреждённое чтение. Пусто = "none" (сырые чанки).
+# это MISMATCH, а не повреждённое чтение. Пусто = пин не задан: берётся
+# фактический кодек (lossless-zstd по умолчанию). Сырые чанки — только явное "none".
 KVP_L2_SERDE=
 KVP_ROPE_CONFIG_DIGEST=
 # Реально активные настройки speculative/MTP/draft-модели, как стабильная метка

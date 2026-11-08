@@ -116,27 +116,26 @@ the exact bytes the engine produced — there is no fp8 / turboquant / lbq
 quantization anywhere in this project, and any such codec is refused loudly at
 startup. Two storage modes are available:
 
-* **Byte-exact raw (default)** — `LMCACHE_L2_SERDE=none`. Chunks are stored
-  verbatim, identical to the uncompressed upstream path. Nothing is
-  transformed; a cache hit returns the engine's exact KV bytes.
-* **Lossless compression (opt-in)** — `LMCACHE_L2_SERDE=zstd` or `lz4`
-  (or the `USE_LOSSLESS_SERDE` switch, see below). Chunks are compressed with
-  the lossless `kvp-zstd` / `kvp-lz4` serdes registered by
-  `implementation/kvpersist/compress_serde.py`. A block that does not shrink
-  is stored raw, so a chunk never grows by more than one 4 KiB page (the
-  28-byte frame header plus padding up to the page boundary). Expected size
-  reduction on real KV payloads is modest — the commonly cited range is
-  roughly **1.1–1.4x**, but that number is an *estimate*, not a measurement
-  from this repository: no benchmark of the compression ratio has been run
-  here yet (see `docs/final-report.md`). Treat it as a rough planning figure,
-  not a guarantee.
+* **Lossless zstd (DEFAULT)** — `LMCACHE_L2_SERDE=zstd`, used when nothing
+  is set. Chunks are compressed with the lossless `kvp-zstd` serde registered
+  by `implementation/kvpersist/compress_serde.py`. A block that does not
+  shrink is stored raw, so a chunk never grows by more than one 4 KiB page.
+  Expected size reduction on real KV payloads is modest — the commonly cited
+  range is roughly **1.1–1.4x**, but that number is an *estimate*, not a
+  measurement from this repository: no benchmark of the compression ratio has
+  been run here yet (see `docs/final-report.md`).
+* **Lossless lz4 (alternative)** — `LMCACHE_L2_SERDE=lz4`. Faster, lower ratio.
+* **Byte-exact raw (EXPLICIT opt-out)** — `LMCACHE_L2_SERDE=none`. Chunks are
+  stored verbatim, identical to the uncompressed upstream path; a cache hit
+  returns the engine's exact KV bytes. This is the ONLY way to disable
+  compression -- it is never chosen implicitly.
 
 Every frame carries a **CRC32 of the uncompressed payload** (`KVCZ` format v2):
 a truncated DMA read, a bit flip, or a frame written under a different codec is
 detected at deserialize time and reported as a cache **miss** — never returned
 as silently corrupt KV.
 
-**Dependencies:** the uncompressed default (`none`) needs **no** compression
+**Dependencies:** the raw opt-out (`none`) needs **no** compression
 packages at all. `zstd` needs only `zstandard`, `lz4` needs only `lz4` — a
 startup check (`require_codec`) verifies exactly the selected codec before the
 server starts, and never requires an unused one.

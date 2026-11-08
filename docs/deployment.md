@@ -122,7 +122,7 @@ is no automatic wipe on start.
 
 ### Lossless L2 codec (optional)
 
-By default the L2 tier stores **byte-exact raw** chunks (`LMCACHE_L2_SERDE=none`)
+By default the L2 tier stores **lossless zstd** chunks (`LMCACHE_L2_SERDE=zstd`; raw byte-exact is the explicit opt-out `LMCACHE_L2_SERDE=none`)
 — identical to the uncompressed upstream path, no transform at all. To store
 them with lossless compression instead (modest, roughly 1.1–1.4x on real KV
 payloads), pick a codec:

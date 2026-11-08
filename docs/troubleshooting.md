@@ -112,7 +112,7 @@ explicit cleanup, never automatic.
 * `CodecError: zstandard/lz4 python bindings not installed` — the selected
   codec needs its Python package. Install it in the lmcache venv
   (`pip install zstandard lz4`, see requirements-lmcache.txt) or fall back to
-  `LMCACHE_L2_SERDE=none` (byte-exact raw, no extra dependency).
+  `LMCACHE_L2_SERDE=none` (byte-exact raw opt-out, no extra dependency).
 * `LMCACHE_L2_SERDE=... is LOSSY and is not supported` — expected: this project
   is lossless-only. Use `none`, `zstd` or `lz4`.
 * Switched the codec and cache hits disappeared — expected and safe: the codec

@@ -91,6 +91,40 @@ if [ "$KVP_COMPAT_FOUND" != "$KVP_COMPAT_EXPECTED" ]; then
 fi
 . "$HERE/env.sh"
 _kvp_load_env "$ROOT"
+
+# Round 58: the recipe's tp4.env feeds the ENGINE too (review: start-all.sh used
+# to ignore HOTSPLIT_HOT_GIB / MAX_MODEL_LEN / MAX_NUM_SEQS / MOE_BACKEND set in
+# the recipe). Same contract as the recipe launcher: values already in the
+# environment WIN over the file -- only names that are not set are filled.
+# Priority chain: environment > tp4.env > tp4.env.example-derived defaults below.
+_tp4_seed(){
+  _f="$1"
+  [ -f "$_f" ] || return 0
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      ''|'#'*) continue ;;
+    esac
+    _line="${_line#export }"
+    _name="${_line%%=*}"
+    [ "$_name" = "$_line" ] && continue
+    _name="$(printf '%s' "$_name" | tr -d ' ')"
+    [ -z "$_name" ] && continue
+    if [ -z "${!_name:-}" ]; then
+      _val="${_line#*=}"
+      _val="${_val%%#*}"
+      _val="$(printf '%s' "$_val" | sed -e 's/[[:space:]]*$//')"
+      export "$_name=$_val"
+    fi
+  done < "$_f"
+  echo "recipe settings seeded from $_f (environment values win)"
+}
+if [ -n "${RECIPE_DIR:-}" ] && [ -f "$RECIPE_DIR/tp4.env" ]; then
+  _tp4_seed "$RECIPE_DIR/tp4.env"
+elif [ -f "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" ]; then
+  _tp4_seed "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"
+elif [ -f "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" ]; then
+  _tp4_seed "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"
+fi
 [ -d "$RECIPE" ] || die "production recipe not found at $RECIPE (set RECIPE_DIR)"
 # Round 48 (user): IMAGE and MODEL_DIR must not need manual exports -- a new
 # terminal just works. Resolution order for IMAGE:

@@ -1,4 +1,4 @@
-"""Round 56g: start-all/stop-all + recipe codec defaults (user: one command)."""
+"""Round 56g: start-all/stop-all + recipe codec defaults (one-command launch)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,11 +22,22 @@ def _read(path: Path) -> str:
 # ---------------------------------------------------------------- start-all / stop-all
 def test_start_all_exists_and_is_ordered():
     t = _read(SCRIPTS / "start-all.sh")
-    obs = t.index("start-observability.sh")
-    cache = t.index("start-cache.sh")
-    engine = t.index("run-vllm-with-persist.sh")
+    # Only the real LAUNCH lines define the order (comments mention script names
+    # too and must not confuse the check).
+    obs = t.index('bash "$HERE/start-observability.sh"')
+    cache = t.index('bash "$HERE/start-cache.sh"')
+    engine = t.index('bash "$HERE/run-vllm-with-persist.sh"')
     assert obs < cache < engine, (
         "start-all: observability -> cache -> engine (the cache auto-attaches)")
+    # The config layer must load BEFORE the cache decision (round 58): the PID
+    # probe needs the EFFECTIVE KVP_CACHE_ROOT from cache.env[.local].
+    assert t.index("_kvp_load_env") < cache, (
+        "start-all must load the config before deciding about the cache service")
+    # ONE codec decision, resolved once and handed to BOTH children (round 58):
+    # the cache and the engine must never pick codecs independently.
+    assert "_kvp_resolve_l2_serde" in t, "start-all must resolve the codec once"
+    assert t.index("_kvp_resolve_l2_serde") < cache, "resolve the codec before the cache starts"
+    assert 'export LMCACHE_L2_SERDE=' in t, "the resolved codec must reach both children"
 
 
 def test_stop_all_exists():
@@ -39,8 +50,13 @@ def test_stop_all_exists():
 
 def test_start_all_no_flags_needed():
     t = _read(SCRIPTS / "start-all.sh")
-    assert "export " not in t, "start-all must need no exports"
+    # No USER-FACING exports: IMAGE/MODEL_DIR resolve automatically. The single
+    # internal `export LMCACHE_L2_SERDE=` (resolved codec handed to both
+    # children) is allowed -- it is the point of the one-codec decision.
+    for var in ("export IMAGE=", "export MODEL_DIR=", "export KVP_MODEL_DIR="):
+        assert var not in t, "start-all must not require manual %s" % var
     assert "KVP_SAME_UID" in t, "same-UID is the default, but keep the override"
+    assert "_kvp_load_env" in t, "start-all must load cache.env/identity.env itself"
 
 
 # ---------------------------------------------------------------- recipe codec defaults

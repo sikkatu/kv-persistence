@@ -17,6 +17,21 @@ set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
+# ONE configuration layer (review round 58): load cache.env / lmcache-server.env /
+# identity.env (env values win over files) BEFORE any decision, so the PID probe
+# below uses the EFFECTIVE KVP_CACHE_ROOT, not the built-in default.
+. "$HERE/env.sh"
+_kvp_load_env "$ROOT"
+
+# ONE codec decision (review round 58): resolve the effective L2 codec ONCE
+# here and pass the SAME value to both children. start-cache.sh and
+# run-vllm-with-persist.sh then never re-decide, so an lz4 (or raw) pin can
+# never split the cache server and the engine into two codecs.
+_kvp_resolve_l2_serde
+EFFECTIVE_SERDE="${LMCACHE_L2_SERDE:-zstd}"
+export LMCACHE_L2_SERDE="$EFFECTIVE_SERDE"
+echo "codec: $EFFECTIVE_SERDE (resolved once, used by cache and engine)"
+
 echo "== 1/3 observability (Grafana on :3000) =="
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q obs_grafana; then
   echo "observability already running -- skipping"
@@ -25,11 +40,12 @@ else
 fi
 
 echo "== 2/3 persistent cache service =="
-if [ -f "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid" ] && \
-   kill -0 "$(cat "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid" 2>/dev/null)" 2>/dev/null; then
-  echo "cache service already running -- skipping"
+# Probe the EFFECTIVE cache root (from cache.env[.local]), not the default.
+if [ -f "$KVP_CACHE_ROOT/lmcache-server.pid" ] && \
+   kill -0 "$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null)" 2>/dev/null; then
+  echo "cache service already running at $KVP_CACHE_ROOT -- skipping"
 else
-  USE_LOSSLESS_SERDE="${USE_LOSSLESS_SERDE:-1}" bash "$HERE/start-cache.sh"
+  bash "$HERE/start-cache.sh"
 fi
 
 echo "== 3/3 vLLM engine (model load takes ~13-16 min; Ctrl-C stops the launcher, use bash scripts/stop-engine.sh to stop the engine) =="
