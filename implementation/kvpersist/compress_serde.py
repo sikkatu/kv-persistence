@@ -163,7 +163,11 @@ def _decompress_lz4(data: bytes, max_len: int) -> bytes:
         d = lz4.frame.LZ4FrameDecompressor()
         out = b""
         while not d.eof:
-            chunk = d.decompress(data if not out else b"", max_length=cap - len(out))
+            # Round 68 (review): ask for cap+1-len(out), NEVER cap-len(out) --
+            # at len(out) == cap that was 0, and max_length=0 means UNLIMITED
+            # in the lz4 API (a 100 MiB bomb came back in one call). The extra
+            # byte trips the `len(out) > max_len` check below.
+            chunk = d.decompress(data if not out else b"", max_length=cap + 1 - len(out))
             if not chunk:
                 break
             out += chunk

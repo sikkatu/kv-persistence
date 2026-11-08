@@ -11,6 +11,30 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 68 (lz4 boundary fix, behavioural parser test)
+
+* lz4 boundary bug (review): `max_length=cap - len(out)` became 0 at the cap
+  -- and 0 means UNLIMITED in the lz4 streaming API, so a 100 MiB bomb came
+  back in a single unbounded call. Fixed to `cap + 1 - len(out)` (never <= 0
+  while len(out) <= cap; the extra byte trips the overflow check). An honest
+  frame is unaffected. The forwarding test's stub now records every call and
+  asserts max_length > 0 and chunk <= cap+1 on bomb, boundary and honest
+  paths.
+* Behavioural parser test (review: substring checks cannot catch drift):
+  `tests/test_parser_behaviour.py` runs BOTH parsers (kv-persistence env.sh
+  and the recipe's kvp-common.sh) on the SAME tp4.env fixture and compares
+  the resulting environments key-by-key. The fixture covers every tricky
+  rule ($HOME expansion, quotes, inline comments, # inside values, export
+  prefix, indented comments, invalid identifiers). The test immediately
+  caught a shared semantic gap: `KEY = value` kept a leading space in the
+  value -- both parsers now strip leading AND trailing whitespace (all 5
+  files updated identically; the byte-identity contract test keeps them in
+  sync).
+* Still open on real codecs (no zstandard/lz4 in CI): the exact zstandard
+  behaviour for a header size above max_output_size, and lz4's real boundary
+  semantics. `pytest tests/unit/test_decompress_bomb.py -rs` on a host with
+  the packages must show 0 SKIPPED.
+
 ## Round 67 (codec cap = plain_len, one shell library, parity trio)
 
 * Decompression cap fixed (the reviewer's finding): the codec output bound is
@@ -56,28 +80,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
 * The reviewer's repro-round65.sh is now `tests/test_manage_check_http.py`
   (scenarios A-F: check-tp4-api with/without key, status with right/wrong
   key, dead server exit 0, no-auth mode, special-character keys).
-
-## Round 65 (kvp_curl: key on a pipe -- no file, no ps, no unbound vars)
-
-* Round 64's `.curl-header` file approach caused three regressions -- all
-  fixed by the reviewer's suggestion: NO key file at all. A tiny `kvp_curl()`
-  sends the bearer key on a stdin pipe (`printf | curl -K -`; printf is a
-  bash builtin, invisible in `ps`) and runs plain `curl` when no key is set
-  (the documented ALLOW_NO_AUTH loopback mode).
-* manage.sh / check-tp4-api.sh no longer die with "LIVE_DIR: unbound
-  variable" (they never define LIVE_DIR; the round-64 `-K "$LIVE_DIR/..."`
-  referenced it under `set -u`).
-* The uva no-auth mode works again: without a key the old code called
-  `curl -K <missing-file>` (exit 26), so the readiness loop could never
-  succeed. `kvp_curl` sends no header when no key is set.
-* manage.sh `status` with a stopped server no longer exits 7 under `set -e`
-  (long-standing bug: `code="$(curl ...)"` killed the script before the
-  "not reachable" branch). The assignment is guarded.
-* test-recovery.sh: the mktemp header file is removed via `trap ... EXIT`
-  (no key material left in /tmp), and the shared canonical key
-  (`~/.config/kvp/api_key`) now WINS over a stale `$PWD/live/api_key`.
-* kv-persistence env.sh gained the same `kvp_curl()` helper; the engine
-  launcher uses it for the readiness loop (no `.curl-header` file anywhere).
-* Tests updated to the kvp_curl contract.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

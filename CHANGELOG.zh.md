@@ -10,6 +10,25 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 68 轮（lz4 边界修复、行为级解析器测试）
+
+* lz4 边界 bug（审阅者发现）：`max_length=cap - len(out)` 在上限处变成 0——
+  而在 lz4 流式 API 中 0 表示无限制，100 MiB 炸弹在一次无界调用中返回。
+  已修复为 `cap + 1 - len(out)`（当 len(out) <= cap 时永不 <= 0；多余字节
+  触发溢出检查）。诚实帧不受影响。转发测试的桩现在记录每次调用并在炸弹、
+  边界和诚实路径上断言 max_length > 0 且 chunk <= cap+1。
+* 行为级解析器测试（审阅者发现：子字符串检查无法捕获漂移）：
+  `tests/test_parser_behaviour.py` 在同一个 tp4.env 上运行两个解析器
+  （kv-persistence env.sh 和配方的 kvp-common.sh）并逐键比较结果环境。
+  测试用例覆盖所有棘手规则（$HOME 展开、引号、行内注释、值中的 #、
+  export 前缀、缩进注释、无效标识符）。测试立即捕获了一个共同的语义
+  缺陷：`KEY = value` 在值中保留了前导空格——两个解析器现在都去除前导
+  和尾随空白（5 个文件同步更新；逐字节一致性契约测试保证同步）。
+* 真实编解码器仍未验证（CI 中没有 zstandard/lz4）：zstandard 在头部大小
+  超过 max_output_size 时的确切行为、lz4 的真实边界语义。在安装了包的
+  主机上 `pytest tests/unit/test_decompress_bomb.py -rs` 应显示 0 个
+  SKIPPED。
+
 ## 第 67 轮（codec cap = plain_len、统一 shell 库、对等三要素）
 
 * 解压上限已修复（审阅者的发现）：编解码器输出界限现在是帧的
@@ -50,26 +69,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * 审阅者的 repro-round65.sh 已转化为 `tests/test_manage_check_http.py`
   （场景 A–F：带/不带密钥的 check-tp4-api、正确/错误密钥的 status、
   服务器宕机时 exit 0、无认证模式、特殊字符密钥）。
-
-## 第 65 轮（kvp_curl：密钥走管道——无文件、无 ps、无 unbound 变量）
-
-* 第 64 轮的 `.curl-header` 文件方案导致了三个回归——按审阅者的建议全部
-  修复：不再有任何密钥文件。小小的 `kvp_curl()` 通过 stdin 管道发送 bearer
-  密钥（`printf | curl -K -`；printf 是 bash 内建命令，在 `ps` 中不可见），
-  未设置密钥时执行普通 `curl`（已文档化的 ALLOW_NO_AUTH 回环模式）。
-* manage.sh / check-tp4-api.sh 不再因 "LIVE_DIR: unbound variable" 崩溃
-  （它们从不定义 LIVE_DIR，而第 64 轮的 `-K "$LIVE_DIR/..."` 在 `set -u` 下
-  引用了它）。
-* uva 的无认证模式恢复工作：没有密钥时旧代码调用 `curl -K <缺失文件>`
-  （退出码 26），就绪循环永远无法成功。`kvp_curl` 在无密钥时不发送头部。
-* manage.sh `status` 在服务器停止时不再在 `set -e` 下以退出码 7 终止
-  （长期存在的 bug：`code="$(curl ...)"` 在 "not reachable" 分支之前就杀死了
-  脚本）。赋值已加保护。
-* test-recovery.sh：mktemp 的 header 文件通过 `trap ... EXIT` 删除（/tmp 中
-  不留密钥材料），共享的规范密钥（`~/.config/kvp/api_key`）现在优先于
-  过时的 `$PWD/live/api_key`。
-* kv-persistence env.sh 增加了相同的 `kvp_curl()` 辅助函数；引擎启动器在
-  就绪循环中使用它（任何地方都不再有 `.curl-header` 文件）。
-* 测试已更新为 kvp_curl 契约。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。
