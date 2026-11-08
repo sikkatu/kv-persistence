@@ -57,4 +57,71 @@ else
 fi
 
 echo "== 3/3 vLLM engine (model load takes ~13-16 min; Ctrl-C stops the launcher, use bash scripts/stop-engine.sh to stop the engine) =="
-KVP_SAME_UID="${KVP_SAME_UID:-1}" bash "$HERE/run-vllm-with-persist.sh"
+# Round 70 (delegation, review step 2): the engine launch has TWO paths.
+#   KVP_ENGINE=kv     (DEFAULT) -- the kv-persistence launcher
+#                     (run-vllm-with-persist.sh), unchanged behaviour;
+#   KVP_ENGINE=recipe           -- the hardware-verified recipe launcher
+#                     (run-tp4-hotsplit.sh with KV_PERSIST=1). OFF by default
+#                     until the hardware run confirms it; the old code stays.
+KVP_ENGINE="${KVP_ENGINE:-kv}"
+case "$KVP_ENGINE" in
+  kv)
+    KVP_SAME_UID="${KVP_SAME_UID:-1}" bash "$HERE/run-vllm-with-persist.sh"
+    ;;
+  recipe)
+    # Resolve the recipe location the same way the kv launcher does
+    # (explicit RECIPE_DIR > the documented clone layouts).
+    if [ -z "${RECIPE_DIR:-}" ]; then
+      for _rd in "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"                  "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"; do
+        [ -d "$_rd" ] && RECIPE_DIR="$_rd" && break
+      done
+    fi
+    [ -n "${RECIPE_DIR:-}" ] && [ -f "$RECIPE_DIR/scripts/run-tp4-hotsplit.sh" ]       || { echo "ERROR: recipe not found (set RECIPE_DIR to the mimo-v2.6-pro-hotsplit checkout)" >&2; exit 1; }
+    # ---- ONE container-name source (checklist): the recipe names its
+    # container mimo-pro-tp4-hotsplit, the kv launcher mimo-pro-tp4-kvp.
+    # Record the EFFECTIVE name in live/engine_container so stop-engine.sh,
+    # stop-all.sh and kvp down/status/logs stop exactly what is started here.
+    KVP_ENGINE_CONTAINER="${KVP_ENGINE_CONTAINER:-mimo-pro-tp4-hotsplit}"
+    mkdir -p "$ROOT/live"
+    printf '%s\n' "$KVP_ENGINE_CONTAINER" > "$ROOT/live/engine_container"
+
+    # ---- ONE key source (checklist): export the shared key from
+    # ~/.config/kvp/api_key so the recipe launcher REUSES it and never
+    # generates a second one. The key travels in the environment -- it must
+    # never appear in argv (`ps`).
+    if [ -z "${API_KEY:-}" ]; then
+      API_KEY="$(_kvp_load_api_key "$ROOT")"
+    fi
+    if [ -z "$API_KEY" ]; then
+      echo "ERROR: no API key found ($HOME/.config/kvp/api_key) -- refusing the recipe path without a key" >&2
+      exit 1
+    fi
+    export API_KEY
+
+    # ---- KV_CACHE_DTYPE (checklist): pin explicitly. The recipe defaults to
+    # auto (= bfloat16 for MiMo; the kv identity gate resolves auto the same
+    # way, so the namespace is identical), but a pin removes the dependency on
+    # the model's dtype resolution -- the warmed cache must keep its namespace.
+    export KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"
+
+    # ---- the recipe's KV_PERSIST block needs the cache endpoint: pass the
+    # SAME host/port the cache service listens on (the single codec decision
+    # above is already exported as LMCACHE_L2_SERDE).
+    export KV_PERSIST=1
+    export KV_PERSIST_HOST="${KV_PERSIST_HOST:-${LMCACHE_HOST:-127.0.0.1}}"
+    export KV_PERSIST_PORT="${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}"
+    export CONTAINER="$KVP_ENGINE_CONTAINER"
+
+    echo "KVP_ENGINE=recipe: launching the hardware-verified recipe launcher"
+    echo "  container: $CONTAINER (recorded in live/engine_container)"
+    echo "  KV_CACHE_DTYPE=$KV_CACHE_DTYPE (pinned; auto would resolve identically for MiMo)"
+    echo "  cache endpoint: $KV_PERSIST_HOST:$KV_PERSIST_PORT, codec: $LMCACHE_L2_SERDE"
+    # Foreground: the recipe launcher's exit code (activation check, smoke
+    # test) is the code start-all.sh and kvp up report -- never swallowed.
+    bash "$RECIPE_DIR/scripts/run-tp4-hotsplit.sh"
+    ;;
+  *)
+    echo "ERROR: KVP_ENGINE=$KVP_ENGINE is not understood (use 'kv' or 'recipe')" >&2
+    exit 2
+    ;;
+esac

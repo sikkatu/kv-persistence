@@ -31,9 +31,17 @@ case "$cmd" in
     echo "kv-persistence: $KVP_HOME"
     echo "recipes:        $RECIPES_HOME"
     echo "api key:        $(cat "$CFG/api_key" 2>/dev/null | sed 's/./*/g' | head -c 12) (chmod 600, ~/.config/kvp/api_key)"
+    _kvp_cont="$(head -n1 "$KVP_HOME/live/engine_container" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$_kvp_cont" ] && echo "engine container: $_kvp_cont (from live/engine_container)"
     docker ps --format '{{.Names}}\t{{.Status}}' 2>/dev/null | grep -E 'grafana|prometheus|lmcache|tp4' || echo "(no stack containers running)" ;;
   logs)
-    docker logs -f "${1:-mimo-pro-tp4-kvp}" ;;
+    # Round 70 (review checklist): follow the container that was ACTUALLY
+    # started -- start-all records its name in live/engine_container.
+    _kvp_cont="${1:-}"
+    if [ -z "$_kvp_cont" ]; then
+      _kvp_cont="$(head -n1 "$KVP_HOME/live/engine_container" 2>/dev/null | tr -d '[:space:]')"
+    fi
+    docker logs -f "${_kvp_cont:-mimo-pro-tp4-kvp}" ;;
   "")
     echo "usage: kvp up|down|status|logs [args]"
     echo "  up      start the whole stack (monitoring + cache + engine)"

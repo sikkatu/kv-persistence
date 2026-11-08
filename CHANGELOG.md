@@ -11,6 +11,35 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 70 (delegation: KVP_ENGINE=recipe, default OFF)
+
+* ONE engine launch, TWO paths: `start-all.sh` now honours `KVP_ENGINE`
+  (`kv` = the kv launcher, DEFAULT; `recipe` = the hardware-verified
+  `run-tp4-hotsplit.sh` with KV_PERSIST=1). The default is OFF and the old
+  engine code is untouched until the hardware run confirms the recipe path --
+  exactly as the review required.
+* The reviewer's step-2 checklist, all wired and tested:
+  * WITHOUT the flag nothing changes (the docker-run contract snapshot pins
+    the behaviour; the default-path test asserts the kv launcher runs);
+  * ONE container name: `start-all` records the effective name in
+    `live/engine_container`; `stop-engine.sh` (kvp down / stop-all.sh) and
+    `kvp logs/status` read it -- they stop exactly what was started
+    (the recipe names its container mimo-pro-tp4-hotsplit, the kv launcher
+    mimo-pro-tp4-kvp);
+  * ONE key source: the shared `~/.config/kvp/api_key` is exported as API_KEY
+    in the environment -- never in argv -- so the recipe launcher reuses it
+    and never generates a second one;
+  * KV_CACHE_DTYPE: pinned to bfloat16 (the recipe default is auto). The
+    difference is SHOWN in the tests, never normalized away; the identity
+    hash accounts for the dtype (each dtype -> its own namespace; the
+    auto->bfloat16 resolution contract is asserted in the launcher source);
+  * exit codes: the recipe launcher runs in the foreground -- its exit 1
+    (activation check) reaches start-all.sh / kvp up unchanged (tested with
+    missing markers -> exit 1).
+* `tests/test_engine_delegation.py` (6 tests) covers the checklist; the
+  mandatory identity gate is stubbed (same device as test_kv_persist_behaviour)
+  -- real identity is kv-persistence's own territory.
+
 ## Round 69 (step-2 prep: activation check in the recipe launcher, contract snapshot)
 
 * The recipe launcher (`run-tp4-hotsplit.sh`) now runs the SAME hotsplit/NUMA
@@ -56,25 +85,5 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   behaviour for a header size above max_output_size, and lz4's real boundary
   semantics. `pytest tests/unit/test_decompress_bomb.py -rs` on a host with
   the packages must show 0 SKIPPED.
-
-## Round 67 (codec cap = plain_len, one shell library, parity trio)
-
-* Decompression cap fixed (the reviewer's finding): the codec output bound is
-  now the frame's **plain_len** (already validated against the destination
-  buffer and the KVP_DECOMPRESS_MAX_BYTES ceiling), NOT the ceiling. A frame
-  lying downward (2 KiB declared, a bomb inside) can no longer inflate to the
-  ceiling first. plain_len == 0 gets a 1-byte bound (zstandard reads
-  max_output_size=0 as "not set"). Verified by a spy test that asserts the
-  codec receives plain_len, and an empty-frame test.
-* ONE shell library: `scripts/kvp-common.sh` per recipe carries `kvp_curl`
-  (key on a pipe, escaped) and `_kvp_seed_env_file` (the tp4.env parser).
-  The 12 inline `kvp_curl` copies and the 2 inline parser blocks are gone --
-  every script sources the shared file. Recipes stay standalone (copy per
-  recipe) and `test_cross_repo_contract.py` enforces BYTE-IDENTICAL copies;
-  a second test keeps kv-persistence's scripts/env.sh functions in sync
-  (the escape lines must match exactly).
-* Parity test now checks the review's explicit trio on BOTH launchers: the
-  `/live` counters mount, `--env-file` key transport and NO key in argv.
-  Plus the shared HOTSPLIT_* env and the caps/compilation-config profile.
 
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

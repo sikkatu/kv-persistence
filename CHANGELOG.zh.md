@@ -10,6 +10,30 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 70 轮（委托：KVP_ENGINE=recipe，默认关闭）
+
+* 一个引擎启动，两条路径：`start-all.sh` 现在支持 `KVP_ENGINE`
+  （`kv` — kv 启动器，默认；`recipe` — 经硬件验证的
+  `run-tp4-hotsplit.sh`，带 KV_PERSIST=1）。默认关闭，旧引擎代码在硬件
+  运行确认 recipe 路径之前不受影响——完全符合审阅要求。
+* 审阅者的步骤 2 清单，全部接入并测试：
+  * 没有标志时行为不变（docker run 契约快照固定行为；默认路径测试断言
+    运行的是 kv 启动器）；
+  * 单一容器名：`start-all` 将有效名称记录到
+    `live/engine_container`；`stop-engine.sh`（kvp down / stop-all.sh）
+    和 `kvp logs/status` 读取它——停止的正是启动的那个（recipe 将容器
+    命名为 mimo-pro-tp4-hotsplit，kv 启动器为 mimo-pro-tp4-kvp）；
+  * 单一密钥来源：共享的 `~/.config/kvp/api_key` 以 API_KEY 导出到
+    环境变量——绝不进入 argv——recipe 启动器复用它且不会生成第二个；
+  * KV_CACHE_DTYPE：固定为 bfloat16（recipe 默认 auto）。差异在测试中
+    明确展示，绝不被规范化隐藏；identity 哈希考虑 dtype（每种 dtype
+    -> 独立命名空间；auto->bfloat16 解析契约在启动器源码中断言）；
+  * 退出码：recipe 启动器在前台运行——它的 exit 1（激活检查）原样传到
+    start-all.sh / kvp up（已测试：缺少标记 -> exit 1）。
+* `tests/test_engine_delegation.py`（6 个测试）覆盖清单；强制的
+  identity-gate 被桩替换（与 test_kv_persist_behaviour 相同的装置）——
+  真正的 identity 属于 kv-persistence 的领域。
+
 ## 第 69 轮（步骤 2 准备：recipe 启动器激活检查、契约快照）
 
 * recipe 启动器（`run-tp4-hotsplit.sh`）现在在宣布成功前执行与 kv 引擎
@@ -45,23 +69,5 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   超过 max_output_size 时的确切行为、lz4 的真实边界语义。在安装了包的
   主机上 `pytest tests/unit/test_decompress_bomb.py -rs` 应显示 0 个
   SKIPPED。
-
-## 第 67 轮（codec cap = plain_len、统一 shell 库、对等三要素）
-
-* 解压上限已修复（审阅者的发现）：编解码器输出界限现在是帧的
-  **plain_len**（已与目标缓冲区和 KVP_DECOMPRESS_MAX_BYTES 上限校验），
-  而不是上限值。向下撒谎的帧（声明 2 KiB，内部是炸弹）不能再先膨胀到
-  上限。plain_len == 0 获得 1 字节界限（zstandard 将 max_output_size=0
-  读作「未设置」）。通过间谍测试（断言编解码器收到 plain_len）和空帧
-  测试验证。
-* 统一 shell 库：每个配方的 `scripts/kvp-common.sh` 包含 `kvp_curl`
-  （管道传密钥、已转义）和 `_kvp_seed_env_file`（tp4.env 解析器）。
-  12 个内联 `kvp_curl` 副本和 2 个内联解析器块已删除——每个脚本都
-  source 共享文件。配方保持独立（每配方一份副本），
-  `test_cross_repo_contract.py` 强制副本逐字节相同；第二个测试保持
-  kv-persistence scripts/env.sh 函数同步（转义行必须完全一致）。
-* 对等测试现在在两个启动器上检查审阅者明确要求的三要素：`/live` 计数器
-  挂载、`--env-file` 密钥传输和 argv 中无密钥。加上共享的 HOTSPLIT_* 环境
-  和 caps/compilation-config 配置。
 
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。
