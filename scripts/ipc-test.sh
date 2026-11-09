@@ -98,7 +98,10 @@ python3 -m py_compile "$D/producer.py" "$D/consumer.py" || die "generated test s
 echo "-- producer in container (GPU $GPU_IDX, --ipc host, same image as the engine)"
 PRODUCER_USER="${PRODUCER_USER:-}"
 if [ -n "$PRODUCER_USER" ]; then
-  echo "   producer UID:GID = $PRODUCER_USER (same-UID test -- no root)"
+  case "$PRODUCER_USER" in
+    0:0|0) echo "   producer UID:GID = $PRODUCER_USER (root producer)" ;;
+    *)     echo "   producer UID:GID = $PRODUCER_USER (same-UID test -- no root)" ;;
+  esac
 fi
 docker rm -f kvp-ipc-test >/dev/null 2>&1 || true
 docker run -d --rm --name kvp-ipc-test --gpus all --ipc host -e GPU_IDX="$GPU_IDX" \
@@ -145,7 +148,10 @@ case $rc in
     echo "      The CUDA IPC boundary works for CONSUMER=$CONSUMER -- if the cache"
     echo "      server still fails, the cause is elsewhere (check the server log)."
     if [ -n "$PRODUCER_USER" ]; then
-      echo "      SAME-UID result: PASS -- the transfer works WITHOUT root."
+      case "$PRODUCER_USER" in
+        0:0|0) echo "      ROOT-PRODUCER result: PASS -- the transfer works with a root producer." ;;
+        *)     echo "      SAME-UID result: PASS -- the transfer works WITHOUT root." ;;
+      esac
       echo "      This path IS wired: KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh"
       echo "      (the launcher runs the engine as \$(id -u):\$(id -g) with caches under /tmp)."
     fi ;;

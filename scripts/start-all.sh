@@ -116,6 +116,24 @@ case "$KVP_ENGINE" in
     export KV_PERSIST_PORT="${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}"
     export CONTAINER="$KVP_ENGINE_CONTAINER"
 
+    # Round 77 (review): resolve the pinned image the same way the kv launcher
+    # does (live/image) -- ipc-test.sh needs it.
+    if [ -z "${IMAGE:-}" ] && [ -f "$ROOT/live/image" ]; then
+      IMAGE="$(tr -d '[:space:]' < "$ROOT/live/image")"
+    fi
+    IMAGE="${IMAGE:-}"
+
+    # Round 77 (review): the SAME pre-flights the kv launcher runs before
+    # docker run -- lmcache RPC ping + CUDA IPC boundary test. Without them the
+    # delegated path spends ~15 min loading 130 shards and dies at
+    # register_kv_cache (CUDA_ERROR_MAP_FAILED) with no hint before the load.
+    _kvp_pre_flights "$ROOT" "$KV_PERSIST_HOST" "$KV_PERSIST_PORT" \
+      "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}" "$IMAGE" \
+      "$(id -u)" "$(id -g)" "0" "${KVP_LAUNCH_MODE:-host}" || {
+        echo "ERROR: pre-flight failed -- refusing the delegated launch (nothing was started)" >&2
+        exit 1
+      }
+
     echo "KVP_ENGINE=recipe: launching the hardware-verified recipe launcher"
     echo "  container: $CONTAINER (recorded in live/engine_container)"
     echo "  KV_CACHE_DTYPE=$KV_CACHE_DTYPE (pinned; auto would resolve identically for MiMo)"

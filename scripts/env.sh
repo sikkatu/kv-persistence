@@ -465,6 +465,82 @@ _kvp_seed_env_file(){
   return 0
 }
 
+# _kvp_pre_flights <kv-repo-root> <host> <port> <cache-root> <image> <uid> <gid> <same-uid> <launch-mode>
+# Round 77 (review): the mp_ping RPC probe and the CUDA IPC boundary test were
+# wired ONLY into the kv launcher -- after the default switches to
+# KVP_ENGINE=recipe they would silently disappear (the round-76 config-check
+# defect all over again). One shared function, called from BOTH engine paths.
+# Fails (return 1) on a dead RPC channel or a broken IPC boundary, with the
+# honest fix text: the boundary is between the cache server and the container;
+# run the server in the container (KVP_LAUNCH_MODE=docker) or as the engine UID.
+_kvp_pre_flights(){
+  local _root="$1" _host="$2" _port="$3" _croot="$4" _image="$5"
+  local _uid="${6:-}" _gid="${7:-}" _same="${8:-0}" _mode="${9:-host}"
+  local _ping_out _ping_rc=0 _ipc_mode _ipc_pidf _ipc_pid _ipc_uid _ipc_pu
+  # (a) lmcache RPC probe -- an open TCP port does not prove the RequestClient
+  # protocol register_kv_caches rides. Exit 3 = lmcache not importable (honest
+  # skip: the system python lacks it; use the venv python for a real probe).
+  if [ -d "$_root/implementation" ]; then
+    _ping_out="$(PYTHONPATH="$_root/implementation" python3 -m kvpersist.mp_ping "$_host" "$_port" 10 2>&1)" || _ping_rc=$?
+    case "$_ping_rc" in
+      0)
+        echo "  $_ping_out" ;;
+      3)
+        echo "  $_ping_out"
+        echo "  NOTE: lmcache not importable on the host python -- protocol ping skipped" ;;
+      *)
+        echo "ERROR: the cache server did not answer the RPC ping (register_kv_caches would hang):" >&2
+        echo "  $_ping_out" >&2
+        echo "  The server accepted TCP on $_host:$_port but its RPC channel is dead." >&2
+        echo "  Fix: restart the cache service (bash scripts/stop-cache.sh && bash scripts/start-cache.sh)" >&2
+        echo "       and check its log: tail -40 ${_croot}/lmcache-server.log" >&2
+        return 1 ;;
+    esac
+  fi
+  # (b) CUDA IPC boundary -- the EXACT step that killed register_kv_cache
+  # (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle). The consumer must match
+  # the SERVER PROCESS user; a root server needs the host-root consumer.
+  if [ "${KVP_SKIP_IPC_TEST:-0}" = "1" ]; then
+    echo "pre-flight: CUDA IPC test SKIPPED (KVP_SKIP_IPC_TEST=1)"
+    return 0
+  fi
+  if [ ! -x "$_root/scripts/ipc-test.sh" ]; then
+    echo "NOTE: scripts/ipc-test.sh not found -- CUDA IPC boundary test skipped"
+    return 0
+  fi
+  _ipc_mode=host
+  _ipc_pidf="$_croot/lmcache-server.pid"
+  if [ -f "$_ipc_pidf" ]; then
+    _ipc_pid="$(tr -d '[:space:]' < "$_ipc_pidf")"
+    _ipc_uid="$(awk '/^Uid:/{print $2}' "/proc/$_ipc_pid/status" 2>/dev/null || echo '')"
+    if [ "$_ipc_uid" = "0" ]; then _ipc_mode=host-root; fi
+  fi
+  if [ "$_mode" = "docker" ]; then _ipc_mode=container; fi
+  echo "pre-flight: CUDA IPC boundary test (consumer=$_ipc_mode) -- can the cache"
+  echo "            server open GPU memory created in the container? (~1 min)"
+  _ipc_pu=""
+  if [ "$_same" = "1" ] && [ -n "$_uid" ]; then _ipc_pu="$_uid:$_gid"; fi
+  if IMAGE="$_image" CONSUMER="$_ipc_mode" PRODUCER_USER="$_ipc_pu" bash "$_root/scripts/ipc-test.sh"; then
+    echo "pre-flight: CUDA IPC boundary OK (consumer=$_ipc_mode${_ipc_pu:+, producer UID=$_ipc_pu})"
+  else
+    echo "ERROR: CUDA IPC BOUNDARY FAILED (pre-flight): the cache server cannot open" >&2
+    echo "GPU memory created in the container -- this is the EXACT step that killed" >&2
+    echo "register_kv_cache (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle)." >&2
+    echo "The model load would waste ~15 min and fail the same way. Fix the boundary FIRST:" >&2
+    echo "  - run the cache server in the container (same environment as the engine):" >&2
+    echo "      KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
+    echo "    then rerun with KVP_LAUNCH_MODE=docker so this test uses the container consumer;" >&2
+    echo "  - or run the cache server as the engine UID (KVP_SAME_UID=1), so both" >&2
+    echo "    sides of the IPC boundary share one uid." >&2
+    echo "Isolate the blocker: CONSUMER=host-root vs CONSUMER=container in ipc-test.sh." >&2
+    echo "NOTE: a pre-flight catches a dead channel at start -- it cannot catch a" >&2
+    echo "server that dies MID-load; the launcher still fail-fasts on server errors." >&2
+    echo "To bypass this check: KVP_SKIP_IPC_TEST=1 (NOT recommended -- the failure returns)." >&2
+    return 1
+  fi
+  return 0
+}
+
 _kvp_load_env(){ # _kvp_load_env <repo root>
   local root="$1"
   # Remember whether LMCACHE_L2_SERDE / KVP_L2_SERDE were pre-exported in the

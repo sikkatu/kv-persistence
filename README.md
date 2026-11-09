@@ -126,6 +126,10 @@ container-name record (`live/engine_container`, written by each launch, so
 pins `KV_CACHE_DTYPE=bfloat16` (the recipe default `auto` resolves to the
 model dtype -- the SAME cache namespace, verified behaviourally). The
 default is NOT switched until a hardware run confirms the recipe path.
+Both paths run the same pre-flights before the model load (round 77): the
+lmcache RPC probe (`mp_ping`) and the CUDA IPC boundary test (`ipc-test.sh`)
+-- a broken channel or boundary refuses the launch in seconds instead of
+dying after a ~15-minute model load.
 
 The cache namespace is normally derived from the identity config (the
 model-separation guard). The `KVP_MODEL_NAME` override exists only for

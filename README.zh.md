@@ -106,6 +106,9 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 停止的正是已启动的容器）。委托固定 `KV_CACHE_DTYPE=bfloat16`（recipe 的默认
 `auto` 解析为模型 dtype——相同的缓存 namespace，经行为验证）。在硬件运行
 确认 recipe 路径之前不切换默认值。
+两条路径在模型加载前运行相同的预检（第 77 轮）：lmcache RPC 探测（`mp_ping`）
+和 CUDA IPC 边界测试（`ipc-test.sh`）——损坏的通道或边界会在几秒内拒绝启动，
+而不是在约 15 分钟的模型加载后才失败。
 
 缓存 namespace 通常由身份配置派生（模型隔离的保护）。`KVP_MODEL_NAME`
 覆盖仅为 parity 测试而存在，且需要显式同意：
