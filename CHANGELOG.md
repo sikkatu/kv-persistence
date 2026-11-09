@@ -11,6 +11,24 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 78 (CONTAINER= override, API_KEY canonical-file contract, honest parity, full exit-code chain)
+* `CONTAINER=` from the environment was IGNORED on the recipe path
+  (start-all.sh overwrote it with the default). Priority now:
+  `CONTAINER` > `KVP_ENGINE_CONTAINER` > default -- the effective name is
+  recorded in `live/engine_container` and exported to the recipe launcher.
+* `API_KEY` split-brain fixed in `run-tp4-hotsplit.sh`: the env key was used
+  for the run while `~/.config/kvp/api_key` kept the OLD key (and `live/api_key`
+  mirrored the NEW one) -- two different keys at once. Contract (same as the kv
+  launcher): the canonical file is the source of truth; an explicit env
+  `API_KEY` WINS and is SAVED there with a loud WARNING.
+* The full-parity test compared docker-run tokens with `set()` -- duplicate
+  flags/mounts and multiplicity were invisible. Now Counter (multiset)
+  comparison + duplicate single-use flag detection + mount targets as a
+  multiset (flag ORDER is honestly out of scope: the two launchers build the
+  command in different order and docker ignores it).
+* The exit code is now verified through the FULL chain (`kvp up` -> `exec` ->
+  `start-all.sh` -> foreground recipe) with an arbitrary non-zero code, not
+  just exit 1 via start-all.sh.
 ## Round 77 (shared pre-flights on both engine paths, honest ipc-test labels)
 * The lmcache RPC probe (`mp_ping`) and the CUDA IPC boundary test
   (`ipc-test.sh`) were wired ONLY into the kv launcher -- the delegated
@@ -60,18 +78,4 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   `KVP_ALLOW_NAMESPACE_OVERRIDE=1` an inherited `KVP_MODEL_NAME` is IGNORED
   with a loud WARNING (the identity-derived name wins); with the flag the
   override applies, still with a WARNING.
-## Round 74 (hardware run, step 1: NUMA_MAP validator + honest promotion NOTE)
-* HOTSPLIT_NUMA_MAP validator rejected the CORRECT value (hardware-run
-  blocker): the regex demanded `node:cpu,cpu;node:cpu`
-  ('0:0,1,2,3;1:4,5,6,7') while the real consumer
-  (`patches/numa_bind.py map_from_env`) parses `gpu:node` pairs joined by
-  commas -- exactly the format `tp4.env.example` documents
-  ('0:0,1:0,2:1,3:1'). A correct map aborted the launch with "nothing was
-  started". The validator now accepts the real format (strictly) and the
-  error message shows it. Regression test added.
-* The promotion NOTE lied about `auto`: "engine, namespace and gate will
-  all use KV_CACHE_DTYPE=auto" is misleading -- `auto` resolves to the
-  MODEL's dtype from config.json BEFORE the engine starts and BEFORE the
-  namespace is hashed (for a bf16 model it equals the pinned bfloat16 --
-  the SAME cache namespace). The NOTE now explains the resolution.
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

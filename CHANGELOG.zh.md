@@ -10,6 +10,20 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 78 轮（CONTAINER= 覆盖、API_KEY 规范文件契约、诚实的 parity、完整 exit-code 链）
+* 环境中的 `CONTAINER=` 在 recipe 路径上被忽略（start-all.sh 用默认值覆盖它）。
+  现在的优先级：`CONTAINER` > `KVP_ENGINE_CONTAINER` > 默认值——生效名称写入
+  `live/engine_container` 并导出给 recipe 启动器。
+* 修复 `run-tp4-hotsplit.sh` 中的 `API_KEY` 脑裂：env 密钥用于启动，而
+  `~/.config/kvp/api_key` 仍保存旧密钥（`live/api_key` 镜像新密钥）——同时存在
+  两个不同的密钥。契约（与 kv 路径相同）：规范文件是唯一事实来源；显式 env
+  `API_KEY` 胜出并带响亮 WARNING 保存到规范文件。
+* 全量 parity 测试曾用 `set()` 比较 docker-run 的 token——重复的标志/挂载和
+  次数都不可见。现在用 Counter（多重集）+ 单次使用标志的重复检测 + 挂载目标
+  多重集比较（标志的顺序诚实地不在范围内：两个启动器构建命令的顺序不同，
+  docker 会忽略它）。
+* exit-code 现在通过完整链（`kvp up` -> `exec` -> `start-all.sh` -> 前台 recipe）
+  用任意非零码验证，而不只是经 start-all.sh 的 exit 1。
 ## 第 77 轮（两条引擎路径共用预检、ipc-test 标签改为诚实）
 * lmcache RPC 探测（`mp_ping`）和 CUDA IPC 边界测试（`ipc-test.sh`）此前只接在
   kv 启动器里 —— 委派的配方路径（`KVP_ENGINE=recipe`）加载 130 个分片约 15 分钟，
@@ -50,15 +64,3 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   `KVP_ALLOW_NAMESPACE_OVERRIDE=1` 时继承的 `KVP_MODEL_NAME` 被忽略并
   打印醒目 WARNING（identity 派生名优先）；带标志时覆盖生效，仍打印
   WARNING。
-## 第 74 轮（硬件运行，步骤 1：NUMA_MAP 校验器 + 诚实的提升提示）
-* HOTSPLIT_NUMA_MAP 校验器拒绝了正确的值（硬件运行阻塞）：正则要求
-  `node:cpu,cpu;node:cpu`（'0:0,1,2,3;1:4,5,6,7'），而真正的消费方
-  （`patches/numa_bind.py map_from_env`）解析的是逗号分隔的 `gpu:node`
-  对——正是 `tp4.env.example` 记载的格式（'0:0,1:0,2:1,3:1'）。正确的映射
-  以 “nothing was started” 中止启动。校验器现在接受真实格式（严格），
-  错误信息也展示该格式。已添加回归测试。
-* 提升提示对 `auto` 说谎：“engine, namespace and gate will all use
-  KV_CACHE_DTYPE=auto” 有误导性——`auto` 在引擎启动之前、namespace 哈希
-  之前就从 config.json 解析为模型的 dtype（对 bf16 模型等于固定的
-  bfloat16——相同的缓存 namespace）。现在提示解释该解析过程。
-> 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

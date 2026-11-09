@@ -81,7 +81,11 @@ case "$KVP_ENGINE" in
     # container mimo-pro-tp4-hotsplit, the kv launcher mimo-pro-tp4-kvp.
     # Record the EFFECTIVE name in live/engine_container so stop-engine.sh,
     # stop-all.sh and kvp down/status/logs stop exactly what is started here.
-    KVP_ENGINE_CONTAINER="${KVP_ENGINE_CONTAINER:-mimo-pro-tp4-hotsplit}"
+    # Round 78 (review 1): CONTAINER= from the environment WINS -- the old
+    # code overwrote it with the KVP_ENGINE_CONTAINER default, so
+    # `CONTAINER=my-custom KVP_ENGINE=recipe` silently launched the wrong
+    # name. Priority: CONTAINER (explicit) > KVP_ENGINE_CONTAINER > default.
+    KVP_ENGINE_CONTAINER="${CONTAINER:-${KVP_ENGINE_CONTAINER:-mimo-pro-tp4-hotsplit}}"
     # Round 71 (review probe A): the SAME hot-bank default as the kv path --
     # an empty HOTSPLIT_HOT_GIB with full UVA offload plans an EMPTY hot set
     # ("the split is a no-op"); the split must not be silently disabled here.
@@ -89,6 +93,9 @@ case "$KVP_ENGINE" in
     [ -n "$HOTSPLIT_HOT_GIB" ] || { echo "ERROR: HOTSPLIT_HOT_GIB resolved empty -- refusing the delegated launch" >&2; exit 1; }
     mkdir -p "$ROOT/live"
     printf '%s\n' "$KVP_ENGINE_CONTAINER" > "$ROOT/live/engine_container"
+    # Round 78: the same name goes to the recipe launcher (was exported as
+    # CONTAINER= below -- now the variable already carries the effective name).
+    export CONTAINER="$KVP_ENGINE_CONTAINER"
 
     # ---- ONE key source (checklist + review probe C): the shared ensure step
     # (env.sh) generates the key for a fresh machine exactly like the kv path
@@ -114,8 +121,6 @@ case "$KVP_ENGINE" in
     export KV_PERSIST=1
     export KV_PERSIST_HOST="${KV_PERSIST_HOST:-${LMCACHE_HOST:-127.0.0.1}}"
     export KV_PERSIST_PORT="${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}"
-    export CONTAINER="$KVP_ENGINE_CONTAINER"
-
     # Round 77 (review): resolve the pinned image the same way the kv launcher
     # does (live/image) -- ipc-test.sh needs it.
     if [ -z "${IMAGE:-}" ] && [ -f "$ROOT/live/image" ]; then
