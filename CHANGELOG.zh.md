@@ -10,6 +10,20 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 73 轮（namespace 覆盖需同意、HOT_GIB 等值比较、dtype 负例）
+* 安全（审阅）：环境变量 `KVP_MODEL_NAME` 与 recipe 的
+  `KV_PERSIST_NAMESPACE` 同为逃生口，但随手 export 会把缓存静默转移到
+  外来 namespace——而 namespace 正是模型隔离的保护。现在覆盖需要显式同意
+  （`KVP_ALLOW_NAMESPACE_OVERRIDE=1`），并且无论实际使用还是未同意值被
+  忽略（identity 派生名优先）都会打印醒目 WARNING。测试会传入同意标志
+  ——钩子就是为此存在的。
+* HOTSPLIT_HOT_GIB 在两条路径上按等值比较（审阅：此前它被列入允许差异
+  ——recipe 默认值可能悄悄漂移）。parity 测试复现委托部署（一次共享
+  export），断言两个 docker run 携带相同值（30）。
+* dtype 测试现在描述负例边界（审阅）：当 `config.json` 未声明 dtype
+  （无 `torch_dtype`、无 `dtype`）时 `auto` 无法解析——保持 `auto`，哈希出
+  与固定 `bfloat16` 不同的 namespace。这是安全的缓存未命中，绝非错误读取；
+  该固定仅对声明了 dtype 的模型是 no-op。
 ## 第 72 轮（行为级 dtype 测试、带 allowlist 的完整持久化 parity）
 * KV_CACHE_DTYPE——替换本身（审阅：旧测试只检查注释）：
   `tests/test_engine_delegation.py` 现在对伪造 `config.json`
@@ -43,28 +57,4 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   非 loopback 绑定始终要求显式密钥。
 * 审阅者的探针文件 `test_review_round70_probes.py`（测试 A/B/C）
   已纳入 recipes 测试集，针对这些修复全部通过。
-## 第 70 轮（委托：KVP_ENGINE=recipe，默认关闭）
-
-* 一个引擎启动，两条路径：`start-all.sh` 现在支持 `KVP_ENGINE`
-  （`kv` — kv 启动器，默认；`recipe` — 经硬件验证的
-  `run-tp4-hotsplit.sh`，带 KV_PERSIST=1）。默认关闭，旧引擎代码在硬件
-  运行确认 recipe 路径之前不受影响——完全符合审阅要求。
-* 审阅者的步骤 2 清单，全部接入并测试：
-  * 没有标志时行为不变（docker run 契约快照固定行为；默认路径测试断言
-    运行的是 kv 启动器）；
-  * 单一容器名：`start-all` 将有效名称记录到
-    `live/engine_container`；`stop-engine.sh`（kvp down / stop-all.sh）
-    和 `kvp logs/status` 读取它——停止的正是启动的那个（recipe 将容器
-    命名为 mimo-pro-tp4-hotsplit，kv 启动器为 mimo-pro-tp4-kvp）；
-  * 单一密钥来源：共享的 `~/.config/kvp/api_key` 以 API_KEY 导出到
-    环境变量——绝不进入 argv——recipe 启动器复用它且不会生成第二个；
-  * KV_CACHE_DTYPE：固定为 bfloat16（recipe 默认 auto）。差异在测试中
-    明确展示，绝不被规范化隐藏；identity 哈希考虑 dtype（每种 dtype
-    -> 独立命名空间；auto->bfloat16 解析契约在启动器源码中断言）；
-  * 退出码：recipe 启动器在前台运行——它的 exit 1（激活检查）原样传到
-    start-all.sh / kvp up（已测试：缺少标记 -> exit 1）。
-* `tests/test_engine_delegation.py`（6 个测试）覆盖清单；强制的
-  identity-gate 被桩替换（与 test_kv_persist_behaviour 相同的装置）——
-  真正的 identity 属于 kv-persistence 的领域。
-
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

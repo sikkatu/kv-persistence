@@ -127,6 +127,13 @@ pins `KV_CACHE_DTYPE=bfloat16` (the recipe default `auto` resolves to the
 model dtype -- the SAME cache namespace, verified behaviourally). The
 default is NOT switched until a hardware run confirms the recipe path.
 
+The cache namespace is normally derived from the identity config (the
+model-separation guard). The `KVP_MODEL_NAME` override exists only for
+parity testing and requires EXPLICIT consent:
+`KVP_ALLOW_NAMESPACE_OVERRIDE=1 KVP_MODEL_NAME=<ns>` -- and it prints a
+WARNING both when used and when an un-consented value is ignored. A random
+export of `KVP_MODEL_NAME` alone changes NOTHING.
+
 ## Lossless persistence
 
 The L2 tier is **lossless only**. KV blocks on NVMe are always decoded back to

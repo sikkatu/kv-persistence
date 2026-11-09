@@ -511,8 +511,27 @@ if [ "$PERSIST" = "true" ]; then
   # the recipe KV_PERSIST=1 branch.
   # Round 72 (review parity): KVP_MODEL_NAME from the environment is honoured
   # -- the exact analogue of the recipe's KV_PERSIST_NAMESPACE escape hatch,
-  # so both launchers can be compared under ONE pinned namespace. An explicit
-  # override is an operator decision (documented escape hatch), not a default.
+  # so both launchers can be compared under ONE pinned namespace.
+  # Round 73 (review SECURITY): a namespace override silently redirects the
+  # cache to a FOREIGN namespace -- the namespace IS the model-separation
+  # guard. The override therefore requires EXPLICIT consent
+  # (KVP_ALLOW_NAMESPACE_OVERRIDE=1) and prints a loud WARNING, exactly like
+  # the recipe's KV_PERSIST_NAMESPACE contract. Without the consent variable
+  # an inherited KVP_MODEL_NAME is IGNORED (identity-derived name wins).
+  if [ -n "${KVP_MODEL_NAME:-}" ]; then
+    if [ "${KVP_ALLOW_NAMESPACE_OVERRIDE:-0}" != "1" ]; then
+      echo "WARNING: KVP_MODEL_NAME is set but KVP_ALLOW_NAMESPACE_OVERRIDE=1 is missing -- IGNORED." >&2
+      echo "         The cache namespace is derived from the identity config (model separation)." >&2
+      echo "         To override it DELIBERATELY (unsafe unless you know why):" >&2
+      echo "           KVP_ALLOW_NAMESPACE_OVERRIDE=1 KVP_MODEL_NAME=<ns> bash scripts/run-vllm-with-persist.sh" >&2
+      unset KVP_MODEL_NAME
+    else
+      echo "WARNING: cache namespace OVERRIDDEN by KVP_MODEL_NAME=$KVP_MODEL_NAME (KVP_ALLOW_NAMESPACE_OVERRIDE=1)." >&2
+      echo "         The engine will share cache blocks with EVERY deployment using this namespace." >&2
+      echo "         A wrong override risks reading another model's KV. Unset both variables to return" >&2
+      echo "         to the identity-derived namespace." >&2
+    fi
+  fi
   if [ -z "${KVP_MODEL_NAME:-}" ]; then
     KVP_MODEL_NAME="$(python3 -m kvpersist.cli model-name ${KVP_TENANT_DISCRIMINATOR:+--discriminator "$KVP_TENANT_DISCRIMINATOR"})" \
       || die "cannot derive LMCache model_name from the identity config"

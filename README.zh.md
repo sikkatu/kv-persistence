@@ -106,6 +106,11 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 停止的正是已启动的容器）。委托固定 `KV_CACHE_DTYPE=bfloat16`（recipe 的默认
 `auto` 解析为模型 dtype——相同的缓存 namespace，经行为验证）。在硬件运行
 确认 recipe 路径之前不切换默认值。
+
+缓存 namespace 通常由身份配置派生（模型隔离的保护）。`KVP_MODEL_NAME`
+覆盖仅为 parity 测试而存在，且需要显式同意：
+`KVP_ALLOW_NAMESPACE_OVERRIDE=1 KVP_MODEL_NAME=<ns>`——使用时和未同意值被
+忽略时都会打印 WARNING。仅随手 export `KVP_MODEL_NAME` 不会改变任何东西。
 ## 无损持久化
 L2 层**只支持无损**。NVMe 上的 KV 块始终被解码为引擎产生的原始字节：项目中
 不存在 fp8 / turboquant / lbq 量化，任何此类编解码在启动时都会被明确拒绝。
