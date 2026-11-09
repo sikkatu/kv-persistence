@@ -11,6 +11,22 @@ WF = ROOT / ".github" / "workflows" / "check.yml"
 def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
+def _read_module() -> str:
+    """The shared hotsplit_env.sh (CI layout first, then developer paths) --
+    the same resolution test_round56_key_hotsplit.py uses."""
+    candidates = [
+        ROOT.parent / "recipes" / "recipes" / "rtx-pro-6000" /
+        "mimo-v2.6-pro-hotsplit" / "scripts" / "hotsplit_env.sh",
+        ROOT / "recipes" / "recipes" / "rtx-pro-6000" /
+        "mimo-v2.6-pro-hotsplit" / "scripts" / "hotsplit_env.sh",
+        Path.home() / "sikkatu-recipes" / "recipes" / "rtx-pro-6000" /
+        "mimo-v2.6-pro-hotsplit" / "scripts" / "hotsplit_env.sh",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c.read_text(encoding="utf-8")
+    raise FileNotFoundError("hotsplit_env.sh not found in any known layout")
+
 
 def test_ci_checks_out_recipes_for_the_shared_module():
     """Round 60 (review): the kv-persistence CI must clone sikkatu/recipes so
@@ -52,10 +68,21 @@ def test_every_numeric_knob_is_validated_on_the_host():
     """Round 60 (review): validation before the model load must cover every
     numeric knob the shared module passes through -- a bad value must fail on
     the host, not inside the container after a 13-16 minute load."""
-    t = _read(LAUNCHER)
+    # Round 76: the checks live in the SHARED module (both launchers call
+    # _hotsplit_validate_config) -- read it there, and assert the launcher
+    # actually calls the shared function.
+    module = _read(ROOT.parent / "recipes" / "recipes" / "rtx-pro-6000" /
+                   "mimo-v2.6-pro-hotsplit" / "scripts" / "hotsplit_env.sh") \
+        if (ROOT.parent / "recipes").is_dir() else _read_module()
+    t = module
+    assert "_hotsplit_validate_config" in t, (
+        "the shared module must define _hotsplit_validate_config")
+    launcher = _read(LAUNCHER)
+    assert "_hotsplit_validate_config" in launcher, (
+        "the launcher must call the shared validation (checks must not live in one path only)")
     # ALL validation loops (integer + float; round 61 splits float GiB knobs out)
     loops = re.findall(r"for _kv in ([^;]+?); do", t, re.S)
-    assert loops, "the launcher must have knob validation loops"
+    assert loops, "the shared module must have knob validation loops"
     covered = set()
     for m in loops:
         covered.update(m.split())
@@ -64,5 +91,6 @@ def test_every_numeric_knob_is_validated_on_the_host():
                  "HOTSPLIT_DYN_MAX_PLAN_ERRORS", "HOTSPLIT_DYN_MAX_COMMIT_ERRORS",
                  "HOTSPLIT_VRAM_RESERVE_GIB", "HOTSPLIT_LIVE_SECS", "HOTSPLIT_HOST_FLOOR_GIB"):
         assert knob in covered, f"{knob} must be validated on the host before the model load"
-    # boolean normalization must exist (round 61): the recipe's normalize_bool contract
-    assert "normalize_bool" in t, "the launcher must normalize boolean knobs like the recipe"
+    # boolean normalization must exist (round 61): the recipe's normalize_bool
+    # contract -- it lives in the LAUNCHER (the shared module builds env args).
+    assert "normalize_bool" in launcher, "the launcher must normalize boolean knobs like the recipe"

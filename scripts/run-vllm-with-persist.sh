@@ -734,98 +734,16 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
   esac
 fi
 # Round 59 (review): validate the HotSplit config on the HOST, before the
-# 13-16 minute model load. A bad value that only explodes inside the container
-# wastes a full load cycle. Print the effective values once.
-if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
-  _hs_ok=1
-  if [ -n "${HOTSPLIT_HOT_GIB:-}" ]; then
-    case "$HOTSPLIT_HOT_GIB" in
-      *[!0-9]*|'') echo "ERROR: HOTSPLIT_HOT_GIB must be a whole number of GiB (e.g. 30), got '$HOTSPLIT_HOT_GIB'" >&2; _hs_ok=0 ;;
-    esac
-  fi
-  # Every numeric knob the shared module passes through. Round 60: TOPK,
-  # LIVE_DECODE_MAX, DYN_MAX_PLAN_ERRORS, DYN_MAX_COMMIT_ERRORS,
-  # VRAM_RESERVE_GIB and LIVE_SECS were NOT validated here before -- a wrong
-  # value failed only inside the container, after the 13-16 minute model load.
-  # (DYN_MAX_SWAPS was already covered; an older build was reviewed.)
-  # Round 61 (P2): HOST_FLOOR_GIB / VRAM_RESERVE_GIB are floats (GiB); the
-  # integer knobs carry ranges where 0 or negatives make no sense. These match
-  # the plan code's own _dyn_int/_dyn_float bounds, so a bad value fails on the
-  # HOST, not inside the container after the 13-16 minute model load.
-  for _kv in HOTSPLIT_HOST_FLOOR_GIB HOTSPLIT_VRAM_RESERVE_GIB; do
-    _val="${!_kv:-}"
-    if [ -n "$_val" ] && ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
-      echo "ERROR: $_kv must be a non-negative number of GiB (e.g. 128), got '$_val'" >&2
-      _hs_ok=0
-    fi
-  done
-  for _kv in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_TOPK \
-             HOTSPLIT_LIVE_DECODE_MAX HOTSPLIT_DYN_MAX_PLAN_ERRORS \
-             HOTSPLIT_DYN_MAX_COMMIT_ERRORS HOTSPLIT_LIVE_SECS \
-             HOTSPLIT_MAX_TOKENS HOTSPLIT_DYN_PRIOR_TOKENS; do
-    _val="${!_kv:-}"
-    if [ -n "$_val" ]; then
-      case "$_val" in
-        *[!0-9]*|'') echo "ERROR: $_kv must be a non-negative integer, got '$_val'" >&2; _hs_ok=0 ;;
-        0)
-          case "$_kv" in
-            HOTSPLIT_MAX_TOKENS|HOTSPLIT_DYN_PRIOR_TOKENS) : ;;   # 0 is legal (means "unlimited"/"no prior")
-            *) echo "ERROR: $_kv must be >= 1, got 0" >&2; _hs_ok=0 ;;
-          esac ;;
-      esac
-    fi
-  done
-  # plan-code upper bound (hotsplit.py _dyn_int("HOTSPLIT_DYN_MAX_SWAPS", lo=1, hi=1024))
-  if [ -n "${HOTSPLIT_DYN_MAX_SWAPS:-}" ] && [ "${HOTSPLIT_DYN_MAX_SWAPS}" -gt 1024 ] 2>/dev/null; then
-    echo "ERROR: HOTSPLIT_DYN_MAX_SWAPS must be 1..1024, got '$HOTSPLIT_DYN_MAX_SWAPS'" >&2
-    _hs_ok=0
-  fi
-  # Round 62 (review): these floats carry REAL ranges in the plan code
-  # (hotsplit.py _dyn_float): DYN_DECAY is 0.0..1.0 (routing share decay),
-  # DYN_MARGIN is >= 1.0 (hot-bank admission margin). A bare "is a number"
-  # check let DYN_DECAY=2 / DYN_MARGIN=0.5 through here and the container
-  # rejected them AFTER the model load -- enforce the ranges on the host.
-  # Range checks in pure bash (no external tools, no fail-open): the integer
-  # part decides (a fraction is always < 1). "1" and "1.0" are legal for both.
-  _val="${HOTSPLIT_DYN_DECAY:-}"
-  if [ -n "$_val" ]; then
-    if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
-      echo "ERROR: HOTSPLIT_DYN_DECAY must be a number in 0..1 (e.g. 0.5), got '$_val'" >&2; _hs_ok=0
-    else
-      _ip="${_val%%.*}"
-      _fp=""; case "$_val" in *.*) _fp="${_val#*.}" ;; esac
-      _ipn=$((10#${_ip:-0}))
-      if [ "$_ipn" -gt 1 ] || { [ "$_ipn" -eq 1 ] && [ -n "$_fp" ] && [ -n "${_fp//0/}" ]; }; then
-        echo "ERROR: HOTSPLIT_DYN_DECAY must be in 0..1 (hotsplit.py range), got '$_val'" >&2; _hs_ok=0
-      fi
-    fi
-  fi
-  _val="${HOTSPLIT_DYN_MARGIN:-}"
-  if [ -n "$_val" ]; then
-    if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
-      echo "ERROR: HOTSPLIT_DYN_MARGIN must be a number >= 1 (e.g. 1.25), got '$_val'" >&2; _hs_ok=0
-    else
-      _ip="${_val%%.*}"
-      _ipn=$((10#${_ip:-0}))
-      if [ "$_ipn" -lt 1 ]; then
-        echo "ERROR: HOTSPLIT_DYN_MARGIN must be >= 1 (hotsplit.py range), got '$_val'" >&2; _hs_ok=0
-      fi
-    fi
-  fi
-  if [ "${HOTSPLIT_NUMA:-1}" = "1" ] && [ -n "${HOTSPLIT_NUMA_MAP:-}" ]; then
-    # Round 74 (hardware run): the format is `gpu:node` pairs joined by
-    # COMMAS -- exactly what patches/numa_bind.py map_from_env() parses and
-    # what tp4.env.example documents ('0:0,1:0,2:1,3:1'). The old regex
-    # demanded a `node:cpu,cpu;node:cpu` format that nothing parses and
-    # rejected the CORRECT value (launch aborted on a VM).
-    if ! printf '%s' "$HOTSPLIT_NUMA_MAP" | grep -Eq '^[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*$'; then
-      echo "ERROR: HOTSPLIT_NUMA_MAP must look like '0:0,1:0,2:1,3:1' (gpu:node pairs, comma-separated), got '$HOTSPLIT_NUMA_MAP'" >&2
-      echo "       (see tp4.env.example -- HOTSPLIT_NUMA_MAP; confirm the map with: numactl --hardware)" >&2
-      _hs_ok=0
-    fi
-  fi
-  [ "$_hs_ok" = "1" ] || die "HotSplit configuration is invalid -- fix the values above and rerun (nothing was started)."
-  echo "hotsplit config OK: HOT_GIB=${HOTSPLIT_HOT_GIB:-stock} DYN_STEPS=${HOTSPLIT_DYN_STEPS:-default} NUMA=${HOTSPLIT_NUMA:-1}${HOTSPLIT_NUMA_MAP:+ map=$HOTSPLIT_NUMA_MAP}"
+# 13-16 minute model load. Round 76 (review): the checks live in the SHARED
+# module (scripts/hotsplit_env.sh _hotsplit_validate_config) so the recipe
+# launcher runs the SAME validation -- a check that only one engine path has
+# is a check the switch will silently delete. Includes the NUMA_MAP TP
+# coverage check (every GPU rank 0..TP-1 needs an entry). The function exists
+# only when hotsplit_env.sh was sourced (the MiMo branch above) -- guard the
+# call so a non-MiMo config does not hit "command not found".
+if [ "${KVP_HOTSPLIT:-1}" = "1" ] && type _hotsplit_validate_config >/dev/null 2>&1; then
+  _hotsplit_validate_config "${TP_SIZE:-4}" \
+    || die "HotSplit configuration is invalid -- fix the values above and rerun (nothing was started)."
 fi
 
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -994,7 +912,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       _hs_log="$(docker logs "$CONTAINER" 2>&1 || true)"
       _hs_fail=0
       check_marker() {
-        if printf '%s' "$_hs_log" | grep -qF "$2"; then
+        if grep -qF -- "$2" <<<"$_hs_log"; then
           echo "  [ok] $1 -- $3"
         else
           echo "  [MISSING] $1 -- $3" >&2
@@ -1019,15 +937,15 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       if [ "${HOTSPLIT_NUMA:-1}" = "1" ]; then
         check_marker "numa hook" "HOOK STATUS numa_bind=ACTIVE" "NUMA binding installed (review 63: on a VM HOTSPLIT_NUMA_MAP is required)"
       fi
-      if printf '%s' "$_hs_log" | grep -q "no eligible MXFP4 MoE layers found"; then
+      if grep -q -- "no eligible MXFP4 MoE layers found" <<<"$_hs_log"; then
         echo "  [ERROR] no MoE layers were split -- the hot bank would be empty" >&2
         _hs_fail=1
       fi
-      if [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ] && printf '%s' "$_hs_log" | grep -q "live snapshot failed"; then
+      if [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ] && grep -q -- "live snapshot failed" <<<"$_hs_log"; then
         echo "  [ERROR] live counter snapshots are failing (is /live mounted and writable?)" >&2
         _hs_fail=1
       fi
-      if printf '%s' "$_hs_log" | grep -qE "commit failed|rollback ALSO failed"; then
+      if grep -qE -- "commit failed|rollback ALSO failed" <<<"$_hs_log"; then
         echo "  [ERROR] hotsplit transaction errors in the engine log" >&2
         _hs_fail=1
       fi

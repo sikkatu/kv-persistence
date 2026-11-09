@@ -66,11 +66,15 @@ def test_numa_map_validator_accepts_the_real_format():
     demanded `node:cpu,cpu;...` and rejected the correct map, aborting the
     launch on a VM."""
     import re
-    t = _read("run-vllm-with-persist.sh")
-    # find the NUMA_MAP validator block specifically (there may be other
-    # grep -Eq calls in the file)
-    block = re.search(r"NUMA_MAP:-.*?grep -Eq '([^']+)'", t, re.S)
-    assert block, "the NUMA_MAP validator regex not found"
+    # Round 76: the validator lives in the SHARED module (both launchers run
+    # _hotsplit_validate_config); the launcher only calls it.
+    t = _read_module()
+    assert "_hotsplit_validate_config" in t, (
+        "the shared module must define _hotsplit_validate_config")
+    # anchor to the NUMA_MAP grep itself (a bare NUMA_MAP:- prefix would
+    # capture the float-knob regex from the ENVS array further up)
+    block = re.search(r'"\$HOTSPLIT_NUMA_MAP" \| grep -Eq .([^\"\x27]+).', t)
+    assert block, "the NUMA_MAP validator regex not found in the shared module"
     pat = re.compile(block.group(1))
     # accepted: the real format (one entry per GPU: gpu:node, comma-joined)
     for good in ("0:0", "0:0,1:0", "0:0,1:0,2:1,3:1", "3:1"):
