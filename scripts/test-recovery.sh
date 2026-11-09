@@ -38,7 +38,20 @@ trap 'rm -f "$_kvp_curl_header"' EXIT   # round 65: never leave key files in /tm
 umask 077; printf 'header = "Authorization: Bearer %s"\n' "$KEY" > "$_kvp_curl_header"; chmod 600 "$_kvp_curl_header"
 
 [ -n "$KEY" ] || PA pre "API_KEY unavailable (live/api_key)"
+CONTAINER="${CONTAINER:-}"
+# Round 78 follow-up (user finding, same defect class as probe B of round 71):
+# the effective engine container is recorded in live/engine_container by
+# start-all.sh (BOTH engine paths) -- hardcoding mimo-pro-tp4-kvp made this
+# script abort with "container ... is 'exited'" while the ACTUAL engine
+# (mimo-pro-tp4-hotsplit, the recipe path) was running fine. Same resolution
+# contract as stop-engine.sh: explicit CONTAINER= wins, then the record, then
+# the kv launcher's default.
+if [ -z "$CONTAINER" ] && [ -f "$ROOT/live/engine_container" ]; then
+  CONTAINER="$(head -n1 "$ROOT/live/engine_container" | tr -d '[:space:]')"
+fi
 CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"
+# The inline Python diagnostics read CONTAINER from the environment.
+export CONTAINER
 # Review fix: the served model name is deployment-specific, not a project
 # constant. Default matches the reference MiMo launcher (SERVED_MODEL_NAME).
 # EXPORTED: the ask() heredoc is shell-quoted (no expansion), so the Python
