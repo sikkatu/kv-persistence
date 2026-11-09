@@ -134,6 +134,12 @@ parity testing and requires EXPLICIT consent:
 WARNING both when used and when an un-consented value is ignored. A random
 export of `KVP_MODEL_NAME` alone changes NOTHING.
 
+For a VM where /sys reports `numa_node=-1`, the NUMA binding needs an
+explicit GPU→node map: `HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1"` -- `gpu:node`
+pairs joined by commas (the format `patches/numa_bind.py` parses and
+`tp4.env.example` documents). Confirm the topology first with
+`numactl --hardware`.
+
 ## Lossless persistence
 
 The L2 tier is **lossless only**. KV blocks on NVMe are always decoded back to

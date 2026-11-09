@@ -111,6 +111,11 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 覆盖仅为 parity 测试而存在，且需要显式同意：
 `KVP_ALLOW_NAMESPACE_OVERRIDE=1 KVP_MODEL_NAME=<ns>`——使用时和未同意值被
 忽略时都会打印 WARNING。仅随手 export `KVP_MODEL_NAME` 不会改变任何东西。
+
+对于 /sys 报告 `numa_node=-1` 的 VM，NUMA 绑定需要显式的 GPU→node 映射：
+`HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1"`——逗号分隔的 `gpu:node` 对（即
+`patches/numa_bind.py` 解析、`tp4.env.example` 记载的格式）。请先用
+`numactl --hardware` 确认拓扑。
 ## 无损持久化
 L2 层**只支持无损**。NVMe 上的 KV 块始终被解码为引擎产生的原始字节：项目中
 不存在 fp8 / turboquant / lbq 量化，任何此类编解码在启动时都会被明确拒绝。

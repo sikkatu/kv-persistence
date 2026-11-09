@@ -10,6 +10,17 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
 
 
+## 第 74 轮（硬件运行，步骤 1：NUMA_MAP 校验器 + 诚实的提升提示）
+* HOTSPLIT_NUMA_MAP 校验器拒绝了正确的值（硬件运行阻塞）：正则要求
+  `node:cpu,cpu;node:cpu`（'0:0,1,2,3;1:4,5,6,7'），而真正的消费方
+  （`patches/numa_bind.py map_from_env`）解析的是逗号分隔的 `gpu:node`
+  对——正是 `tp4.env.example` 记载的格式（'0:0,1:0,2:1,3:1'）。正确的映射
+  以 “nothing was started” 中止启动。校验器现在接受真实格式（严格），
+  错误信息也展示该格式。已添加回归测试。
+* 提升提示对 `auto` 说谎：“engine, namespace and gate will all use
+  KV_CACHE_DTYPE=auto” 有误导性——`auto` 在引擎启动之前、namespace 哈希
+  之前就从 config.json 解析为模型的 dtype（对 bf16 模型等于固定的
+  bfloat16——相同的缓存 namespace）。现在提示解释该解析过程。
 ## 第 73 轮（namespace 覆盖需同意、HOT_GIB 等值比较、dtype 负例）
 * 安全（审阅）：环境变量 `KVP_MODEL_NAME` 与 recipe 的
   `KV_PERSIST_NAMESPACE` 同为逃生口，但随手 export 会把缓存静默转移到
@@ -41,20 +52,4 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * kv 启动器支持环境变量 `KVP_MODEL_NAME`（recipe 的 `KV_PERSIST_NAMESPACE`
   的精确对应物）——两条路径在同一固定 namespace 下运行（parity 钩子）；
   显式覆盖始终是操作员的决定（已文档化的逃生口），绝不作为默认值。
-## 第 71 轮（委托缺陷：hot bank、engine_container 记录、首次启动密钥）
-* 委托路径不再静默禁用热专家（探针 A）：`HOTSPLIT_HOT_GIB` 在
-  `scripts/env.sh` 中只有一个默认值（30 GiB，`_kvp_hotsplit_hot_gib_default`），
-  两条引擎路径都取它；解析为空时 `start-all.sh` 拒绝启动。此前 kv 路径设 30，
-  而 recipe 路径什么都不传——recipe 启动器警告 “split is a no-op”，
-  并以空热集运行。
-* 唯一的容器名记录（探针 B）：两个分支都把有效名称写入
-  `live/engine_container`。此前 recipe 运行后接 kv 运行会留下旧名字——
-  `stop-engine.sh` / `kvp down|logs|status` 停错了容器，活着的 kv 引擎继续运行。
-* 全新机器的首次启动在两条路径上都生成密钥（探针 C）：生成契约
-  （`_kvp_gen_key` + `_kvp_ensure_api_key`）位于 `scripts/env.sh`，
-  由 kv 启动器和委托的 recipe 分支共同调用（recipe 路径此前以
-  “no API key found” 退出）。安全契约不变：自动生成仅限 loopback，
-  非 loopback 绑定始终要求显式密钥。
-* 审阅者的探针文件 `test_review_round70_probes.py`（测试 A/B/C）
-  已纳入 recipes 测试集，针对这些修复全部通过。
 > 较旧的轮次记录已于 2026-11-07 精简：完整修复历史见 `main` 分支的 git 日志。

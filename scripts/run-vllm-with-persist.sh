@@ -215,7 +215,17 @@ for _pair in "KV_CACHE_DTYPE:KVP_KV_CACHE_DTYPE" "MAX_MODEL_LEN:KVP_MAX_MODEL_LE
   if [ -n "${!_op:-}" ]; then
     if [ -n "${!_kp:-}" ] && [ "${!_kp}" != "${!_op}" ]; then
       echo "NOTE: $_op=${!_op} overrides the pinned $_kp=${!_kp} (identity.env)" >&2
-      echo "      engine, namespace and gate will all use $_op=${!_op}." >&2
+      if [ "$_op" = "KV_CACHE_DTYPE" ] && [ "${!_op}" = "auto" ]; then
+        # Round 74 (hardware run): `auto` is NOT used raw -- it resolves to
+        # the MODEL's dtype (config.json) BEFORE the engine starts and BEFORE
+        # the namespace is hashed. For a bf16 model the result equals the
+        # pinned bfloat16 -- the SAME cache namespace (safe cache reuse).
+        echo "      'auto' resolves to the model's dtype from config.json before the namespace is hashed;" >&2
+        echo "      for a bf16 model this equals the pinned bfloat16 -- the SAME cache namespace." >&2
+        echo "      The resolved value (not 'auto') is what the engine, namespace and gate use." >&2
+      else
+        echo "      engine, namespace and gate will all use $_op=${!_op}." >&2
+      fi
     fi
     export "$_kp=${!_op}"
   fi
@@ -803,8 +813,14 @@ if [ "${KVP_HOTSPLIT:-1}" = "1" ]; then
     fi
   fi
   if [ "${HOTSPLIT_NUMA:-1}" = "1" ] && [ -n "${HOTSPLIT_NUMA_MAP:-}" ]; then
-    if ! printf '%s' "$HOTSPLIT_NUMA_MAP" | grep -Eq '^[0-9]+:[0-9]+(,[0-9]+)*(;[0-9]+:[0-9]+(,[0-9]+)*)*$'; then
-      echo "ERROR: HOTSPLIT_NUMA_MAP must look like '0:0,1,2,3;1:4,5,6,7', got '$HOTSPLIT_NUMA_MAP'" >&2
+    # Round 74 (hardware run): the format is `gpu:node` pairs joined by
+    # COMMAS -- exactly what patches/numa_bind.py map_from_env() parses and
+    # what tp4.env.example documents ('0:0,1:0,2:1,3:1'). The old regex
+    # demanded a `node:cpu,cpu;node:cpu` format that nothing parses and
+    # rejected the CORRECT value (launch aborted on a VM).
+    if ! printf '%s' "$HOTSPLIT_NUMA_MAP" | grep -Eq '^[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*$'; then
+      echo "ERROR: HOTSPLIT_NUMA_MAP must look like '0:0,1:0,2:1,3:1' (gpu:node pairs, comma-separated), got '$HOTSPLIT_NUMA_MAP'" >&2
+      echo "       (see tp4.env.example -- HOTSPLIT_NUMA_MAP; confirm the map with: numactl --hardware)" >&2
       _hs_ok=0
     fi
   fi

@@ -59,6 +59,40 @@ def test_launcher_uses_the_shared_key():
     assert "_kvp_save_api_key" in e, "the shared library must save to the shared path"
 
 
+def test_numa_map_validator_accepts_the_real_format():
+    """Round 74 (hardware run blocker): the validator must accept the format
+    numa_bind.py actually parses -- `gpu:node` pairs joined by commas
+    ('0:0,1:0,2:1,3:1', the tp4.env.example documented value). The old regex
+    demanded `node:cpu,cpu;...` and rejected the correct map, aborting the
+    launch on a VM."""
+    import re
+    t = _read("run-vllm-with-persist.sh")
+    # find the NUMA_MAP validator block specifically (there may be other
+    # grep -Eq calls in the file)
+    block = re.search(r"NUMA_MAP:-.*?grep -Eq '([^']+)'", t, re.S)
+    assert block, "the NUMA_MAP validator regex not found"
+    pat = re.compile(block.group(1))
+    # accepted: the real format (one entry per GPU: gpu:node, comma-joined)
+    for good in ("0:0", "0:0,1:0", "0:0,1:0,2:1,3:1", "3:1"):
+        assert pat.match(good), f"the real NUMA_MAP format must pass: {good!r}"
+    # rejected: garbage and the WRONG old format (node:cpu lists)
+    for bad in ("", "0", "0:", ":1", "0:0,1:0,", "a:b", "0:0,1,2,3;1:4,5,6,7",
+                "0:0 1:0", "0:0;1:0"):
+        assert not pat.match(bad), f"malformed NUMA_MAP must NOT pass: {bad!r}"
+
+
+def test_promotion_note_explains_auto_resolution():
+    """Round 74 (hardware run): the promotion NOTE must NOT claim the raw
+    `auto` value is used -- `auto` resolves to the model dtype before the
+    namespace is hashed (the note said 'engine ... will all use
+    KV_CACHE_DTYPE=auto', misleading the operator)."""
+    t = _read("run-vllm-with-persist.sh")
+    assert "resolves to the model's dtype" in t, (
+        "the promotion NOTE must explain that `auto` resolves to the model dtype")
+    assert "will all use $_op=${!_op}" in t, (
+        "the generic promotion NOTE (non-auto pairs) must stay")
+
+
 # ---------------------------------------------------------------- hotsplit by default
 def test_launcher_mounts_hotsplit_machinery():
     t = _read("run-vllm-with-persist.sh")

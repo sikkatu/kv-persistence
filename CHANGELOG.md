@@ -11,6 +11,20 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
 
 
+## Round 74 (hardware run, step 1: NUMA_MAP validator + honest promotion NOTE)
+* HOTSPLIT_NUMA_MAP validator rejected the CORRECT value (hardware-run
+  blocker): the regex demanded `node:cpu,cpu;node:cpu`
+  ('0:0,1,2,3;1:4,5,6,7') while the real consumer
+  (`patches/numa_bind.py map_from_env`) parses `gpu:node` pairs joined by
+  commas -- exactly the format `tp4.env.example` documents
+  ('0:0,1:0,2:1,3:1'). A correct map aborted the launch with "nothing was
+  started". The validator now accepts the real format (strictly) and the
+  error message shows it. Regression test added.
+* The promotion NOTE lied about `auto`: "engine, namespace and gate will
+  all use KV_CACHE_DTYPE=auto" is misleading -- `auto` resolves to the
+  MODEL's dtype from config.json BEFORE the engine starts and BEFORE the
+  namespace is hashed (for a bf16 model it equals the pinned bfloat16 --
+  the SAME cache namespace). The NOTE now explains the resolution.
 ## Round 73 (namespace-override consent, HOT_GIB equality, negative dtype case)
 * SECURITY (review): `KVP_MODEL_NAME` from the environment is the same
   escape hatch as the recipe's `KV_PERSIST_NAMESPACE`, but a random export
@@ -50,24 +64,4 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   analogue of the recipe's `KV_PERSIST_NAMESPACE`) so both paths run under
   ONE pinned namespace -- the parity hook; an explicit override stays an
   operator decision (documented escape hatch), never a default.
-## Round 71 (delegation defects: hot bank, engine_container record, fresh-machine key)
-* The delegated path no longer silently disables the hot experts (review
-  probe A): `HOTSPLIT_HOT_GIB` has ONE default (30 GiB) in
-  `scripts/env.sh` (`_kvp_hotsplit_hot_gib_default`) taken by BOTH engine
-  paths, and `start-all.sh` refuses to launch when it resolves empty. The
-  kv path used to set 30 while the recipe path passed nothing -- the recipe
-  launcher warned "the split is a no-op" and ran with an EMPTY hot set.
-* ONE container-name record (review probe B): BOTH branches write the
-  effective name to `live/engine_container`. A recipe run followed by a kv
-  run used to leave the recipe name behind -- `stop-engine.sh` /
-  `kvp down|logs|status` stopped the wrong container and the live kv engine
-  kept running.
-* Fresh-machine first launch generates the key on BOTH paths (review probe
-  C): the generation contract (`_kvp_gen_key` + `_kvp_ensure_api_key`) lives
-  in `scripts/env.sh` and is called by the kv launcher AND the delegated
-  recipe branch (the recipe path used to die with "no API key found").
-  Security contract unchanged: auto-generation is loopback-only, a
-  non-loopback bind ALWAYS requires an explicit key.
-* The reviewer's probe file `test_review_round70_probes.py` (tests A/B/C) is
-  part of the recipes suite and passes against these fixes.
 > Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.
