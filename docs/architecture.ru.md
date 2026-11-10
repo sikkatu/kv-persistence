@@ -75,7 +75,7 @@ NVMe — до всяких GDS.
 | Ранжирование удержания | `implementation/kvpersist/retention.py` | нет |
 | lmcache-сервер + L2-адаптер | `configs/generic/*` | нет |
 | Пины идентичности и геометрия | `configs/<model>/identity.env` | да |
-| Лаунчер vLLM | `scripts/run-vllm-with-persist.sh` | да |
+| Лаунчер vLLM | `scripts/run-tp4-hotsplit.sh` | да |
 
 «Модельно-агностичный» означает, что механизм поддерживает несколько конфигураций —
 НЕ то, что их KV-данные взаимозаменяемы. Разные модели никогда не делят KV-блоки.

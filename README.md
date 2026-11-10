@@ -116,7 +116,7 @@ through either path:
 
 * `KVP_ENGINE=recipe` (DEFAULT) -- the recipe launcher
   (`run-tp4-hotsplit.sh` with `KV_PERSIST=1`);
-* the legacy kv launcher (`run-vllm-with-persist.sh`) was DELETED in
+* the legacy kv launcher (`run-tp4-hotsplit.sh`) was DELETED in
   round 80b -- `KVP_ENGINE=kv` fails with an honest error (nothing is lost:
   every shared check lives in `env.sh` / `hotsplit_env.sh`).
 

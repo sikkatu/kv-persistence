@@ -7,7 +7,7 @@
 ```bash
 bash scripts/budget-report.sh status        # 占用、命名空间、磁盘
 tail -n 100 "$KVP_CACHE_ROOT/lmcache-server.log"   # 缓存服务
-docker logs --tail 100 mimo-pro-tp4-kvp     # 引擎（kv-persistence 启动器）
+docker logs --tail 100 mimo-pro-tp4-hotsplit     # 引擎（kv-persistence 启动器）
 ```
 
 ## 预检报身份问题

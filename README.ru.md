@@ -78,7 +78,7 @@ bash scripts/start-all.sh              # ОДНА команда: монитор
 #   KVP_ENGINE=recipe  делегирует шаг движка аппаратно проверенному
 #   лаунчеру рецепта (sikkatu/recipes, KV_PERSIST=1) -- тот же стек одной
 #   командой. ДЕФОЛТ: KVP_ENGINE=recipe (аппаратно проверенный лаунчер).
-#   (или пошагово: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
+#   (или пошагово: start-observability.sh -> start-cache.sh -> run-tp4-hotsplit.sh)
 bash scripts/stop-all.sh                # остановить всё (данные сохраняются)
 
 API-ключ: ОДИН общий файл для обоих репо (`$HOME/.config/kvp/api_key`,
@@ -104,7 +104,7 @@ lossless zstd (отключение: `USE_LOSSLESS_SERDE=0`).
 
 * `KVP_ENGINE=recipe` (ДЕФОЛТ) -- аппаратно проверенный `run-tp4-hotsplit.sh` из
   `sikkatu/recipes` с `KV_PERSIST=1`, одной командой, без ручных шагов.
-* legacy kv-лаунчер (`run-vllm-with-persist.sh`) УДАЛЁН в раунде 80b --
+* legacy kv-лаунчер (`run-tp4-hotsplit.sh`) УДАЛЁН в раунде 80b --
   `KVP_ENGINE=kv` честно отказывает с ошибкой (ничего не потеряно: все
   общие проверки живут в `env.sh` / `hotsplit_env.sh`).
 

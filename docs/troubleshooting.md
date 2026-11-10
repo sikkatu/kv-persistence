@@ -6,7 +6,7 @@ Quick checks first:
 ```bash
 bash scripts/budget-report.sh status    # usage, namespaces, disk free
 tail -n 100 "$KVP_CACHE_ROOT/lmcache-server.log"   # cache service
-docker logs --tail 100 mimo-pro-tp4-kvp            # engine
+docker logs --tail 100 mimo-pro-tp4-hotsplit            # engine
 ```
 (`KVP_CACHE_ROOT` comes from `configs/generic/cache.env.local`, default
 `/var/lib/kv-persistence/l2`.)
@@ -48,12 +48,12 @@ same pinned image instead (`--entrypoint lmcache`), keeping the same arguments.
 ## Cache service starts but vLLM cannot connect (MP mode)
 
 Symptom: vLLM logs show connector errors / retries against port 5555.
-1. `bash scripts/start-cache.sh` must run BEFORE `run-vllm-with-persist.sh`
-   (the launcher refuses otherwise).
+1. `bash scripts/start-cache.sh` must run BEFORE the engine
+   (`bash scripts/start-all.sh` -- the launcher refuses otherwise).
 2. `grep -n "error\\|traceback" "$KVP_CACHE_ROOT/lmcache-server.log" | tail`.
 3. Both processes must share the same host network namespace — do not move the
    server to another port/host without updating both sides
-   (`lmcache.mp.host`/`lmcache.mp.port` in `run-vllm-with-persist.sh`).
+   (`lmcache.mp.host`/`lmcache.mp.port` in the engine launcher).
 
 ## No cache hit after vLLM restart (expected TTFT drop missing)
 

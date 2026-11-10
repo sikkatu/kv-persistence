@@ -14,12 +14,12 @@ Nothing here is claimed working without its marker.
 | vLLM commit | `8e2beaa3bff595577a069d49d96bde9074294ec2` (2026-10-21) | VERIFIED |
 | Python | 3.12 | VERIFIED |
 | `LMCacheMPConnector` in image | `kv_connector_module_path` supported | VERIFIED (source) |
-| LMCache | **0.5.6** (matches the pinned vLLM image; pinned in `requirements-lmcache.txt`) | VERIFIED (hardware 2026-11-07) |
-| MP-protocol fit (lmcache ↔ vLLM) | ZMQ request channel | VERIFIED (hardware 2026-11-07: register_kv_caches + API served) |
+| LMCache | **0.5.6** (matches the pinned vLLM image; pinned in `requirements-lmcache.txt`) | VERIFIED (hardware 2026-11-10) |
+| MP-protocol fit (lmcache ↔ vLLM) | ZMQ request channel | VERIFIED (hardware 2026-11-10: register_kv_caches + API served) |
 | L2 `cache_salt` isolation | **native in 0.5.6+** (`@`-suffix in the file name); our patch is a compat shim for pre-0.5.6 files | VERIFIED (source) |
-| L2 `nixl_store_dynamic` persistence | persist_enabled + lazy index rebuild | VERIFIED (hardware 2026-11-07: 90 MiB stored, read back after restart) |
-| Restore after vLLM restart | acceptance requirement | VERIFIED (hardware 2026-11-07, scenario A: cached_tokens=2560, ttft 0s) |
-| Restore after both restarts | acceptance requirement | VERIFIED (hardware 2026-11-07, scenario B: cached_tokens=2560, L2 read events=1) |
+| L2 `nixl_store_dynamic` persistence | persist_enabled + lazy index rebuild | VERIFIED (hardware 2026-11-10: 90 MiB stored, read back after restart) |
+| Restore after vLLM restart | acceptance requirement | VERIFIED (hardware 2026-11-10, scenario A: cached_tokens=2560, ttft 0s) |
+| Restore after both restarts | acceptance requirement | VERIFIED (hardware 2026-11-10, scenario B: cached_tokens=2560, L2 read events=1) |
 | Model | MiMo-V2.6-Pro-MOPD + custom patches | VERIFIED (production) |
 | KV dtype | bfloat16 (effective project dtype; part of cache identity) | CONFIG CHOICE; re-measure after change |
 | NVMe backend | POSIX (GDS deliberately deferred) | NEEDS TESTING |

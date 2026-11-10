@@ -27,6 +27,13 @@ fi
 _state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo unknown)"
 echo "stopping engine container $CONTAINER (state: $_state)"
 echo "the cache server is NOT touched — stop it separately with: bash scripts/stop-cache.sh"
+# Round 80 review (reliability): a graceful docker stop (30s) lets in-flight
+# requests finish and the engine shut down cleanly before the container is
+# removed. rm -f alone killed active requests outright.
+if [ "$_state" = "running" ]; then
+  echo "graceful stop (30s timeout)..."
+  docker stop --time 30 "$CONTAINER" >/dev/null 2>&1 || true
+fi
 docker rm -f "$CONTAINER" >/dev/null 2>&1
 echo "engine stopped. persistent cache data preserved under ${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
 echo "verify with: bash scripts/budget-report.sh   (usage must be unchanged)"

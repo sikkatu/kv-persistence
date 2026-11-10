@@ -1,6 +1,6 @@
 """Protocol-level ping of the LMCache MP server (round 44).
 
-Why: the TCP-reachability check in run-vllm-with-persist.sh proves only
+Why: the TCP-reachability check in the engine launcher (start-all.sh) proves only
 that a socket is open. The real handshake (register_kv_caches) goes over
 the lmcache RPC protocol, and the install run kept failing THERE (300s
 timeout) while the TCP check passed. This module speaks the actual

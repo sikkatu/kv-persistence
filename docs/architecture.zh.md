@@ -70,7 +70,7 @@ L2 持久层：nixl_store_dynamic / POSIX → NVMe（KVP_CACHE_ROOT）
 | 保留排序 | `implementation/kvpersist/retention.py` | 否 |
 | lmcache 服务 + L2 适配器 | `configs/generic/*` | 否 |
 | 身份与几何配置 | `configs/<model>/identity.env` | 是 |
-| vLLM 启动器 | `scripts/run-vllm-with-persist.sh` | 是 |
+| vLLM 启动器 | `scripts/run-tp4-hotsplit.sh` | 是 |
 
 「模型无关」指机制支持多套部署 —— 并非它们的 KV 数据可以互换。
 不同模型绝不共享 KV 块。

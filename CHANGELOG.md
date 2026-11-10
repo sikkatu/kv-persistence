@@ -9,6 +9,26 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 ## Unreleased
 
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
+### Round 80 review fixes (honest metrics, state drift, lifecycle)
+* `ask()` metric renamed `ttft_s` -> `request_latency_s` (the non-stream probe
+  measures the FULL request latency, not Time-To-First-Token -- honest name);
+* `start-all.sh` exports ONE canonical `LIVE_DIR=$ROOT/live` (the recipe's
+  `$PWD/live` default drifted when launched from another directory); the
+  `live/image` record is written AFTER digest validation (an invalid IMAGE
+  never lands there);
+* `stop-all.sh` stops the observability stack too (start-all promised the
+  pair); `stop-engine.sh` does a graceful `docker stop --time 30` before
+  `rm -f`;
+* the recipe launcher runs the shared pre-flights (TCP / codec / lmcache
+  version) when launched directly (guarded by KVP_PREFLIGHTS_DONE so
+  start-all.sh does not probe twice) -- one diagnostics level, not two;
+* doc cleanup: every reference to the deleted kv launcher replaced (README
+  x3, docs x3 langs, cli.py/mp_ping.py docstrings), container name and
+  hardware-acceptance date (2026-11-10) corrected;
+* weakened tests restored to real checks (image-write-after-validation,
+  MODEL_DIR resolution-before-gate) + regression: start-all.sh from a foreign
+  cwd must write all state to the repo live/ dir.
+
 ## Round 80b (legacy kv launcher deleted; every check PRESERVED)
 * **`run-vllm-with-persist.sh` is DELETED** -- `start-all.sh` now has ONE
   engine path (`KVP_ENGINE=recipe`). `KVP_ENGINE=kv` fails with an honest,

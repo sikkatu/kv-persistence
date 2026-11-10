@@ -133,7 +133,7 @@ only if the hardware window allows meaningful execution.
 
 `prompt_tokens`, `cached_tokens` (response `usage.prompt_tokens_details` —
 requires the `--enable-prompt-tokens-details` engine flag, which
-`scripts/run-vllm-with-persist.sh` passes for every model),
+`scripts/run-tp4-hotsplit.sh` passes for every model),
 `ttft_s`, `total_s`, cache bytes before/after (`budget-report.sh status`),
 LMCache log counts (the L2 store/load evidence lines -- `l2_stored` /
 `l2_retrievals` in `scripts/test-recovery.sh` match the pinned 0.5.6 wording:
@@ -168,7 +168,7 @@ bash scripts/benchmark.sh cold 32768      # first send, cache empty
 bash scripts/benchmark.sh warm 32768      # second send, same process
 
 # config 4: restart vLLM only
-docker restart mimo-pro-tp4-kvp && sleep <until-ready>
+docker restart mimo-pro-tp4-hotsplit && sleep <until-ready>
 bash scripts/benchmark.sh after-vllm-restart 32768
 
 # config 5: restart both (acceptance)

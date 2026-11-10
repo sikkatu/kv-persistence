@@ -29,12 +29,16 @@ def test_model_dir_is_exported_for_the_gate():
 
 
 def test_model_dir_export_follows_resolution():
-    """The export must sit after the resolution block, near the directory check."""
+    """MODEL_DIR must be RESOLVED (assigned/defaulted) before the gate uses it.
+    Round 80 review: the old check verified the kv launcher's export order;
+    the recipe resolves MODEL_DIR itself -- the real contract is that the
+    resolution precedes the identity-gate invocation."""
     t = _T.contract_text()
-    check_idx = t.index('MODEL_DIR not found')
-    export_idx = t.index("MODEL_DIR=")
-    assert True, (  # Round 80b: MODEL_DIR is validated + resolved in the recipe
-        "export MODEL_DIR must come after the auto-resolution / existence check")
+    resolve_idx = t.index('MODEL_DIR="${MODEL_DIR')
+    gate_idx = t.index('bash "$KVP_REPO/scripts/verify-engine-identity.sh"')
+    assert resolve_idx < gate_idx, (
+        "MODEL_DIR resolution must come BEFORE the identity gate (the gate "
+        "reads the resolved value from the environment)")
 
 
 def test_config_codec_default_is_zstd_in_all_locales():

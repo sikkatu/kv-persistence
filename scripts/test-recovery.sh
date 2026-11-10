@@ -208,7 +208,12 @@ disk_read_bytes(){ # LEGACY device-wide counter (kept for reference only -- NOT
   [ -r "/sys/block/$parent/stat" ] || { echo -1; return; }
   awk '{print $3*512}' "/sys/block/$parent/stat" 2>/dev/null || echo -1
 }
-ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
+ask(){ # ask <label> -> writes $OUT/<label>.json with request_latency+usage
+  # Round 80 review (honest metrics): the probe is a NON-STREAM request,
+  # so what we measure is the FULL request latency (pre-fill + 8 generated
+  # tokens) -- NOT the Time-To-First-Token. The field is named
+  # request_latency_s accordingly; the 2.44 s vs 11.49 s comparison is a
+  # latency comparison, not a TTFT one.
   local label="$1" mark="$2" t0 t1
   t0=$(date +%s.%N)
   # Round 79 follow-up (review): ONE non-stream probe, max_tokens=8. The old
@@ -257,7 +262,7 @@ except urllib.error.URLError as e:
 json.dump({"ttft_abs":ttft,"usage":usage,"probe":"non-stream max_tokens=8"},open(out,"w"),indent=2)
 PYEOF
   t1=$(date +%s.%N)
-  python3 -c "import json;d=json.load(open('$OUT/$label.json'));u=d['usage'];p=u.get('prompt_tokens_details',{});print(json.dumps({'label':'$label','ttft_s':round(max(0,(d['ttft_abs'] or 0)-$t0),2),'total_s':round($t1-$t0,2),'prompt_tokens':u.get('prompt_tokens',0),'cached_tokens':p.get('cached_tokens',0)}))" | tee "$OUT/$label.summary.json"
+  python3 -c "import json;d=json.load(open('$OUT/$label.json'));u=d['usage'];p=u.get('prompt_tokens_details',{});print(json.dumps({'label':'$label','request_latency_s':round(max(0,(d['ttft_abs'] or 0)-$t0),2),'total_s':round($t1-$t0,2),'prompt_tokens':u.get('prompt_tokens',0),'cached_tokens':p.get('cached_tokens',0)}))" | tee "$OUT/$label.summary.json"
 }
 
 cached_of(){ # 0 = report says no reuse. MISSING = field absent/null: that is NOT
@@ -309,7 +314,7 @@ echo "== COLD baseline (no cache reuse expected) =="
 api_ready || PA pre "API is not up before the cold baseline -- start the engine first (bash scripts/start-all.sh), wait for it to load, then rerun"
 M0=$(log_mark); B0=$(L2_bytes)
 ask cold "$M0"
-T_COLD=$(python3 -c "import json;d=json.load(open('$OUT/cold.summary.json'));print(d['ttft_s'])")
+T_COLD=$(python3 -c "import json;d=json.load(open('$OUT/cold.summary.json'));print(d['request_latency_s'])")
 # Review fix (round 18): L2 store is ASYNCHRONOUS -- measure B0/B_WARM only after
 # the directory goes quiet, otherwise the byte delta races the write and can
 # report a false "nothing was stored".
@@ -330,8 +335,8 @@ A_DISK0=$(server_read_bytes)   # sample the SERVER's own reads around the reques
 ask afterA "$M_A0"
 A_DISK1=$(server_read_bytes)
 A_RETR=$(l2_retrievals "$M_A0"); A_CACHED=$(cached_of "$OUT/afterA.json")
-T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['ttft_s'])")
-echo "  post-restart L2 read events: $A_RETR, cached_tokens: $A_CACHED, ttft: ${T_A}s (cold: ${T_COLD}s)"
+T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['request_latency_s'])")
+echo "  post-restart L2 read events: $A_RETR, cached_tokens: $A_CACHED, request_latency: ${T_A}s (cold: ${T_COLD}s)"
 # Review fix (round 18): scenario A restarts vLLM ONLY -- the cache service and
 # its L1 (host RAM) are STILL ALIVE, so a perfectly working system serves the
 # request from L1 and logs ZERO L2/disk reads. That is the documented "memory
@@ -447,8 +452,8 @@ B_DISK0=$(server_read_bytes)   # sample the SERVER's own reads around the reques
 ask afterB "$M_B0"
 B_DISK1=$(server_read_bytes)
 B_RETR=$(l2_retrievals "$M_B0"); B_CACHED=$(cached_of "$OUT/afterB.json")
-T_B=$(python3 -c "import json;print(json.load(open('$OUT/afterB.summary.json'))['ttft_s'])")
-echo "  post-full-restart L2 read events: $B_RETR, cached_tokens: $B_CACHED, ttft: ${T_B}s (cold: ${T_COLD}s)"
+T_B=$(python3 -c "import json;print(json.load(open('$OUT/afterB.summary.json'))['request_latency_s'])")
+echo "  post-full-restart L2 read events: $B_RETR, cached_tokens: $B_CACHED, request_latency: ${T_B}s (cold: ${T_COLD}s)"
 [ "${B_RETR:-0}" -gt 0 ] || fail "B: no L2/disk read log events AFTER both services restarted (index rebuild must prove disk reads)"
 if [ "$B_CACHED" = "MISSING" ]; then
   inconc "B: cached_tokens metric unavailable (prompt_tokens_details null/absent) -- cannot say reuse/no-reuse from usage counters alone"

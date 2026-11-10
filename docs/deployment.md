@@ -279,8 +279,8 @@ journalctl -u lmcache-server -f
 The engine and the cache service are SEPARATE processes; stop each one
 explicitly:
 
-* **vLLM engine** (the container started by `run-vllm-with-persist.sh`):
-  `bash scripts/stop-engine.sh` (or `docker rm -f mimo-pro-tp4-kvp` if the
+* **vLLM engine** (the container started by `run-tp4-hotsplit.sh`):
+  `bash scripts/stop-engine.sh` (or `docker rm -f mimo-pro-tp4-hotsplit` if the
   script is unavailable). Ctrl-C during the launcher only stops the
   LAUNCHER -- the container keeps running; run `stop-engine.sh` after it.
 * **Cache service** (lmcache server): `bash scripts/stop-cache.sh`

@@ -75,7 +75,7 @@ bash scripts/start-all.sh              # 一条命令：监控 + 缓存 + 引擎
 #   KVP_ENGINE=recipe  把引擎步骤委托给经硬件验证的 recipe 启动器
 #   （sikkatu/recipes，KV_PERSIST=1）——同一条栈，一条命令。
 #   默认：KVP_ENGINE=recipe（经硬件验证的启动器）。
-#   （或分步：start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh）
+#   （或分步：start-observability.sh -> start-cache.sh -> run-tp4-hotsplit.sh）
 bash scripts/stop-all.sh                # 全部停止（数据保留）
 
 API 密钥：两个仓库共用一个文件（`$HOME/.config/kvp/api_key`，
@@ -98,7 +98,7 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 
 * `KVP_ENGINE=recipe`（默认）——recipe 启动器
   （`run-tp4-hotsplit.sh`，带 `KV_PERSIST=1`）；
-* legacy kv 启动器（`run-vllm-with-persist.sh`）已在第 80b 轮删除——
+* legacy kv 启动器（`run-tp4-hotsplit.sh`）已在第 80b 轮删除——
   `KVP_ENGINE=kv` 诚实地报错退出（没有任何东西丢失：所有共享检查都在
   `env.sh` / `hotsplit_env.sh` 中）。
 * `KVP_ENGINE=recipe`——`sikkatu/recipes` 中经硬件验证的

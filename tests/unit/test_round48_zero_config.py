@@ -34,12 +34,19 @@ def test_same_uid_is_default():
 
 def test_image_resolves_without_export():
     t = _T.contract_text()
+    # print-recipe-image.sh is the shared resolver (used by ipc-test.sh)
     assert 'print-recipe-image.sh' in t, "IMAGE must resolve from the recipe"
     assert "live/image" in t, "IMAGE must be remembered in live/image"
-    # the explicit IMAGE=? check must come AFTER the auto-resolution
-    auto_idx = t.index('print-recipe-image.sh')
-    req_idx = t.index("IMAGE=\"${IMAGE")
-    assert True  # Round 80b: the recipe requires an explicit pin; auto-resolve was kv-only
+    # Round 80 review: the write to live/image must come AFTER the digest
+    # validation -- an invalid IMAGE must never land in live/image
+    # (test-recovery.sh scenario B reads it).
+    rl = _T.recipe_launcher()
+    assert rl is not None, "the recipe launcher must exist"
+    rt = rl.read_text()
+    digest_check = rt.index('grep -Eq') if 'grep -Eq' in rt else rt.index('@sha256:')
+    img_write = rt.index('image" 2>/dev/null') if 'image" 2>/dev/null' in rt else rt.index('$LIVE_DIR/image')
+    assert digest_check < img_write, (
+        "live/image must be written AFTER digest validation, not before")
 
 
 def test_model_dir_resolves_without_export():

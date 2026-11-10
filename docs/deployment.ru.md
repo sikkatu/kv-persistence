@@ -262,8 +262,8 @@ journalctl -u lmcache-server -f
 ## Остановка (движок и сервис кэша)
 Движок и сервис кэша — РАЗНЫЕ процессы; останавливайте каждый явно:
 
-* **Движок vLLM** (контейнер из `run-vllm-with-persist.sh`):
-  `bash scripts/stop-engine.sh` (или `docker rm -f mimo-pro-tp4-kvp`).
+* **Движок vLLM** (контейнер из `run-tp4-hotsplit.sh`):
+  `bash scripts/stop-engine.sh` (или `docker rm -f mimo-pro-tp4-hotsplit`).
   Ctrl-C во время работы лаунчера останавливает только ЛАУНЧЕР —
   контейнер продолжает работать; после Ctrl-C выполните `stop-engine.sh`.
 * **Сервис кэша** (сервер lmcache): `bash scripts/stop-cache.sh`

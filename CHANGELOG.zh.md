@@ -8,6 +8,18 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 ## 未发布
 
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
+### 第 80 轮审阅修复（诚实指标、状态漂移、生命周期）
+* `ask()` 指标由 `ttft_s` 更名为 `request_latency_s`（非流式探针测量的是完整
+  请求延迟，而非首 token 时间——诚实命名）；
+* `start-all.sh` 导出唯一规范 `LIVE_DIR=$ROOT/live`（recipe 的 `$PWD/live`
+  默认值在其他目录启动时会漂移）；`live/image` 在 digest 校验之后写入；
+* `stop-all.sh` 也停止 observability 栈；`stop-engine.sh` 先 graceful
+  `docker stop --time 30` 再 `rm -f`；
+* recipe 启动器在直接启动时也运行共享预检（KVP_PREFLIGHTS_DONE 防止重复）；
+* 文档清理：所有对已删除 kv 启动器的引用已替换，容器名和硬件验收日期
+  （2026-11-10）已更正；
+* 被弱化的测试恢复为真实检查 + 回归测试（任意目录启动不漂移状态）。
+
 ## 第 80b 轮（legacy kv 启动器已删除；所有检查均已保留）
 * **`run-vllm-with-persist.sh` 已删除**——`start-all.sh` 现在只有一条引擎
   路径（`KVP_ENGINE=recipe`）。`KVP_ENGINE=kv` 诚实地报错退出（没有任何

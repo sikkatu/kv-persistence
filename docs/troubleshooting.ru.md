@@ -7,7 +7,7 @@
 ```bash
 bash scripts/budget-report.sh status        # занято, пространства, диск
 tail -n 100 "$KVP_CACHE_ROOT/lmcache-server.log"   # сервис кэша
-docker logs --tail 100 mimo-pro-tp4-kvp     # движок (лаунчер kv-persistence)
+docker logs --tail 100 mimo-pro-tp4-hotsplit     # движок (лаунчер kv-persistence)
 ```
 
 (`KVP_CACHE_ROOT` задаётся в `configs/generic/cache.env.local`.)
@@ -53,7 +53,7 @@ docker run --rm --entrypoint lmcache "$IMAGE" server --help
 ## Сервис кэша запустился, но vLLM не подключается
 
 1. Порядок старта: `start-cache.sh` ДО лаунчера vLLM
-   (`run-vllm-with-persist.sh` иначе отказывается стартовать).
+   (`run-tp4-hotsplit.sh` иначе отказывается стартовать).
 2. Смотрите строку ошибки в логе сервиса; оба процесса используют одну host-сеть —
    не переносите порт запросов без правки обеих сторон.
 3. С интеграцией рецепта (`KV_PERSIST=1`): лаунчер печатает

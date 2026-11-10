@@ -10,7 +10,7 @@ Repository: https://github.com/sikkatu/kv-persistence (branch `main`,
 commit `HEAD` (see `git rev-parse HEAD`), pushed and verified against the
 GitHub remote API).
 
-**Overall status: ACCEPTED (hardware 2026-11-07)** — implementation complete,
+**Overall status: ACCEPTED (hardware 2026-11-10)** — implementation complete,
 offline tests pass
 (329 unit tests + 19 more offline tests = 348 offline collected,
 346 passed + 2 skipped; 363 collected total including the live-`lmcache`
@@ -21,7 +21,7 @@ dependencies some tests skip on: wiki checkout, lz4 bindings; both suites green)
 in the companion `sikkatu/recipes` repo -- skips are environment-dependent,
 e.g. torch-only tests are skipped on hosts without torch), architecture proven against the pinned vLLM build's source
 code. **Restart-recovery acceptance PASSED on the target GPU host
-(4x RTX PRO 6000, MiMo-V2.6-Pro-MOPD, same-UID mode, 2026-11-07)** —
+(4x RTX PRO 6000, MiMo-V2.6-Pro-MOPD, same-UID mode, 2026-11-10)** —
 `scripts/test-recovery.sh` run log:
 * scenario A (vLLM restart): `cached_tokens=2560`, ttft 0s vs cold 17.53s
   (L1/RAM memory hit),
@@ -50,7 +50,7 @@ index rebuild on startup (documented upstream behavior of this adapter).
 |---|---|---|
 | vLLM commit | `8e2beaa3bff595577a069d49d96bde9074294ec2` (2026-10-21) | VERIFIED (source) |
 | vLLM image | `vllm/vllm-openai:nightly-8e2beaa3bff…@sha256:167ccd86…` (pin format) | matches production recipe |
-| LMCache | MP server + `LMCacheMPConnector` | VERIFIED (hardware 2026-11-07: register_kv_caches + API served) |
+| LMCache | MP server + `LMCacheMPConnector` | VERIFIED (hardware 2026-11-10: register_kv_caches + API served) |
 | Python | 3.12 | VERIFIED |
 
 ## Verified compatibility with the MiMo deployment
@@ -68,7 +68,7 @@ index rebuild on startup (documented upstream behavior of this adapter).
 | Claim (from brief) | Effective reality | Status |
 |---|---|---|
 | KV_CACHE_DTYPE=fp16 | production runs `auto` (=bfloat16); brief's serving settings say fp16 | **NEEDS TESTING / CONFIG CHOICE** — the launcher defaults to the *effective* dtype (`bfloat16`, the vLLM CacheDType spelling — `bf16` is not accepted by the pinned build) and the cache identity requires a resolved dtype; switching to `float16` changes KV memory and must be re-measured on hardware. Set `KV_CACHE_DTYPE=float16` + `KVP_KV_CACHE_DTYPE=float16` to enforce the brief's setting and re-run all benchmarks. |
-| MAX_NUM_SEQS=2 | `run-vllm-with-persist.sh` sets `--max-num-seqs 2` explicitly (production file default is 1) | VERIFIED (flag); engine log confirmation when run |
+| MAX_NUM_SEQS=2 | `run-tp4-hotsplit.sh` sets `--max-num-seqs 2` explicitly (production file default is 1) | VERIFIED (flag); engine log confirmation when run |
 
 ## Commands
 
@@ -100,7 +100,7 @@ PASS verdict rule are in `docs/benchmarks.md`; the recorder writes
 `benchmarks/results/<UTC-ts>/bench.jsonl` automatically.
 
 ## Evidence of disk-backed recovery after restart
-**Collected on hardware (2026-11-07).** After a full restart of BOTH services
+**Collected on hardware (2026-11-10).** After a full restart of BOTH services
 (vLLM container + cache server, NVMe data kept):
 * `usage.prompt_tokens_details.cached_tokens = 2560 > 0` on the first
   post-restart request (cold: 0),
@@ -172,7 +172,7 @@ before measuring).
 
 ## Known limitations / untested scenarios
 
-1. Restart-recovery acceptance PASSED on hardware (2026-11-07) — see
+1. Restart-recovery acceptance PASSED on hardware (2026-11-10) — see
    "Evidence of disk-backed recovery" above. Remaining untested items are
    the peripheral ones listed below (eviction on a tiny budget, compression
    ratio benchmark, per-entry retention on the live path).
@@ -188,7 +188,7 @@ before measuring).
 3. LMCache is version-pinned (`requirements-lmcache.txt`, `lmcache==0.5.6`); the
    exact wheel must match the production image ABI. If it does not, `lmcache
    server` runs from the production image (documented fallback). VERIFIED on
-   hardware 2026-11-07 (host venv 0.5.6 + image 0.5.6 = version match).
+   hardware 2026-11-10 (host venv 0.5.6 + image 0.5.6 = version match).
 4. Dedup semantics: LMCache maps each chunk key 1:1 to a content-derived object
    file; there is NO caller-side refcount and no cross-client key→object sharing
    across namespaces. Eviction may drop a byte range that a live query would read
@@ -260,7 +260,7 @@ runtime (same launcher pattern as the salt filename patch, now unified in
 **Honest status:** the serde frame logic is unit-tested (round-trip, framing,
 malformed-frame rejection, incompressible-data passthrough) WITHOUT torch/lz4/
 zstandard installed. The end-to-end path through LMCache's `SerdeL2AdapterWrapper`
-and the `nixl_store_dynamic` DMA write is **VERIFIED on hardware 2026-11-07**
+and the `nixl_store_dynamic` DMA write is **VERIFIED on hardware 2026-11-10**
 (zstd round-trip through the real adapter during the recovery acceptance run)** -- same status as the rest of the hardware acceptance suite. Two
 surgical runtime patches (`_install_size_patch`) make the on-disk file size
 follow the serialized frame rather than the full L1 allocation; these are

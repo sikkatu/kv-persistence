@@ -601,7 +601,7 @@ def resolve_effective_identity(model_dir: str = "") -> dict:
     Single source of truth for every consumer:
       * the recipe launchers (namespace via `model-name`, and the env file they
         persist for the manual verify-engine-identity.sh run),
-      * run-vllm-with-persist.sh,
+      * the engine launcher (start-all.sh),
       * the identity gate itself (via the exported KVP_* names).
 
     Reads the operators' usual knobs (KV_CACHE_DTYPE / MAX_MODEL_LEN /
@@ -658,7 +658,7 @@ def cmd_effective_identity(args) -> int:
 def cmd_model_name(args) -> int:
     """Print the LMCache model_name that enforces the identity namespace.
 
-    Used by scripts/run-vllm-with-persist.sh to mount the model under a
+    Used by scripts/start-all.sh to mount the model under a
     namespace-coded path so that `--model <path>` (which vLLM reports as
     `model_config.model`, the value LMCache derives ObjectKey and the L2 file
     name from) is UNIQUE per identity. This is what makes the identity

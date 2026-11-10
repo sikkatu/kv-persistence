@@ -64,6 +64,12 @@ echo "== 3/3 vLLM engine (model load takes ~13-16 min; Ctrl-C stops the launcher
 # budget, container-name record) lives in the shared modules both launchers
 # called: env.sh / hotsplit_env.sh / verify-engine-identity.sh. Nothing is
 # lost with the old script.
+# Round 80 review (LIVE_DIR drift): the recipe launcher defaults LIVE_DIR to
+# $PWD/live, so a start-all.sh from ANY other directory wrote the state
+# (live/image, live/api_key mirror, live/engine_container) to the wrong place.
+# Export ONE canonical LIVE_DIR -- the repo's own live/ dir.
+export LIVE_DIR="$ROOT/live"
+mkdir -p "$LIVE_DIR"
 KVP_ENGINE="${KVP_ENGINE:-recipe}"
 case "$KVP_ENGINE" in
   kv)
@@ -145,6 +151,10 @@ case "$KVP_ENGINE" in
         exit 1
       }
 
+    # Round 80 review: the recipe launcher runs the shared pre-flights itself
+    # when launched directly -- mark them as done here so it does not probe
+    # twice (the block above just ran them).
+    export KVP_PREFLIGHTS_DONE=1
     echo "KVP_ENGINE=recipe: launching the hardware-verified recipe launcher"
     echo "  container: $CONTAINER (recorded in live/engine_container)"
     echo "  KV_CACHE_DTYPE=$KV_CACHE_DTYPE (pinned; auto would resolve identically for MiMo)"

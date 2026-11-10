@@ -64,7 +64,7 @@ memory does NOT satisfy the requirement and is not used.
 | Retention semantics | `implementation/kvpersist/retention.py` | no |
 | LMCache server + L2 adapter | `configs/generic/*` | no |
 | Model pins (identity values, geometry) | `configs/<model>/identity.env` | yes |
-| vLLM launcher (model weights/patches) | `scripts/run-vllm-with-persist.sh` | yes |
+| vLLM launcher (model weights/patches) | `scripts/run-tp4-hotsplit.sh` | yes |
 
 Adding a new compatible model means adding `configs/<model>/identity.env` and a
 launcher section; the cache policy code does not change. KV blocks between
