@@ -134,7 +134,7 @@ case "$KVP_ENGINE" in
     # register_kv_cache (CUDA_ERROR_MAP_FAILED) with no hint before the load.
     _kvp_pre_flights "$ROOT" "$KV_PERSIST_HOST" "$KV_PERSIST_PORT" \
       "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}" "$IMAGE" \
-      "$(id -u)" "$(id -g)" "0" "${KVP_LAUNCH_MODE:-host}" || {
+      "$(id -u)" "$(id -g)" "${KVP_SAME_UID:-1}" "${KVP_LAUNCH_MODE:-host}" || {
         echo "ERROR: pre-flight failed -- refusing the delegated launch (nothing was started)" >&2
         exit 1
       }

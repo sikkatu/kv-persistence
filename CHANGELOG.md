@@ -9,6 +9,34 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 ## Unreleased
 
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
+## Round 79 (recipe same-UID regression fix, recovery fail-fast + diagnostics)
+* **Root cause of the recurring `register_kv_caches` 300 s timeout confirmed
+  on hardware** (reviewer + driver log): the delegated recipe path ran the
+  engine as ROOT while the cache server ran as the invoking user -- the
+  exact uid mismatch behind `CUDA_ERROR_MAP_FAILED` ("Failed to open/create
+  interprocess memory file / remote IPC semaphore pool" = EACCES on
+  root-owned `cuda.shm.*` in /dev/shm). The kv launcher's round-45h/48
+  same-UID contract was LOST when the recipe path became the delegated
+  engine (the same defect class as rounds 76/77/78).
+* `run-tp4-hotsplit.sh` now runs the engine as `$(id -u):$(id -g)` by
+  DEFAULT (`KVP_SAME_UID=1`, opt out with `KVP_SAME_UID=0`) with HOME /
+  HF / XDG / TRITON caches on `/tmp` -- identical to `run-vllm-with-persist.sh`.
+* Recipe API-wait **fail-fasts** on a fresh `Error handling operation` in the
+  cache-server log (the root cause is printed; the mark is taken BEFORE
+  `docker run` so even a first-seconds failure is caught) instead of waiting
+  out the engine's 300 s timeout.
+* `test-recovery.sh`: `api_ready` fail-fasts the same way AND prints
+  `docker logs` when the container dies (no manual forensics); scenario B
+  runs the CUDA IPC pre-flight BEFORE `docker start` (the exact step B died
+  on); every server-log read uses `grep -a` (NUL bytes make plain grep skip
+  matches silently).
+* `start-all.sh` passes the same-UID flag to the shared pre-flights (they
+  must test the boundary the engine ACTUALLY uses).
+* Regression tests: `tests/unit/test_round79_recovery_failfast.py` (kv, 5
+  tests) + `tests/test_round79_same_uid.py` (recipes, 3 tests) -- red on the
+  old code. Parity allowlist updated: `--user` and the `/tmp` cache mount are
+  SHARED tokens now (both sides same-UID), not one-side differences.
+
 
 
 ## Round 78 (CONTAINER= override, API_KEY canonical-file contract, honest parity, full exit-code chain)
@@ -49,33 +77,3 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
   ("ROOT-PRODUCER result"). Regression tests reproduce all of it
   (`tests/unit/test_round77_shared_preflights.py`, 8 tests, red on the old
   code).
-## Round 76 (SIGPIPE false-negative in the activation check, shared config validation, TP coverage)
-* The activation check lied on big engine logs (review, reproduced on the
-  hardware run): `printf '%s' "$log" | grep -q ...` under `set -o pipefail`
-  -- `grep -q` exits on the first match and closes the pipe, `printf` gets
-  SIGPIPE (141), the pipeline is "failed" and the `if` takes the NOT-found
-  branch even though the marker IS in the log. On a 17-minute model-load log
-  ALL four markers read [MISSING] while the engine was fine -- and the SAME
-  pipes guarded the ERROR checks, so a real error could pass as success.
-  All 8 sites (4 per launcher) now use here-strings
-  (`grep -q -- "..." <<<"$log"`) -- no pipe, no SIGPIPE. Regression tests on
-  a 100 KiB log cover both directions (markers present -> VERIFIED; markers
-  or errors absent/present -> the right verdict).
-* HotSplit config validation moved to the SHARED module
-  (`hotsplit_env.sh::_hotsplit_validate_config`): the checks (NUMA_MAP
-  format, DYN_DECAY 0..1, DYN_MARGIN >= 1, DYN_MAX_SWAPS 1..1024, integer
-  and float knobs) lived ONLY in the kv launcher -- after switching the
-  engine path to the recipe launcher they would have disappeared. Both
-  launchers now call the same function.
-* NEW check (review): HOTSPLIT_NUMA_MAP must COVER every GPU rank 0..TP-1.
-  `numa_bind.py` silently returns -1 for a missing GPU and still reports
-  `numa_bind=ACTIVE` -- a map "0:0,1:0" on TP4 bound 2 of 4 GPUs and looked
-  healthy. The validator now names each missing rank. Behavioural tests
-  (TP4/TP2) in `tests/test_hotsplit_validation.py` -- a condition for
-  switching the default to the recipe launcher.
-* The namespace-override consent (round 73) is now covered:
-  `tests/test_namespace_override_consent.py` -- without
-  `KVP_ALLOW_NAMESPACE_OVERRIDE=1` an inherited `KVP_MODEL_NAME` is IGNORED
-  with a loud WARNING (the identity-derived name wins); with the flag the
-  override applies, still with a WARNING.
-> Older round notes were trimmed on 2026-11-07: the full fix history lives in the git log of `main`.

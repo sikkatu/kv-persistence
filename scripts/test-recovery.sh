@@ -110,20 +110,41 @@ wait_l2_quiet(){ # wait until L2_bytes stops changing (async stores must finish)
 # events are DEBUG level, so the cache service must run with
 # LMCACHE_LOG_LEVEL=DEBUG -- ensured below via KVP_LMCACHE_LOG_LEVEL.
 l2_retrievals(){ # read-from-L2 events appended after the scenario's log mark
-  new_log "$1" | grep -cE 'L2 prefetch load completed: request [0-9]+, [1-9][0-9]* loaded|Prefetch request completed \(L1\+L2\): .* \([1-9][0-9]* L1, [1-9][0-9]* L2\)' || true
+  new_log "$1" | grep -acE 'L2 prefetch load completed: request [0-9]+, [1-9][0-9]* loaded|Prefetch request completed \(L1\+L2\): .* \([1-9][0-9]* L1, [1-9][0-9]* L2\)' || true
 }
 l2_stored(){ # write-to-L2 events appended after the scenario's log mark
-  new_log "$1" | grep -cE 'L2 store completed: adapter [0-9]+, [1-9][0-9]* succeeded' || true
+  new_log "$1" | grep -acE 'L2 store completed: adapter [0-9]+, [1-9][0-9]* succeeded' || true
 }
-api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 min)"; for i in $(seq 1 180); do
+api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 min)"; local _srv_mark; _srv_mark="$(wc -c < "$LOG" 2>/dev/null || echo 0)"; for i in $(seq 1 180); do
     # Review fix (round 46): the loop used to wait 20 min on a DEAD container
     # (the engine crashed with code 1 minutes after restart). Check the
     # container state and abort as soon as it is not running.
+    # Round 79 (review): fail-fast on cache-server handler errors -- if the
+    # server log already says 'Error handling operation' (e.g.
+    # CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle), waiting out the
+    # engine's 300s register_kv_caches timeout cannot fix it.
+    if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+      _srverr="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" 2>/dev/null | grep -a -m1 'Error handling operation' || true)"
+      if [ -n "$_srverr" ]; then
+        echo "  ABORT: cache server FAILED a request during the wait (fail-fast):" >&2
+        tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | grep -a -A20 'Error handling operation' | head -25 >&2
+        echo "  This is the root cause -- waiting 300s cannot fix it." >&2
+        echo "  Fix: restart both services same-UID (KVP_SAME_UID=1 default) and rerun." >&2
+        return 2
+      fi
+    fi
     _st="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)"
     case "$_st" in
       running) : ;;
       *) echo "  ABORT: container $CONTAINER is '$_st' -- the engine is dead, the API will never come back" >&2
-         echo "         check: docker logs --tail 60 $CONTAINER" >&2
+         # Round 79 (review): PRINT the logs (not just a hint to run docker
+         # logs -- the operator should not need to re-run commands by hand).
+         echo "         ---- docker logs --tail 60 $CONTAINER (automatic) ----" >&2
+         docker logs --tail 60 "$CONTAINER" >&2 || true
+         if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+           echo "         ---- server log: last 'Error handling operation' (grep -a for NUL bytes) ----" >&2
+           grep -a -A20 'Error handling operation' "$LOG" | tail -25 >&2 || true
+         fi
          return 2 ;;
     esac
     curl -fsS --max-time 3 -K "$_kvp_curl_header" "$API/v1/models" >/dev/null 2>&1 && return 0
@@ -358,6 +379,21 @@ fi
 bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA B "start-cache.sh failed (cache service did not restart)"
 LIVE_PID="$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null || echo 0)"
 kill -0 "$LIVE_PID" 2>/dev/null || PA B "cache service is dead right after start-cache.sh (readiness not reached)"
+# Round 79 (review): IPC pre-flight BEFORE docker start -- scenario B died
+# exactly at register_kv_cache (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle).
+# Catch it here (same shared pre-flight both launchers run) instead of after a
+# ~15-min model load. The engine runs same-UID now (round 79), so _same=1.
+if [ "${KVP_SKIP_IPC_TEST:-0}" != "1" ] && [ -x "$HERE/scripts/ipc-test.sh" ]; then
+  echo "  pre-flight: CUDA IPC boundary (B: before docker start)"
+  _b_ipc_mode=host
+  _b_pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
+  [ -f "$_b_pidf" ] && [ "$(awk '/^Uid:/{print $2}' "/proc/$(tr -d '[:space:]' < "$_b_pidf")/status" 2>/dev/null || echo '')" = "0" ] && _b_ipc_mode=host-root
+  if IMAGE="${IMAGE:-}" CONSUMER="$_b_ipc_mode" PRODUCER_USER="$(id -u):$(id -g)" bash "$HERE/scripts/ipc-test.sh"; then
+    echo "  pre-flight: CUDA IPC boundary OK (consumer=$_b_ipc_mode)"
+  else
+    PA B "pre-flight FAILED: CUDA IPC boundary broken before docker start -- engine would die at register_kv_cache (same-UID: both sides $(id -u):$(id -g))"
+  fi
+fi
 docker start "$CONTAINER" >/dev/null 2>&1 || PA B "docker start (B) failed"
 api_ready || PA B "API did not come back after full restart"
 M_B0=$(log_mark)
