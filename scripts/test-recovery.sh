@@ -174,8 +174,20 @@ if [ -z "${KVP_CACHE_DEVICE:-}" ]; then
   fi
 fi
 
-disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume holds Docker, the model and the OS) device -> independent
-  # proof of disk-sourced reads (not RAM). Requires KVP_CACHE_DEVICE.
+server_read_bytes(){ # Round 79 review (item 6): physical bytes read by the
+  # LMCache SERVER PROCESS itself (/proc/<pid>/io read_bytes) -- the only
+  # counter that attributes reads to the cache. The old device-wide counter
+  # read /sys/block/<dev>/stat of a SHARED disk (model + cache + OS live
+  # there): scenario A recorded 571 GB of UNRELATED model reads and B's
+  # delta<=0 check could never fire -- it proved nothing.
+  local pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
+  local pid=""
+  [ -f "$pidf" ] && pid="$(tr -d '[:space:]' < "$pidf" 2>/dev/null || echo '')"
+  if [ -z "$pid" ] || [ ! -r "/proc/$pid/io" ]; then echo -1; return; fi
+  awk '/^read_bytes:/{print $2}' "/proc/$pid/io" 2>/dev/null || echo -1
+}
+disk_read_bytes(){ # LEGACY device-wide counter (kept for reference only -- NOT
+  # evidence: the disk is shared with the model and the OS). Requires KVP_CACHE_DEVICE.
   # Review P2 fix: use lsblk PKNAME (robust for /dev/nvme0n1p1, /dev/sda1, /dev/vda1
   # and VM-style vda/sda names) instead of the old regex split that broke on
   # nvme partition names (e.g. /dev/nvme0n1p1 -> "nvme0n" which has no /sys/block
@@ -199,6 +211,11 @@ disk_read_bytes(){ # physical bytes read from the shared VM disk (same volume ho
 ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
   local label="$1" mark="$2" t0 t1
   t0=$(date +%s.%N)
+  # Round 79 follow-up (review): ONE non-stream probe, max_tokens=8. The old
+  # stream-then-repeat design broke BOTH metrics (see the block below), and
+  # whether this vLLM build even carries the usage chunk in the stream is an
+  # OPEN QUESTION (the review's manual curl probe decides it -- not needed
+  # for the test now, it no longer reads stream usage).
   # Review fix (round 18): QUOTED heredoc (<<'PYEOF') so the Python block is
   # never expanded by the shell -- a stray $ or backtick inside it would
   # otherwise be interpreted (and `stream_options` already contains braces
@@ -206,15 +223,23 @@ ask(){ # ask <label> -> writes $OUT/<label>.json with ttft+usage
   python3 - "$API" "$KEY" "$OUT/prefix.txt" "$OUT/$label.json" <<'PYEOF' || PA pre "request $label failed"
 import json,sys,time,urllib.request,os
 api,key,prefix_file,out=sys.argv[1:5]
+# Round 79 follow-up (review items 1+2): ONE NON-STREAM probe with a tiny
+# generation budget (max_tokens=8). Why not the old stream-then-repeat:
+#  * TTFT: this vLLM build names the first stream delta 'reasoning' (not
+#    'reasoning_content'), so a field-based ttft started only AFTER the
+#    reasoning -- and the build may not carry the usage chunk in the stream
+#    at all (open question, see the review's curl probe). A non-stream
+#    request always returns usage, and with 8 tiny tokens its wall time is
+#    approximately TTFT.
+#  * CACHED_TOKENS: the stream-then-fallback-repeat POISONED the counter --
+#    the first request had already stored the prefix in the vLLM cache, so
+#    the repeat read it back and reported cached_tokens>0 even with NO cache
+#    recovery. Scenario A's "cached_tokens==0 after restart" check would
+#    false-PASS. One request, no repeat: the counter is clean evidence.
 body=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
   {"role":"system","content":"You are a careful assistant."},
   {"role":"user","content":open(prefix_file).read()+"\nQ: what is a sikkatu? one short sentence."}],
-  # Round 79 review: max_tokens must leave room for the model's REASONING
-  # tokens -- with 32 the budget is eaten by reasoning_content (MiMo has a
-  # reasoning parser), delta.content never arrives (ttft stayed 0) and the
-  # stream can end with an EMPTY usage (prompt_tokens: 0). 256 covers both.
-  "max_tokens":256,"temperature":0,"stream":True,
-  "stream_options":{"include_usage":True}}).encode()
+  "max_tokens":8,"temperature":0,"stream":False}).encode()
 req=urllib.request.Request(api+"/v1/chat/completions",data=body,
   headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
 ttft=None;usage={}
@@ -222,37 +247,14 @@ ttft=None;usage={}
 # traceback at the operator. Print a short actionable message instead.
 try:
   with urllib.request.urlopen(req,timeout=1800) as r:
-    for raw in r:
-      line=raw.decode().strip()
-      if not line.startswith("data: "): continue
-      p=line[6:]
-      if p=="[DONE]": break
-      o=json.loads(p)
-      # ttft = first VISIBLE token, whatever field carries it -- with a
-      # reasoning parser the first deltas are reasoning_content, not content.
-      d0=o.get("choices",[{}])[0].get("delta",{}) if o.get("choices") else {}
-      if ttft is None and any(d0.get(k) for k in ("content","reasoning_content","tool_calls")): ttft=time.time()
-      if o.get("usage"): usage=o["usage"]
+    o=json.loads(r.read())
+  ttft=time.time()
+  usage=o.get("usage") or {}
 except urllib.error.URLError as e:
   print(f"REQUEST FAILED: cannot reach the engine at {api}: {e}", file=sys.stderr)
   print("  engine still loading, or it is not running -- check: docker ps / docker logs " + os.environ.get("CONTAINER","mimo-pro-tp4-kvp"), file=sys.stderr)
   sys.exit(3)
-# Round 79 review: if the stream ended with an EMPTY usage (prompt_tokens: 0),
-# fall back to a NON-STREAM request -- usage is always populated there.
-if not usage.get("prompt_tokens"):
-    body2=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
-      {"role":"system","content":"You are a careful assistant."},
-      {"role":"user","content":open(prefix_file).read()+"\nQ: what is a sikkatu? one short sentence."}],
-      "max_tokens":256,"temperature":0,"stream":False}).encode()
-    req2=urllib.request.Request(api+"/v1/chat/completions",data=body2,
-      headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
-    try:
-        with urllib.request.urlopen(req2,timeout=1800) as r2:
-            o2=json.loads(r2.read())
-        if o2.get("usage"): usage=o2["usage"]
-    except Exception as e2:
-        print(f"usage fallback failed: {e2}", file=sys.stderr)
-json.dump({"ttft_abs":ttft,"usage":usage},open(out,"w"),indent=2)
+json.dump({"ttft_abs":ttft,"usage":usage,"probe":"non-stream max_tokens=8"},open(out,"w"),indent=2)
 PYEOF
   t1=$(date +%s.%N)
   python3 -c "import json;d=json.load(open('$OUT/$label.json'));u=d['usage'];p=u.get('prompt_tokens_details',{});print(json.dumps({'label':'$label','ttft_s':round(max(0,(d['ttft_abs'] or 0)-$t0),2),'total_s':round($t1-$t0,2),'prompt_tokens':u.get('prompt_tokens',0),'cached_tokens':p.get('cached_tokens',0)}))" | tee "$OUT/$label.summary.json"
@@ -321,11 +323,12 @@ STORED_LINES=$(l2_stored "$M0")
 [ "${STORED_LINES:-0}" -gt 0 ] || fail "scenario pre: no 'stored to L2' log evidence after warm request"
 
 echo "== SCENARIO A: restart vLLM only =="
-A_DISK0=$(disk_read_bytes)
 M_A0=$(log_mark)
 docker restart "$CONTAINER" >/dev/null 2>&1 || PA A "docker restart failed"
 api_ready || PA A "API did not come back after vLLM restart (scenario impossible)"
+A_DISK0=$(server_read_bytes)   # sample the SERVER's own reads around the request
 ask afterA "$M_A0"
+A_DISK1=$(server_read_bytes)
 A_RETR=$(l2_retrievals "$M_A0"); A_CACHED=$(cached_of "$OUT/afterA.json")
 T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['ttft_s'])")
 echo "  post-restart L2 read events: $A_RETR, cached_tokens: $A_CACHED, ttft: ${T_A}s (cold: ${T_COLD}s)"
@@ -346,7 +349,6 @@ else
   echo "        Expected: the cache service and its L1 survived the vLLM restart."
   echo "        Disk-backed proof is scenario B's job; A is PASS on memory hit."
 fi
-A_DISK1=$(disk_read_bytes)
 if [ "$A_DISK0" = "-1" ] || [ "$A_DISK1" = "-1" ]; then
   inconc "A: KVP_CACHE_DEVICE unset/unreadable -- cannot independently prove NVMe-sourced reads (device counters unavailable)"
 else
@@ -366,7 +368,6 @@ else
 fi
 
 echo "== SCENARIO B: restart BOTH services, NVMe kept =="
-B_DISK0=$(disk_read_bytes)
 B_BEFORE=$(wait_l2_quiet)
 # Review fix (round 46): scenario B used to stop-cache/start-cache and
 # `docker restart` WHILE the engine was still alive -- the engine died with
@@ -407,6 +408,29 @@ kill -0 "$LIVE_PID" 2>/dev/null || PA B "cache service is dead right after start
 # ~15-min model load. The engine runs same-UID now (round 79), so _same=1.
 if [ "${KVP_SKIP_IPC_TEST:-0}" != "1" ] && [ -x "$HERE/ipc-test.sh" ]; then
   echo "  pre-flight: CUDA IPC boundary (B: before docker start)"
+  # Round 79 review (item 5): docker start REUSES the existing container --
+  # one created before round 79 is root, and a same-UID producer pre-flight
+  # would pass while the engine still runs as root. Check WHO the container
+  # was created as and refuse on a mismatch.
+  # An EMPTY .Config.User means ROOT (docker's default) -- that is exactly the
+  # pre-round-79 container this check exists to catch, so empty must NOT pass.
+  _b_cuser="$(docker inspect -f '{{.Config.User}}' "$CONTAINER" 2>/dev/null || echo '@missing@')"
+  echo "  container $CONTAINER created as user: ${_b_cuser:-<empty = root>}"
+  if [ "${KVP_SAME_UID:-1}" = "1" ]; then
+    case "$_b_cuser" in
+      "@missing@") PA B "container $CONTAINER not found -- run bash scripts/start-all.sh first (it creates the engine same-UID), then rerun this test" ;;
+      "$(id -u):$(id -g)") : ;;  # correct same-UID container
+      *)
+        PA B "container $CONTAINER was created as '${_b_cuser:-<empty = root>}' but same-UID mode needs $(id -u):$(id -g) -- docker start would bring back a root engine and the IPC boundary would break again. Recreate it: bash scripts/start-all.sh (removes and relaunches same-UID), then rerun this test." ;;
+    esac
+  fi
+  # Round 79 review (item 5): IMAGE must be the RECORDED pin (live/image),
+  # not the recipe template -- ipc-test.sh exits 2 on an unresolvable image
+  # and the pre-flight would false-fail. Live pin wins; recipe is the fallback.
+  if [ -z "${IMAGE:-}" ] && [ -f "$ROOT/live/image" ]; then
+    IMAGE="$(tr -d '[:space:]' < "$ROOT/live/image")"
+    echo "  IMAGE resolved from live/image: $IMAGE"
+  fi
   _b_ipc_mode=host
   _b_pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
   [ -f "$_b_pidf" ] && [ "$(awk '/^Uid:/{print $2}' "/proc/$(tr -d '[:space:]' < "$_b_pidf")/status" 2>/dev/null || echo '')" = "0" ] && _b_ipc_mode=host-root
@@ -419,7 +443,9 @@ fi
 docker start "$CONTAINER" >/dev/null 2>&1 || PA B "docker start (B) failed"
 api_ready || PA B "API did not come back after full restart"
 M_B0=$(log_mark)
+B_DISK0=$(server_read_bytes)   # sample the SERVER's own reads around the request
 ask afterB "$M_B0"
+B_DISK1=$(server_read_bytes)
 B_RETR=$(l2_retrievals "$M_B0"); B_CACHED=$(cached_of "$OUT/afterB.json")
 T_B=$(python3 -c "import json;print(json.load(open('$OUT/afterB.summary.json'))['ttft_s'])")
 echo "  post-full-restart L2 read events: $B_RETR, cached_tokens: $B_CACHED, ttft: ${T_B}s (cold: ${T_COLD}s)"
@@ -431,7 +457,6 @@ elif [ "${B_CACHED:-0}" -eq 0 ]; then
 fi
 B_AFTER=$(wait_l2_quiet)
 [ "$B_AFTER" -ge "$B_BEFORE" ] || fail "B: L2 shrank during restart -- data loss suspected ($B_BEFORE -> $B_AFTER)"
-B_DISK1=$(disk_read_bytes)
 if [ "$B_DISK0" = "-1" ] || [ "$B_DISK1" = "-1" ]; then
   inconc "B: KVP_CACHE_DEVICE unset/unreadable -- cannot independently prove NVMe-sourced reads (device counters unavailable)"
 else
