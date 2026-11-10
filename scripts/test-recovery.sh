@@ -209,7 +209,11 @@ api,key,prefix_file,out=sys.argv[1:5]
 body=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
   {"role":"system","content":"You are a careful assistant."},
   {"role":"user","content":open(prefix_file).read()+"\nQ: what is a sikkatu? one short sentence."}],
-  "max_tokens":32,"temperature":0,"stream":True,
+  # Round 79 review: max_tokens must leave room for the model's REASONING
+  # tokens -- with 32 the budget is eaten by reasoning_content (MiMo has a
+  # reasoning parser), delta.content never arrives (ttft stayed 0) and the
+  # stream can end with an EMPTY usage (prompt_tokens: 0). 256 covers both.
+  "max_tokens":256,"temperature":0,"stream":True,
   "stream_options":{"include_usage":True}}).encode()
 req=urllib.request.Request(api+"/v1/chat/completions",data=body,
   headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
@@ -224,12 +228,30 @@ try:
       p=line[6:]
       if p=="[DONE]": break
       o=json.loads(p)
-      if o.get("choices") and o["choices"][0].get("delta",{}).get("content") and ttft is None: ttft=time.time()
+      # ttft = first VISIBLE token, whatever field carries it -- with a
+      # reasoning parser the first deltas are reasoning_content, not content.
+      d0=o.get("choices",[{}])[0].get("delta",{}) if o.get("choices") else {}
+      if ttft is None and any(d0.get(k) for k in ("content","reasoning_content","tool_calls")): ttft=time.time()
       if o.get("usage"): usage=o["usage"]
 except urllib.error.URLError as e:
   print(f"REQUEST FAILED: cannot reach the engine at {api}: {e}", file=sys.stderr)
   print("  engine still loading, or it is not running -- check: docker ps / docker logs " + os.environ.get("CONTAINER","mimo-pro-tp4-kvp"), file=sys.stderr)
   sys.exit(3)
+# Round 79 review: if the stream ended with an EMPTY usage (prompt_tokens: 0),
+# fall back to a NON-STREAM request -- usage is always populated there.
+if not usage.get("prompt_tokens"):
+    body2=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),"messages":[
+      {"role":"system","content":"You are a careful assistant."},
+      {"role":"user","content":open(prefix_file).read()+"\nQ: what is a sikkatu? one short sentence."}],
+      "max_tokens":256,"temperature":0,"stream":False}).encode()
+    req2=urllib.request.Request(api+"/v1/chat/completions",data=body2,
+      headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
+    try:
+        with urllib.request.urlopen(req2,timeout=1800) as r2:
+            o2=json.loads(r2.read())
+        if o2.get("usage"): usage=o2["usage"]
+    except Exception as e2:
+        print(f"usage fallback failed: {e2}", file=sys.stderr)
 json.dump({"ttft_abs":ttft,"usage":usage},open(out,"w"),indent=2)
 PYEOF
   t1=$(date +%s.%N)
