@@ -544,7 +544,7 @@ if bad:
         print("HINT (l2_serde): the RUNNING cache server and this launch disagree")
         print("  about the lossless codec. Use the SAME switch on both sides:")
         print("    USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh   # server on zstd")
-        print("    USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh")
+        print("    USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh")
         print("  or restart the server WITHOUT the switch (raw/none) and relaunch.")
         print("  (The codec is part of the cache identity -- a change is a safe MISS.)")
     if any(l in _bad_labels for l in ("head_dim", "num_kv_heads")):

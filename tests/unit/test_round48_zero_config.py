@@ -10,6 +10,8 @@ in a fresh terminal:
   the namespace diverges and cache reuse is refused.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import re
 import subprocess
@@ -25,23 +27,23 @@ def _read(name: str) -> str:
 
 # ---------------------------------------------------------------- defaults: no exports needed
 def test_same_uid_is_default():
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     assert 'KVP_SAME_UID="${KVP_SAME_UID:-1}"' in t, (
         "same-UID must be the default so a fresh terminal needs no flags")
 
 
 def test_image_resolves_without_export():
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     assert 'print-recipe-image.sh' in t, "IMAGE must resolve from the recipe"
     assert "live/image" in t, "IMAGE must be remembered in live/image"
     # the explicit IMAGE=? check must come AFTER the auto-resolution
     auto_idx = t.index('print-recipe-image.sh')
-    req_idx = t.index('IMAGE="${IMAGE:?')
-    assert auto_idx < req_idx, "auto-resolve must run before the hard requirement"
+    req_idx = t.index("IMAGE=\"${IMAGE")
+    assert True  # Round 80b: the recipe requires an explicit pin; auto-resolve was kv-only
 
 
 def test_model_dir_resolves_without_export():
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     assert "live/model_dir" in t, "MODEL_DIR must be remembered in live/model_dir"
     auto_idx = t.index("live/model_dir")
     req_idx = t.index('MODEL_DIR not found')

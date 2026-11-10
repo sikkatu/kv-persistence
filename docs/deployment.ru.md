@@ -145,7 +145,7 @@ scripts/ipc-test.sh` = PASS).
 
 ```bash
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 В этом режиме HF-кэш монтируется в `/tmp/hf-cache`, а torch-кэши
@@ -165,7 +165,7 @@ KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 
 ```bash
 sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 `start-cache.sh` сам находит python venv lmcache под sudo
@@ -182,8 +182,8 @@ sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 ```bash
 export IMAGE='…@sha256:<digest>'
 export MODEL_DIR="$HOME/models/<your-model-dir>"
-KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # режим A (без root)
-# Режим B (root): sudo KVP_SAME_UID=0 bash scripts/run-vllm-with-persist.sh
+KVP_SAME_UID=1 bash scripts/start-all.sh   # режим A (без root)
+# Режим B (root): sudo KVP_SAME_UID=0 bash scripts/start-all.sh
 ```
 
 Скрипт повторяет аргументы продового лаунчера рецепта и добавляет
@@ -276,7 +276,7 @@ journalctl -u lmcache-server -f
 нужно перезапустить тоже — он может удерживать память GPU/хоста от мёртвого
 движка, и обычный рестарт движка не поможет, пока его не перезапустят.
 Правильный порядок: `bash scripts/stop-engine.sh` -> `bash scripts/stop-cache.sh`
--> `bash scripts/start-cache.sh` -> `bash scripts/run-vllm-with-persist.sh`.
+-> `bash scripts/start-cache.sh` -> `bash scripts/start-all.sh`.
 GPU pre-flight лаунчера (`_kvp_gpu_preflight` в `scripts/env.sh`) отказывается
 стартовать, пока VRAM занята, и печатает PID виновников.
 

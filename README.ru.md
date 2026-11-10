@@ -77,7 +77,7 @@ bash scripts/preflight.sh               # проверка хоста, хран�
 bash scripts/start-all.sh              # ОДНА команда: мониторинг + кэш + движок
 #   KVP_ENGINE=recipe  делегирует шаг движка аппаратно проверенному
 #   лаунчеру рецепта (sikkatu/recipes, KV_PERSIST=1) -- тот же стек одной
-#   командой. ДЕФОЛТ: KVP_ENGINE=kv (собственный лаунчер репо).
+#   командой. ДЕФОЛТ: KVP_ENGINE=recipe (аппаратно проверенный лаунчер).
 #   (или пошагово: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
 bash scripts/stop-all.sh                # остановить всё (данные сохраняются)
 
@@ -102,9 +102,11 @@ lossless zstd (отключение: `USE_LOSSLESS_SERDE=0`).
 **Делегирование движка (`KVP_ENGINE`).** `start-all.sh` умеет выполнять шаг
 движка любым из двух путей:
 
-* `KVP_ENGINE=kv` (ДЕФОЛТ) -- `run-vllm-with-persist.sh` этого репо;
-* `KVP_ENGINE=recipe` -- аппаратно проверенный `run-tp4-hotsplit.sh` из
+* `KVP_ENGINE=recipe` (ДЕФОЛТ) -- аппаратно проверенный `run-tp4-hotsplit.sh` из
   `sikkatu/recipes` с `KV_PERSIST=1`, одной командой, без ручных шагов.
+* legacy kv-лаунчер (`run-vllm-with-persist.sh`) УДАЛЁН в раунде 80b --
+  `KVP_ENGINE=kv` честно отказывает с ошибкой (ничего не потеряно: все
+  общие проверки живут в `env.sh` / `hotsplit_env.sh`).
 
 Оба пути делят один ключ (`~/.config/kvp/api_key`, автогенерация на loopback
 на ОБЕИХ путях), один дефолт бюджета горячих экспертов и одну запись имени
@@ -112,8 +114,8 @@ lossless zstd (отключение: `USE_LOSSLESS_SERDE=0`).
 `stop-engine.sh` / `kvp down` останавливают именно запущенное).
 Делегирование пинит `KV_CACHE_DTYPE=bfloat16` (дефолт рецепта `auto`
 резолвится в dtype модели -- ТОТ ЖЕ namespace кэша, проверено
-поведенчески). Дефолт НЕ переключается, пока прогон на железе не
-подтвердит рецептный путь.
+поведенчески). Рецептный путь подтверждён прогоном на железе
+(2026-11-10) и стал дефолтом в раунде 80.
 Оба пути выполняют одинаковые pre-flight-проверки до загрузки модели (раунд
 77): проба lmcache RPC (`mp_ping`) и тест CUDA IPC-границы (`ipc-test.sh`) --
 сломанный канал или граница отказывают в запуске за секунды, вместо падения
@@ -179,7 +181,7 @@ LMCACHE_L2_SERDE=zstd
 Кодек входит в namespace идентичности кэша: переключение между `none`, `zstd`
 и `lz4` превращает ранее сохранённые чанки в безопасный cache **miss** (никогда
 не в неверное чтение), и каждый лаунчер (`start-cache.sh`,
-`run-vllm-with-persist.sh`, `verify-engine-identity.sh`) резолвит переключатель
+`run-tp4-hotsplit.sh`, `verify-engine-identity.sh`) резолвит переключатель
 в одно и то же эффективное значение.
 
 ## Мониторинг (Prometheus + Grafana)
@@ -283,7 +285,7 @@ bash scripts/start-observability.sh
 
 # 2. LMCache + vLLM (lossless zstd -- ПО УМОЛЧАНИЮ с раунда 48)
 bash scripts/start-cache.sh
-bash scripts/run-vllm-with-persist.sh
+bash scripts/start-all.sh
 ```
 
 `USE_LOSSLESS_SERDE` должен быть одинаков для обеих команд — он входит в
@@ -342,7 +344,7 @@ namespace идентичности кэша. С раунда 46 лаунчер �
    export KVP_MODEL_CONFIG=<ваша-модель>
    ```
    `KVP_MODEL_CONFIG` читают `setup-identity.sh`, `start-cache.sh`,
-   `run-vllm-with-persist.sh`, `verify-engine-identity.sh` и загрузчик конфигов
+   `run-tp4-hotsplit.sh`, `verify-engine-identity.sh` и загрузчик конфигов
    `kvpersist`. `CONFIG_FILE` (только у `setup-identity.sh`) дополнительно
    позволяет указать конкретный файл для записи; обычно он не нужен.
 3. Отредактируйте `configs/<ваша-модель>/identity.env`:

@@ -154,7 +154,7 @@ path (`PRODUCER_USER=$(id -u):$(id -g) bash scripts/ipc-test.sh` = PASS).
 
 ```bash
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 In this mode the HF cache mounts at `/tmp/hf-cache` and the torch
@@ -174,7 +174,7 @@ with sudo:
 
 ```bash
 sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 `start-cache.sh` resolves the lmcache venv python under sudo
@@ -192,8 +192,8 @@ not possible in your environment.
 ```bash
 export IMAGE='…@sha256:<64-hex-digest>'   # same digest as production
 export MODEL_DIR="$HOME/models/<your-model-dir>"
-KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # mode A (no root)
-# Mode B (root): sudo KVP_SAME_UID=0 bash scripts/run-vllm-with-persist.sh
+bash scripts/start-all.sh   # same-UID by default (no root)
+# root fallback: KVP_SAME_UID=0 bash scripts/start-all.sh
 ```
 
 The script mirrors the production launcher arguments and adds
@@ -293,7 +293,7 @@ engine STOPPED. If the engine crashed (exit 1 / OOM), the cache server must be
 restarted too -- it can keep holding GPU/host memory from the dead engine, and a
 plain engine restart will fail until it is. Correct order:
 `bash scripts/stop-engine.sh` -> `bash scripts/stop-cache.sh` ->
-`bash scripts/start-cache.sh` -> `bash scripts/run-vllm-with-persist.sh`.
+`bash scripts/start-cache.sh` -> `bash scripts/start-all.sh`.
 The launcher's GPU pre-flight (`_kvp_gpu_preflight` in `scripts/env.sh`) refuses to
 start while VRAM is held and prints the offending PIDs.
 

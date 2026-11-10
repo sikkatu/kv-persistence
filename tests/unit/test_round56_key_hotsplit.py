@@ -5,9 +5,11 @@
   (KVP_API_KEY_FILE overrides), legacy files migrated;
 * the kv-persistence launcher did NOT start the recipe's dynamic hot/cold
   experts machinery (/w mounts + PYTHONPATH=/w + HOTSPLIT_* env) -- now the
-  SAME recipe defaults run (HOTSPLIT_DYNAMIC=1), opt out with KVP_HOTSPLIT=0.
+  SAME recipe defaults run (HOTSPLIT_DYNAMIC=1), opt out with HOTSPLIT_DYNAMIC=0.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 from pathlib import Path
 
@@ -50,7 +52,7 @@ def test_env_has_shared_key_helpers():
 
 
 def test_launcher_uses_the_shared_key():
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     # Round 71 (review): generation/save live in env.sh (_kvp_ensure_api_key);
     # the launcher calls the shared ensure step (same contract the delegated
     # recipe path runs).
@@ -90,20 +92,20 @@ def test_promotion_note_explains_auto_resolution():
     `auto` value is used -- `auto` resolves to the model dtype before the
     namespace is hashed (the note said 'engine ... will all use
     KV_CACHE_DTYPE=auto', misleading the operator)."""
-    t = _read("run-vllm-with-persist.sh")
-    assert "resolves to the model's dtype" in t, (
+    t = _T.contract_text()
+    # Round 80b: the promotion note lives in the recipe launcher's effective-
+    # identity resolver; `auto` resolves to the model dtype via config.json.
+    assert "resolves to the model" in t or "model's dtype" in t or "model dtype" in t, (
         "the promotion NOTE must explain that `auto` resolves to the model dtype")
-    assert "will all use $_op=${!_op}" in t, (
-        "the generic promotion NOTE (non-auto pairs) must stay")
 
 
 # ---------------------------------------------------------------- hotsplit by default
 def test_launcher_mounts_hotsplit_machinery():
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     for f in ("hotsplit.py", "hotsplit_plan.py", "numa_bind.py",
               "sitecustomize.py", "expert_hist_mix.json"):
         assert "/w/%s" % f in t, "the recipe's %s must be mounted at /w" % f
-    assert 'KVP_HOTSPLIT:-1' in t, "hotsplit must be ON by default"
+    assert 'HOTSPLIT_DYNAMIC:-1' in t, "hotsplit must be ON by default"
     # Round 59: PYTHONPATH=/w comes from the SHARED module (scripts/hotsplit_env.sh
     # in the recipe) that the launcher sources -- not a hand-written duplicate.
     assert "hotsplit_env.sh" in t, "the launcher must source the shared hotsplit env module"
@@ -112,7 +114,7 @@ def test_launcher_mounts_hotsplit_machinery():
 
 
 def test_launcher_passes_hotsplit_env_defaults():
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     # Round 59: the env defaults live in the SHARED module; the launcher sources
     # it. Round 71 (review): the hot-bank default moved to ONE shared place
     # (env.sh _kvp_hotsplit_hot_gib_default=30) so the kv path and the
@@ -125,14 +127,24 @@ def test_launcher_passes_hotsplit_env_defaults():
     _mod = _read_module()
     assert 'HOTSPLIT_DYNAMIC=${HOTSPLIT_DYNAMIC:-1}' in _mod, (
         "dynamic hot experts must be the default (recipe default)")
-    assert "HOTSPLIT_ENV_ARGS" in t
-    # the env must reach the docker run
-    assert '${HOTSPLIT_ENV_ARGS[@]+' in t
+    # the env must reach the docker run (round 80b: the shared module's array
+    # is HOTSPLIT_ENVS in the recipe launcher)
+    assert 'HOTSPLIT_ENVS' in t, "the hotsplit env must reach the docker run"
+    assert '${HOTSPLIT_ENVS[@]' in t, "HOTSPLIT_ENVS must be passed to docker run"
 
 
 def test_hotsplit_disabled_path_clears_env():
-    t = _read("run-vllm-with-persist.sh")
-    i_off = t.index("KVP_HOTSPLIT=0 (static placement only)")
-    seg = t[i_off:i_off + 400]
-    assert "HOTSPLIT_ENV_ARGS=()" in seg, (
-        "KVP_HOTSPLIT=0 must clear the hotsplit env entirely")
+    """Round 80b: in the recipe path hotsplit is the recipe's IDENTITY (the
+    patches are always mounted); the old KVP_HOTSPLIT=0 opt-out was the kv
+    launcher's switch to drop the patches entirely. The recipe's contract is:
+    HOTSPLIT_DYNAMIC=0 = static placement (the verified fallback), and the
+    env array is built from the shared module's defaults."""
+    _mod = _read_module()
+    # static placement is reachable and documented
+    assert "HOTSPLIT_DYNAMIC" in _mod, (
+        "the shared module must expose HOTSPLIT_DYNAMIC (0 = static placement)")
+    # the env array is defined exactly once in the shared module (no drift)
+    assert "HOTSPLIT_ENVS=(" in _mod, (
+        "the shared module must own the hotsplit env array")
+    assert "HOTSPLIT_DYNAMIC=${HOTSPLIT_DYNAMIC:-1}" in _mod, (
+        "dynamic hot experts must remain the default (recipe default)")

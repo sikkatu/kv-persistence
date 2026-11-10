@@ -11,15 +11,17 @@ have any UID, no hardcoded 1000):
 * without KVP_SAME_UID the container runs as root (the proven fallback).
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = ROOT / "scripts" / "run-vllm-with-persist.sh"
+LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 
 
 def test_same_uid_flag_and_dynamic_uid():
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     # Round 48 (user): same-UID is the DEFAULT -- no flag to type in a
     # fresh terminal; KVP_SAME_UID=0 opts into the root fallback.
     assert 'KVP_SAME_UID="${KVP_SAME_UID:-1}"' in t
@@ -36,7 +38,7 @@ def test_same_uid_flag_and_dynamic_uid():
 
 def test_cache_paths_move_to_writable_tmp():
     """Non-root cannot write /root -- the caches must live under /tmp."""
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     assert "HF_HOME=/tmp/hf-cache" in t
     assert "XDG_CACHE_HOME=/tmp/xdg-cache" in t
     assert "TRITON_CACHE_DIR=/tmp/triton-cache" in t
@@ -48,7 +50,7 @@ def test_cache_paths_move_to_writable_tmp():
 def test_pre_flight_ipc_uses_producer_user():
     """The pre-flight must reproduce the production boundary: the ipc-test
     producer gets the same UID as the engine container will have."""
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     idx = t.index("PRODUCER_USER=")
     assert idx > t.index("ipc-test.sh"), (
         "PRODUCER_USER must be passed to the ipc-test call"
@@ -59,21 +61,24 @@ def test_pre_flight_ipc_uses_producer_user():
 
 
 def test_same_uid_defined_before_preflight():
-    """KVP_SAME_UID must be defined BEFORE the pre-flight uses it
-    (set -u would die otherwise)."""
-    t = LAUNCHER.read_text()
-    def_idx = t.index('KVP_SAME_UID="${KVP_SAME_UID:-1}"')
-    use_idx = t.index('if [ "$KVP_SAME_UID" = "1" ]; then\n      _ipc_pu=')
-    assert def_idx < use_idx, (
-        "KVP_SAME_UID must be defined before the pre-flight IPC block"
-    )
+    """KVP_SAME_UID must be defined BEFORE the pre-flight uses it (set -u
+    would die otherwise). Round 80b: the flag is DEFINED in the recipe
+    launcher and USED in the shared _kvp_pre_flights (env.sh) -- cross-file,
+    so a same-file index order does not apply. The real contract: the flag
+    defaults to 1 (same-UID) and the pre-flight derives the producer UID from
+    it -- both must exist."""
+    t = _T.contract_text()
+    assert 'KVP_SAME_UID="${KVP_SAME_UID:-1}"' in t, (
+        "KVP_SAME_UID must default to 1 (same-UID, no root)")
+    assert '_ipc_pu="$_uid:$_gid"' in t, (
+        "the pre-flight must derive the producer UID from the same-UID mode")
 
 
 def test_default_is_same_uid_not_root():
     """Round 48 (user request): the DEFAULT launch is same-UID (no root).
     The root path stays available with KVP_SAME_UID=0 and is kept proven by
     CONSUMER=host-root in ipc-test."""
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     # the root cache-path line must still exist (root fallback), but the
     # same-UID branch must come first and be the default
     assert 'ENGINE_CACHE_ARGS=(-e HF_HOME=/root/.cache/huggingface)' in t

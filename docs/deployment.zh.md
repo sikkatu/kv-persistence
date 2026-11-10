@@ -114,7 +114,7 @@ cache miss（绝不会错误命中），因此请在所有启动器中使用同�
 
 ```bash
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-KVP_SAME_UID=1 USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 此模式下 HF 缓存挂载到 `/tmp/hf-cache`，torch 缓存
@@ -132,7 +132,7 @@ CUDA IPC 边界测试（`bash scripts/ipc-test.sh`）在目标主机上证实：
 
 ```bash
 sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
+USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 `start-cache.sh` 在 sudo 下自动解析 lmcache venv 的 python
@@ -148,8 +148,8 @@ sudo USE_LOSSLESS_SERDE=1 bash scripts/run-vllm-with-persist.sh
 ```bash
 export IMAGE='…@sha256:<digest>'
 export MODEL_DIR="$HOME/models/<your-model-dir>"
-KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh   # 模式 A（无需 root）
-# 模式 B（root）：sudo KVP_SAME_UID=0 bash scripts/run-vllm-with-persist.sh
+KVP_SAME_UID=1 bash scripts/start-all.sh   # 模式 A（无需 root）
+# 模式 B（root）：sudo KVP_SAME_UID=0 bash scripts/start-all.sh
 ```
 
 ## 7. 验证
@@ -227,7 +227,7 @@ journalctl -u lmcache-server -f
 （exit 1 / OOM），缓存服务器也必须重启——它可能仍持有死去引擎的 GPU/主机内存，
 在重启它之前单纯重启引擎会失败。正确顺序：`bash scripts/stop-engine.sh` ->
 `bash scripts/stop-cache.sh` -> `bash scripts/start-cache.sh` ->
-`bash scripts/run-vllm-with-persist.sh`。启动器的 GPU 预检
+`bash scripts/start-all.sh`。启动器的 GPU 预检
 （`scripts/env.sh` 中的 `_kvp_gpu_preflight`）在 VRAM 被占用时拒绝启动并打印
 占用者 PID。
 

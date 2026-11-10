@@ -6,6 +6,8 @@ the pinned digest from the recipe's tp4.env.example via
 print-recipe-image.sh, the same way the launcher resolves the recipe.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import subprocess
 from pathlib import Path
@@ -43,7 +45,7 @@ def test_no_placeholders_in_commands():
     # usage block must show the simple command
     assert "bash scripts/ipc-test.sh" in t
     # the launcher hint must be copy-pasteable too
-    lt = (ROOT / "scripts" / "run-vllm-with-persist.sh").read_text()
+    lt = _T.contract_text()
     assert "IMAGE=$IMAGE bash scripts/ipc-test.sh" not in lt, (
         "the launcher hint must not require the operator to type the image"
     )

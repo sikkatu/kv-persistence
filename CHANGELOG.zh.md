@@ -8,6 +8,21 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 ## 未发布
 
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
+## 第 80b 轮（legacy kv 启动器已删除；所有检查均已保留）
+* **`run-vllm-with-persist.sh` 已删除**——`start-all.sh` 现在只有一条引擎
+  路径（`KVP_ENGINE=recipe`）。`KVP_ENGINE=kv` 诚实地报错退出（没有任何
+  东西丢失：共享检查都在 `env.sh` / `hotsplit_env.sh` 中）。
+* **旧启动器拥有的每一项检查都经过审计并保留**——三项预检（TCP 可达、
+  L2 编解码器匹配、lmcache 版本匹配）、引擎死亡时的缓存服务诊断、GPU
+  预检 + 缓存服务 PID 检查、`engine-identity.env` 写入、以及 namespace
+  覆盖 consent 门（第 72 轮）全部迁移到 recipe 启动器 / 共享的
+  `_kvp_pre_flights`。它们曾经只存在于被删除的脚本中（第 76 轮的
+  缺陷类别）。
+* 22 个 kv + 5 个 recipes 测试文件已迁移：文本契约检查读取契约并集
+  （`_targets.contract_text()` / `_contract.py`），行为测试驱动 recipe
+  启动器。Parity 测试（两个启动器）变为引擎 docker 契约测试（一个）。
+* kv 378+20，recipes 388+5——全部绿色。
+
 ## 第 80 轮（默认引擎 = recipe，硬件验证已通过）
 * **硬件运行于 2026-11-10 完整通过**（`test-recovery.sh`
   `VERDICT: PASS`，exit 0）：recipe 路径上的 same-UID 引擎（1000:1000），
@@ -43,17 +58,3 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 
 
 
-## 第 78 轮（CONTAINER= 覆盖、API_KEY 规范文件契约、诚实的 parity、完整 exit-code 链）
-* 环境中的 `CONTAINER=` 在 recipe 路径上被忽略（start-all.sh 用默认值覆盖它）。
-  现在的优先级：`CONTAINER` > `KVP_ENGINE_CONTAINER` > 默认值——生效名称写入
-  `live/engine_container` 并导出给 recipe 启动器。
-* 修复 `run-tp4-hotsplit.sh` 中的 `API_KEY` 脑裂：env 密钥用于启动，而
-  `~/.config/kvp/api_key` 仍保存旧密钥（`live/api_key` 镜像新密钥）——同时存在
-  两个不同的密钥。契约（与 kv 路径相同）：规范文件是唯一事实来源；显式 env
-  `API_KEY` 胜出并带响亮 WARNING 保存到规范文件。
-* 全量 parity 测试曾用 `set()` 比较 docker-run 的 token——重复的标志/挂载和
-  次数都不可见。现在用 Counter（多重集）+ 单次使用标志的重复检测 + 挂载目标
-  多重集比较（标志的顺序诚实地不在范围内：两个启动器构建命令的顺序不同，
-  docker 会忽略它）。
-* exit-code 现在通过完整链（`kvp up` -> `exec` -> `start-all.sh` -> 前台 recipe）
-  用任意非零码验证，而不只是经 start-all.sh 的 exit 1。

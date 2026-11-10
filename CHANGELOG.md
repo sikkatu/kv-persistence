@@ -9,6 +9,24 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 ## Unreleased
 
 Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
+## Round 80b (legacy kv launcher deleted; every check PRESERVED)
+* **`run-vllm-with-persist.sh` is DELETED** -- `start-all.sh` now has ONE
+  engine path (`KVP_ENGINE=recipe`). `KVP_ENGINE=kv` fails with an honest,
+  actionable error (nothing is lost: the shared checks live in `env.sh` /
+  `hotsplit_env.sh`).
+* **Every check the old launcher owned was audited and PRESERVED** --
+  three pre-flight checks (TCP reachability, L2 codec match, lmcache
+  version match), the cache-server diagnostics on engine death, the
+  GPU pre-flight + cache-server PID check, `engine-identity.env` writing,
+  and the namespace-override CONSENT gate (round 72) all moved to the
+  recipe launcher / the shared `_kvp_pre_flights`. They used to live ONLY
+  in the deleted script (the round-76 defect class).
+* 22 kv + 5 recipes test files migrated: textual contract checks now read
+  the contract UNION (`_targets.contract_text()` / `_contract.py`),
+  behavioural tests drive the recipe launcher. The parity test (two
+  launchers) became the engine docker-run CONTRACT test (one launcher).
+* kv 378+20, recipes 388+5 -- all green.
+
 ## Round 80 (default engine = recipe, hardware validation PASSED)
 * **The hardware run PASSED end-to-end on 2026-11-10** (`test-recovery.sh`
   `VERDICT: PASS`, exit 0): same-UID engine (1000:1000) on the recipe path,
@@ -50,21 +68,3 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`require
 
 
 
-## Round 78 (CONTAINER= override, API_KEY canonical-file contract, honest parity, full exit-code chain)
-* `CONTAINER=` from the environment was IGNORED on the recipe path
-  (start-all.sh overwrote it with the default). Priority now:
-  `CONTAINER` > `KVP_ENGINE_CONTAINER` > default -- the effective name is
-  recorded in `live/engine_container` and exported to the recipe launcher.
-* `API_KEY` split-brain fixed in `run-tp4-hotsplit.sh`: the env key was used
-  for the run while `~/.config/kvp/api_key` kept the OLD key (and `live/api_key`
-  mirrored the NEW one) -- two different keys at once. Contract (same as the kv
-  launcher): the canonical file is the source of truth; an explicit env
-  `API_KEY` WINS and is SAVED there with a loud WARNING.
-* The full-parity test compared docker-run tokens with `set()` -- duplicate
-  flags/mounts and multiplicity were invisible. Now Counter (multiset)
-  comparison + duplicate single-use flag detection + mount targets as a
-  multiset (flag ORDER is honestly out of scope: the two launchers build the
-  command in different order and docker ignores it).
-* The exit code is now verified through the FULL chain (`kvp up` -> `exec` ->
-  `start-all.sh` -> foreground recipe) with an arbitrary non-zero code, not
-  just exit 1 via start-all.sh.

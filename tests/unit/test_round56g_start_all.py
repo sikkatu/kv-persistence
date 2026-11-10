@@ -26,7 +26,7 @@ def test_start_all_exists_and_is_ordered():
     # too and must not confuse the check).
     obs = t.index('bash "$HERE/start-observability.sh"')
     cache = t.index('bash "$HERE/start-cache.sh"')
-    engine = t.index('bash "$HERE/run-vllm-with-persist.sh"')
+    engine = t.index('bash "$RECIPE_DIR/scripts/run-tp4-hotsplit.sh"')  # Round 80b: recipe owns the engine
     assert obs < cache < engine, (
         "start-all: observability -> cache -> engine (the cache auto-attaches)")
     # The config layer must load BEFORE the cache decision (round 58): the PID

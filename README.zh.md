@@ -74,7 +74,7 @@ bash scripts/preflight.sh               # 校验主机、存储与身份
 bash scripts/start-all.sh              # 一条命令：监控 + 缓存 + 引擎
 #   KVP_ENGINE=recipe  把引擎步骤委托给经硬件验证的 recipe 启动器
 #   （sikkatu/recipes，KV_PERSIST=1）——同一条栈，一条命令。
-#   默认：KVP_ENGINE=kv（本仓库自带的启动器）。
+#   默认：KVP_ENGINE=recipe（经硬件验证的启动器）。
 #   （或分步：start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh）
 bash scripts/stop-all.sh                # 全部停止（数据保留）
 
@@ -96,7 +96,11 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 
 **引擎委托（`KVP_ENGINE`）：** `start-all.sh` 可以通过任一路径执行引擎步骤：
 
-* `KVP_ENGINE=kv`（默认）——本仓库的 `run-vllm-with-persist.sh`；
+* `KVP_ENGINE=recipe`（默认）——recipe 启动器
+  （`run-tp4-hotsplit.sh`，带 `KV_PERSIST=1`）；
+* legacy kv 启动器（`run-vllm-with-persist.sh`）已在第 80b 轮删除——
+  `KVP_ENGINE=kv` 诚实地报错退出（没有任何东西丢失：所有共享检查都在
+  `env.sh` / `hotsplit_env.sh` 中）。
 * `KVP_ENGINE=recipe`——`sikkatu/recipes` 中经硬件验证的
   `run-tp4-hotsplit.sh`（`KV_PERSIST=1`），一条命令，无需手工步骤。
 
@@ -104,8 +108,8 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 都会自动生成）、一个热专家预算默认值和一条容器名记录
 （每次启动都写 `live/engine_container`，因此 `stop-engine.sh` / `kvp down`
 停止的正是已启动的容器）。委托固定 `KV_CACHE_DTYPE=bfloat16`（recipe 的默认
-`auto` 解析为模型 dtype——相同的缓存 namespace，经行为验证）。在硬件运行
-确认 recipe 路径之前不切换默认值。
+`auto` 解析为模型 dtype——相同的缓存 namespace，经行为验证）。recipe 路径已经硬件验证
+（2026-11-10），自第 80 轮起为默认值。
 两条路径在模型加载前运行相同的预检（第 77 轮）：lmcache RPC 探测（`mp_ping`）
 和 CUDA IPC 边界测试（`ipc-test.sh`）——损坏的通道或边界会在几秒内拒绝启动，
 而不是在约 15 分钟的模型加载后才失败。
@@ -152,7 +156,7 @@ LMCACHE_L2_SERDE=zstd
 ```
 编解码属于缓存身份命名空间的一部分：在 `none`、`zstd` 与 `lz4` 之间切换会让
 已存储的块变成安全的缓存 **miss**（绝不会错误命中），并且每个启动器
-（`start-cache.sh`、`run-vllm-with-persist.sh`、`verify-engine-identity.sh`）
+（`start-cache.sh`、`run-tp4-hotsplit.sh`、`verify-engine-identity.sh`）
 都会把开关解析为同一个生效值。
 ## 监控（Prometheus + Grafana）
 `observability/` 目录内置了官方 LMCache 示例的完整可观测性栈
@@ -229,7 +233,7 @@ bash scripts/start-observability.sh
 
 # 2. LMCache + vLLM（自第 48 轮起 lossless zstd 为默认）
 bash scripts/start-cache.sh
-bash scripts/run-vllm-with-persist.sh
+bash scripts/start-all.sh
 ```
 `USE_LOSSLESS_SERDE` 在两条命令中必须一致 —— 它属于缓存身份命名空间。自第 46 轮起，
 启动器还将有效编解码器写入 `$KVP_CACHE_ROOT/engine-identity.env`，独立脚本会自动读取
@@ -274,7 +278,7 @@ bash scripts/run-vllm-with-persist.sh
    export KVP_MODEL_CONFIG=<你的模型>
    ```
    `KVP_MODEL_CONFIG` 由 `setup-identity.sh`、`start-cache.sh`、
-   `run-vllm-with-persist.sh`、`verify-engine-identity.sh` 和 `kvpersist`
+   `run-tp4-hotsplit.sh`、`verify-engine-identity.sh` 和 `kvpersist`
    配置加载器读取。`CONFIG_FILE`（仅 `setup-identity.sh`）额外允许指定要写入的
    具体文件；通常不需要。
 3. 编辑 `configs/<你的模型>/identity.env`：

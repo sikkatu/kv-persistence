@@ -12,6 +12,8 @@ missed the lmcache venv. Round 45f:
   (root -> host-root), not just KVP_LAUNCH_MODE.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import subprocess
 from pathlib import Path
@@ -19,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ENV_SH = ROOT / "scripts" / "env.sh"
 START_CACHE = ROOT / "scripts" / "start-cache.sh"
-LAUNCHER = ROOT / "scripts" / "run-vllm-with-persist.sh"
+LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 
 
 def test_kvp_python_resolver_exists():
@@ -56,12 +58,12 @@ def test_start_cache_launches_with_resolved_python():
 def test_ipc_mode_follows_server_process_user():
     """A root-run server needs the host-root IPC consumer (the ipc-test
     proved root is the fix) -- detected from the pid file, not env alone."""
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     assert "host-root" in t, "the pre-flight must support the host-root consumer"
     assert "/proc/$_ipc_pid/status" in t, (
         "the server process user must be read from proc"
     )
-    marker = t.index("Review fix (round 45): the RPC ping does NOT prove")
+    marker = t.index("CUDA IPC boundary")
     idx = t.index("_ipc_mode=host-root")
     assert idx > marker, (
         "the mode detection must live in the IPC test block"

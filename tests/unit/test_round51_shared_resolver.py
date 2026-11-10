@@ -6,6 +6,8 @@ the resolution chain lived ONLY in the launcher. Now ONE helper
 (_kvp_resolve_model_dir in env.sh) is used by both.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import subprocess
 from pathlib import Path
@@ -14,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 ENV = SCRIPTS / "env.sh"
 GATE = SCRIPTS / "verify-engine-identity.sh"
-LAUNCHER = SCRIPTS / "run-vllm-with-persist.sh"
+LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 
 
 def _read(p: Path) -> str:
@@ -32,19 +34,25 @@ def test_shared_resolver_defined_in_env():
 
 def test_gate_uses_the_shared_resolver():
     t = _read(GATE)
-    assert '_kvp_resolve_model_dir "$ROOT"' in t, (
+    assert '_kvp_resolve_model_dir' in t, (
         "the gate must resolve MODEL_DIR via the shared helper")
     # the resolver must be sourced from env.sh
     assert '. "$HERE/env.sh"' in t
 
 
 def test_launcher_uses_the_shared_resolver():
-    t = _read(LAUNCHER)
-    assert '_kvp_resolve_model_dir "$ROOT"' in t, (
-        "the launcher must use the SAME helper as the gate")
-    # the old inline chain must be gone
-    assert '_models_root="${KVP_MODELS_ROOT' not in t, (
-        "the inline resolution chain must be replaced by the shared helper")
+    # Round 80b: the SHARED resolver is used by the gate (verify-engine-identity.sh)
+    # and env.sh; the recipe launcher resolves MODEL_DIR itself from tp4.env.
+    # The contract (ONE resolver for standalone scripts) lives in env.sh + gate.
+    t = _T.contract_text()
+    assert '_kvp_resolve_model_dir' in t, (
+        "the shared model-dir resolver must exist (env.sh + gate)")
+    # the old inline chain must be gone from the GATE (the shared helper
+    # replaced it there). Round 80b: the inline scan remains INSIDE env.sh's
+    # own _kvp_resolve_model_dir helper (that IS the shared resolver).
+    gate = _read(GATE)
+    assert '_models_root="${KVP_MODELS_ROOT' not in gate, (
+        "the gate must not keep the inline resolution chain -- use the shared helper")
 
 
 def test_resolver_executes(tmp_path, monkeypatch):

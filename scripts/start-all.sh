@@ -57,20 +57,22 @@ else
 fi
 
 echo "== 3/3 vLLM engine (model load takes ~13-16 min; Ctrl-C stops the launcher, use bash scripts/stop-engine.sh to stop the engine) =="
-# Round 70 (delegation, review step 2): the engine launch has TWO paths.
-# Round 80 (hardware validation PASSED 2026-11-10: same-UID engine, both
-# recovery scenarios PASS with disk-backed KV proven): the recipe launcher
-# is the DEFAULT now.
-#   KVP_ENGINE=recipe (DEFAULT) -- the hardware-verified recipe launcher
-#                     (run-tp4-hotsplit.sh with KV_PERSIST=1);
-#   KVP_ENGINE=kv     -- LEGACY kv-persistence launcher
-#                     (run-vllm-with-persist.sh), kept only until the round-80
-#                     cleanup deletes it (every check has been moved to the
-#                     shared modules both paths call).
+# Round 80b (cleanup after the hardware validation PASSED 2026-11-10): the
+# recipe launcher (run-tp4-hotsplit.sh with KV_PERSIST=1) is the ONE engine
+# path now. The legacy kv launcher (run-vllm-with-persist.sh) is DELETED --
+# every shared check (identity gate, pre-flights, API key, same-UID, hotsplit
+# budget, container-name record) lives in the shared modules both launchers
+# called: env.sh / hotsplit_env.sh / verify-engine-identity.sh. Nothing is
+# lost with the old script.
 KVP_ENGINE="${KVP_ENGINE:-recipe}"
 case "$KVP_ENGINE" in
   kv)
-    KVP_SAME_UID="${KVP_SAME_UID:-1}" bash "$HERE/run-vllm-with-persist.sh"
+    echo "ERROR: KVP_ENGINE=kv was REMOVED in round 80 -- the legacy kv launcher" >&2
+    echo "(run-vllm-with-persist.sh) is deleted. Use the default recipe engine:" >&2
+    echo "  bash scripts/start-all.sh            (KVP_ENGINE=recipe is the default)" >&2
+    echo "Its checks were NOT lost: identity gate, pre-flights, API-key, same-UID" >&2
+    echo "and the hotsplit budget live in env.sh / hotsplit_env.sh (shared modules)." >&2
+    exit 1
     ;;
   recipe)
     # Resolve the recipe location the same way the kv launcher does

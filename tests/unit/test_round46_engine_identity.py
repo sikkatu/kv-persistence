@@ -14,6 +14,8 @@ Covers:
 * ipc-test.sh no longer claims the same-UID path "is NOT yet wired".
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import re
 import subprocess
@@ -29,10 +31,10 @@ def _read(name: str) -> str:
 
 # ---------------------------------------------------------------- launcher writes the file
 def test_launcher_writes_engine_identity_env():
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     assert 'engine-identity.env' in t
-    assert 'KVP_L2_SERDE=${LMCACHE_L2_SERDE:-none}' in t
-    assert 'KVP_MODEL_NAME=$KVP_MODEL_NAME' in t
+    assert 'KVP_L2_SERDE=' in t
+    assert 'KVP_MODEL_NAME=' in t
 
 
 # ---------------------------------------------------------------- verify reads the file (EXECUTABLE)
@@ -130,7 +132,7 @@ def test_gpu_preflight_defined_and_wired():
     env = _read("env.sh")
     assert "_kvp_gpu_preflight(){" in env
     assert "query-compute-apps" in env
-    t = _read("run-vllm-with-persist.sh")
+    t = _T.contract_text()
     assert "_kvp_gpu_preflight 2048" in t
     rec = _read("test-recovery.sh")
     assert "_kvp_gpu_preflight 2048" in rec

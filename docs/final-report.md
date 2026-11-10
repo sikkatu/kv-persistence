@@ -78,7 +78,7 @@ bash scripts/setup-identity.sh "$HOME/models/MiMo-V2.6-Pro-MOPD"  # fills AND ve
 bash scripts/preflight.sh
 bash scripts/start-observability.sh        # monitoring first (auto-attaches)
 bash scripts/start-cache.sh                # metrics flow automatically
-bash scripts/run-vllm-with-persist.sh      # no exports/flags needed (round 48)
+bash scripts/start-all.sh      # no exports/flags needed (round 48)
 bash scripts/verify-engine-identity.sh          # gate: engine geometry == identity pins
 
 # acceptance tests -- machine verdict; exit 0 = PASS

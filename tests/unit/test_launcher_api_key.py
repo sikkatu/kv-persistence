@@ -10,6 +10,8 @@ A stub docker on PATH keeps the tests from touching a real daemon.
 """
 
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import os
 import stat
@@ -17,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = ROOT / "scripts" / "run-vllm-with-persist.sh"
+LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 KEY_FILE = ROOT / "live" / "api_key"
 
 DOCKER_STUB = """#!/usr/bin/env bash

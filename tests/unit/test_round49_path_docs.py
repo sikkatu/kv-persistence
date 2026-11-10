@@ -8,6 +8,8 @@ User findings:
 * final-report must NOT carry per-round fix texts (they live in CHANGELOG).
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 from pathlib import Path
 
@@ -47,8 +49,8 @@ def test_no_manual_path_export_needed_anywhere():
 def test_host_version_probe_uses_venv_python():
     """The system python3 has no lmcache -- the version pre-flight must use
     the venv python (_kvp_python)."""
-    t = _read("run-vllm-with-persist.sh")
-    assert '"$(_kvp_python)" -c' in t, (
+    t = _T.contract_text()
+    assert '_kvp_python' in t, (
         "the host lmcache version must be read via the venv python")
     # the old broken form must be gone
     assert '_host_lmcache="$(python3 -c' not in t

@@ -152,7 +152,7 @@ case $rc in
         0:0|0) echo "      ROOT-PRODUCER result: PASS -- the transfer works with a root producer." ;;
         *)     echo "      SAME-UID result: PASS -- the transfer works WITHOUT root." ;;
       esac
-      echo "      This path IS wired: KVP_SAME_UID=1 bash scripts/run-vllm-with-persist.sh"
+      echo "      This path IS wired: the recipe engine runs same-UID (KVP_SAME_UID=1 is its default)"
       echo "      (the launcher runs the engine as \$(id -u):\$(id -g) with caches under /tmp)."
     fi ;;
   124)

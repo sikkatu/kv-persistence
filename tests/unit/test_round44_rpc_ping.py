@@ -10,6 +10,8 @@ Round 44 adds:
 * start-cache.sh -- PYTHONFAULTHANDLER=1 so a hung thread dumps stacks.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import subprocess
 import sys
@@ -17,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 IMPL = ROOT / "implementation"
-LAUNCHER = ROOT / "scripts" / "run-vllm-with-persist.sh"
+LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 START_CACHE = ROOT / "scripts" / "start-cache.sh"
 
 
@@ -50,7 +52,7 @@ def test_mp_ping_failure_exit_code():
 def test_launcher_pre_flight_wires_mp_ping():
     """The launcher must probe the RPC protocol before docker run and
     refuse to launch on a dead RPC channel."""
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     assert "kvpersist.mp_ping" in t, "the pre-flight must call mp_ping"
     idx = t.index("kvpersist.mp_ping")
     # the ping call must come before the docker run of the engine
@@ -62,7 +64,7 @@ def test_launcher_pre_flight_wires_mp_ping():
 def test_launcher_prints_server_diagnostics_on_failure():
     """When the container dies the launcher must dump the cache server's
     state automatically (round 44)."""
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     assert "cache server diagnostics (automatic)" in t
     for needle in ("lmcache-server.pid", "lmcache-server.log",
                    "last 30 server log lines"):

@@ -85,10 +85,9 @@ cd ~/kv-persistence
 bash scripts/setup-identity.sh "$HOME/models/<your-model-dir>"   # fill AND verify identity pins
 bash scripts/preflight.sh               # verify host, storage and identity
 bash scripts/start-all.sh              # ONE command: monitoring + cache + engine
-#   KVP_ENGINE=recipe  delegates the engine step to the hardware-verified
+#   KVP_ENGINE=recipe (DEFAULT) runs the engine via the hardware-verified
 #   recipe launcher (sikkatu/recipes, KV_PERSIST=1) -- same stack, one command.
-#   DEFAULT: KVP_ENGINE=kv (this repo's own launcher).
-#   (or step by step: start-observability.sh -> start-cache.sh -> run-vllm-with-persist.sh)
+#   (or step by step: start-observability.sh -> start-cache.sh -> start-all.sh)
 bash scripts/stop-all.sh                # stop everything (data kept)
 
 API key: ONE shared file for both repos (`$HOME/.config/kvp/api_key`,
@@ -115,9 +114,11 @@ Permanent switch in the production recipe is `KV_PERSIST=1` in `tp4.env`
 **Engine delegation (`KVP_ENGINE`).** `start-all.sh` can run the engine step
 through either path:
 
-* `KVP_ENGINE=kv` (DEFAULT) -- this repo's `run-vllm-with-persist.sh`;
-* `KVP_ENGINE=recipe` -- the hardware-verified `run-tp4-hotsplit.sh` of
-  `sikkatu/recipes` with `KV_PERSIST=1`, one command, no manual steps.
+* `KVP_ENGINE=recipe` (DEFAULT) -- the recipe launcher
+  (`run-tp4-hotsplit.sh` with `KV_PERSIST=1`);
+* the legacy kv launcher (`run-vllm-with-persist.sh`) was DELETED in
+  round 80b -- `KVP_ENGINE=kv` fails with an honest error (nothing is lost:
+  every shared check lives in `env.sh` / `hotsplit_env.sh`).
 
 Both paths share one key (`~/.config/kvp/api_key`, auto-generated on a
 loopback bind on BOTH paths), one hot-expert budget default and one
@@ -125,7 +126,7 @@ container-name record (`live/engine_container`, written by each launch, so
 `stop-engine.sh` / `kvp down` stop exactly what was started). The delegation
 pins `KV_CACHE_DTYPE=bfloat16` (the recipe default `auto` resolves to the
 model dtype -- the SAME cache namespace, verified behaviourally). The
-default is NOT switched until a hardware run confirms the recipe path.
+recipe path was hardware-confirmed (2026-11-10) and is the default since round 80.
 Both paths run the same pre-flights before the model load (round 77): the
 lmcache RPC probe (`mp_ping`) and the CUDA IPC boundary test (`ipc-test.sh`)
 -- a broken channel or boundary refuses the launch in seconds instead of
@@ -191,7 +192,7 @@ LMCACHE_L2_SERDE=zstd
 The codec is part of the cache-identity namespace: switching between `none`,
 `zstd` and `lz4` makes the previously stored chunks a safe cache **miss**
 (never a wrong read), and every launcher (`start-cache.sh`,
-`run-vllm-with-persist.sh`, `verify-engine-identity.sh`) resolves the switch to
+`run-tp4-hotsplit.sh`, `verify-engine-identity.sh`) resolves the switch to
 the same effective value.
 
 ## Monitoring (Prometheus + Grafana)
@@ -291,7 +292,7 @@ bash scripts/start-observability.sh
 
 # 2. LMCache + vLLM (lossless zstd is the DEFAULT since round 48)
 bash scripts/start-cache.sh
-bash scripts/run-vllm-with-persist.sh
+bash scripts/start-all.sh
 ```
 
 `USE_LOSSLESS_SERDE` must be identical for both commands — it is part of the
@@ -349,7 +350,7 @@ The cache layer is model-agnostic — adding a model does NOT require code chang
    export KVP_MODEL_CONFIG=<your-model>
    ```
    `KVP_MODEL_CONFIG` is read by `setup-identity.sh`, `start-cache.sh`,
-   `run-vllm-with-persist.sh`, `verify-engine-identity.sh` and the `kvpersist`
+   `run-tp4-hotsplit.sh`, `verify-engine-identity.sh` and the `kvpersist`
    config loader. `CONFIG_FILE` (used only by `setup-identity.sh`) additionally
    lets you target the exact file to write; you normally do not need it.
 3. Edit `configs/<your-model>/identity.env`:

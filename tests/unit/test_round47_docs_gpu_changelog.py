@@ -6,6 +6,8 @@ per GPU). The check must run AFTER the old engine is removed (launcher)
 and AFTER both services are stopped (test-recovery scenario B).
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 import glob
 from pathlib import Path
@@ -33,11 +35,15 @@ def test_recovery_gpu_check_runs_after_stop():
 
 
 def test_launcher_gpu_check_runs_after_old_container_removed():
-    t = _read("run-vllm-with-persist.sh")
+    # Round 80b: the recipe launcher owns the engine launch -- read ITS order
+    # (the cross-file union reorders across scripts).
+    rl = _T.recipe_launcher()
+    assert rl is not None, "the recipe launcher must exist"
+    t = rl.read_text()
     rm_old = t.index('docker rm -f "$CONTAINER"')
     gpu_check = t.index("_kvp_gpu_preflight 2048")
     run_new = t.index("docker run -d --name")
-    assert rm_old < gpu_check < run_new, (
+    assert rm_old < gpu_check and gpu_check < run_new, (
         "launcher: GPU check must run AFTER the old container is removed, "
         "BEFORE the new docker run")
 

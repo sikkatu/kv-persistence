@@ -306,7 +306,7 @@ echo "== COLD baseline (no cache reuse expected) =="
 # engine was still loading (or stopped after a previous run) the request
 # died with Connection refused and the operator saw a raw Python traceback.
 # Wait for the API exactly like scenarios A/B do.
-api_ready || PA pre "API is not up before the cold baseline -- start the engine first (bash scripts/run-vllm-with-persist.sh), wait for it to load, then rerun"
+api_ready || PA pre "API is not up before the cold baseline -- start the engine first (bash scripts/start-all.sh), wait for it to load, then rerun"
 M0=$(log_mark); B0=$(L2_bytes)
 ask cold "$M0"
 T_COLD=$(python3 -c "import json;d=json.load(open('$OUT/cold.summary.json'));print(d['ttft_s'])")

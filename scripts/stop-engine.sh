@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # stop-engine.sh — stop the vLLM engine container started by
-# run-vllm-with-persist.sh. The cache server is NOT touched (use
+# the engine launcher (run-tp4-hotsplit.sh via start-all.sh). The cache server is NOT touched (use
 # stop-cache.sh for it); persistent cache data is untouched either way.
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -163,7 +163,7 @@ bash scripts/benchmark.sh baseline 262144
 # config 2-3: persistent cache on
 bash scripts/start-cache.sh
 export IMAGE=... MODEL_DIR=...
-bash scripts/run-vllm-with-persist.sh
+bash scripts/start-all.sh
 bash scripts/benchmark.sh cold 32768      # first send, cache empty
 bash scripts/benchmark.sh warm 32768      # second send, same process
 

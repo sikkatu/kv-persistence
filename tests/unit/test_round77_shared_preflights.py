@@ -36,6 +36,17 @@ def _sh(cmd: str, env_extra=None, cwd=None, timeout=30):
                           timeout=timeout, env=env, cwd=str(cwd or ROOT))
 
 
+def _listen():
+    """A real TCP listener on a free port (the shared pre-flight probes
+    reachability first -- the old tests just used a dead 5555)."""
+    import socket
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    return srv, srv.getsockname()[1]
+
+
 # ---------------------------------------------------------------- shared function
 
 def test_env_sh_defines_shared_pre_flights():
@@ -86,10 +97,14 @@ def _fake_root(tmp_path, ipc_rc: int):
 
 def test_shared_pre_flight_refuses_a_broken_ipc_boundary(tmp_path):
     root = _fake_root(tmp_path, 1)
-    r = _sh(
-        f'. scripts/env.sh && _kvp_pre_flights "{root}" 127.0.0.1 5555 '
-        f'"{tmp_path}/cache" "img@sha256:x" 1000 1000 0 host',
-        env_extra={"KVP_SKIP_IPC_TEST": "0"})
+    srv, port = _listen()
+    try:
+        r = _sh(
+            f'. scripts/env.sh && _kvp_pre_flights "{root}" 127.0.0.1 {port} '
+            f'"{tmp_path}/cache" "img@sha256:x" 1000 1000 0 host',
+            env_extra={"KVP_SKIP_IPC_TEST": "0"})
+    finally:
+        srv.close()
     assert r.returncode != 0, (
         f"a broken CUDA IPC boundary must refuse the launch:\n{r.stdout}{r.stderr}")
     out = r.stdout + r.stderr
@@ -100,19 +115,27 @@ def test_shared_pre_flight_refuses_a_broken_ipc_boundary(tmp_path):
 
 def test_shared_pre_flight_passes_a_working_boundary(tmp_path):
     root = _fake_root(tmp_path, 0)
-    r = _sh(
-        f'. scripts/env.sh && _kvp_pre_flights "{root}" 127.0.0.1 5555 '
-        f'"{tmp_path}/cache" "img@sha256:x" 1000 1000 0 host')
+    srv, port = _listen()
+    try:
+        r = _sh(
+            f'. scripts/env.sh && _kvp_pre_flights "{root}" 127.0.0.1 {port} '
+            f'"{tmp_path}/cache" "img@sha256:x" 1000 1000 0 host')
+    finally:
+        srv.close()
     assert r.returncode == 0, f"working boundary must pass:\n{r.stdout}{r.stderr}"
     assert "CUDA IPC boundary OK" in r.stdout, r.stdout
 
 
 def test_shared_pre_flight_honours_the_explicit_skip(tmp_path):
     root = _fake_root(tmp_path, 1)
-    r = _sh(
-        f'. scripts/env.sh && _kvp_pre_flights "{root}" 127.0.0.1 5555 '
-        f'"{tmp_path}/cache" "img@sha256:x" 1000 1000 0 host',
-        env_extra={"KVP_SKIP_IPC_TEST": "1"})
+    srv, port = _listen()
+    try:
+        r = _sh(
+            f'. scripts/env.sh && _kvp_pre_flights "{root}" 127.0.0.1 {port} '
+            f'"{tmp_path}/cache" "img@sha256:x" 1000 1000 0 host',
+            env_extra={"KVP_SKIP_IPC_TEST": "1"})
+    finally:
+        srv.close()
     assert r.returncode == 0, f"KVP_SKIP_IPC_TEST=1 must skip:\n{r.stdout}{r.stderr}"
     assert "SKIPPED" in r.stdout, r.stdout
 
@@ -127,10 +150,14 @@ def test_shared_pre_flight_refuses_a_dead_rpc_channel(tmp_path):
     py = bindir / "python3"
     py.write_text("#!/usr/bin/env bash\necho 'rpc: no answer'\nexit 1\n")
     py.chmod(py.stat().st_mode | stat.S_IEXEC)
-    r = _sh(
-        f'PATH="{bindir}:$PATH" . scripts/env.sh && '
-        f'_kvp_pre_flights "{root}" 127.0.0.1 5555 "{tmp_path}/cache" "img" "" "" 0 host',
-        env_extra={"KVP_SKIP_IPC_TEST": "1"})
+    srv, port = _listen()
+    try:
+        r = _sh(
+            f'PATH="{bindir}:$PATH" . scripts/env.sh && '
+            f'_kvp_pre_flights "{root}" 127.0.0.1 {port} "{tmp_path}/cache" "img" "" "" 0 host',
+            env_extra={"KVP_SKIP_IPC_TEST": "1"})
+    finally:
+        srv.close()
     assert r.returncode != 0, f"a dead RPC channel must refuse:\n{r.stdout}{r.stderr}"
     out = r.stdout + r.stderr
     assert "did not answer the RPC ping" in out, out[-800:]

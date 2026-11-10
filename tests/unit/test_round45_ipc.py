@@ -13,11 +13,13 @@ specific to CUDA IPC memory mapping. Round 45:
   pre-flight so the failing step is reproduced BEFORE the model load.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = ROOT / "scripts" / "run-vllm-with-persist.sh"
+LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 IPC_TEST = ROOT / "scripts" / "ipc-test.sh"
 
 
@@ -34,7 +36,7 @@ def test_ipc_test_script_exists_and_is_ours():
 
 
 def test_pre_flight_wires_ipc_test_before_engine_start():
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     assert "ipc-test.sh" in t, "the pre-flight must run the IPC boundary test"
     idx = t.index("ipc-test.sh")
     run_idx = t.index('docker run -d --name "$CONTAINER"')
@@ -50,7 +52,7 @@ def test_pre_flight_wires_ipc_test_before_engine_start():
 def test_diagnostics_show_the_server_error():
     """The diagnostics must surface 'Error handling operation' (the real
     exception) and filter the eviction noise."""
-    t = LAUNCHER.read_text()
+    t = _T.contract_text()
     assert "Error handling operation" in t
     assert "server ERROR (root cause)" in t
     assert "skipping eviction" in t, (
@@ -60,11 +62,19 @@ def test_diagnostics_show_the_server_error():
 
 def test_wait_loop_fails_fast_on_server_error():
     """A fresh 'Error handling operation' in the server log must abort the
-    wait immediately -- no point burning the 300s register timeout."""
-    t = LAUNCHER.read_text()
-    idx = t.index("fail fast (round 45)")
-    assert idx > t.index("launched; model load takes"), (
+    wait immediately -- no point burning the 300s register timeout. Round 80b:
+    the fail-fast lives in the recipe launcher's API-wait loop (the engine
+    owner); the order check reads that file (not the cross-file union)."""
+    rl = _T.recipe_launcher()
+    assert rl is not None, "the recipe launcher must exist"
+    t = rl.read_text()
+    wait_idx = t.index("for _ in $(seq 1 \"$WAIT_TRIES\")")
+    fail_idx = t.index("fail-fast (round 79)")
+    assert fail_idx > wait_idx, (
         "the fail-fast must live in the wait loop"
     )
-    assert "Error handling operation" in t[t.index("launched; model load takes"):]
-    assert "waiting 300s cannot fix it" in t
+    seg = t[wait_idx:]
+    assert "Error handling operation register_kv_cache" in seg, (
+        "the wait loop must scan the server log for handler errors")
+    assert "waiting 300s cannot fix it" in seg, (
+        "the abort must explain that waiting cannot fix a dead handshake")

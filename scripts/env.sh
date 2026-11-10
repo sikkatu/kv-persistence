@@ -477,6 +477,67 @@ _kvp_pre_flights(){
   local _root="$1" _host="$2" _port="$3" _croot="$4" _image="$5"
   local _uid="${6:-}" _gid="${7:-}" _same="${8:-0}" _mode="${9:-host}"
   local _ping_out _ping_rc=0 _ipc_mode _ipc_pidf _ipc_pid _ipc_uid _ipc_pu
+  # ---- Round 80b: three pre-flight checks preserved from the legacy kv
+  # launcher (they lived ONLY in run-vllm-with-persist.sh and would vanish
+  # with it -- the round-76 defect class). All refuse BEFORE the model load.
+  # (c0) TCP reachability -- a clear "server not reachable" beats a 300 s
+  #      register_kv_caches timeout after 15 min of loading.
+  # Round 80b: bash /dev/tcp (NOT python3) -- test stubs replace python3 and
+  # would break a python-based probe; /dev/tcp has no interpreter dependency.
+  if timeout 3 bash -c "exec 3<>/dev/tcp/$_host/$_port" 2>/dev/null; then
+    echo "pre-flight: cache server is listening at $_host:$_port"
+  else
+    echo "ERROR: LMCache cache server is NOT reachable at $_host:$_port (pre-flight)." >&2
+    echo "Starting the engine now would waste a ~15-min model load and then fail with" >&2
+    echo "'LMCache server did not respond to register_kv_caches within 300s'." >&2
+    echo "Start the cache service first: bash scripts/start-cache.sh" >&2
+    return 1
+  fi
+  # (c1) L2 codec match -- the codec is part of the cache-identity namespace;
+  # a mismatch means engine and server disagree about which chunks are readable.
+  local _pre_adapter="$_croot/l2-adapter.rendered.json"
+  local _pre_expect="$(printf '%s' "${LMCACHE_L2_SERDE:-none}" | tr '[:upper:]' '[:lower:]')"
+  case "$_pre_expect" in raw|"") _pre_expect=none ;; esac
+  if [ -f "$_pre_adapter" ]; then
+    local _pre_seen
+    _pre_seen="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("serde") or {}; print((s.get("type") or "none").replace("kvp-",""))' "$_pre_adapter" 2>/dev/null || echo UNREADABLE)"
+    case "$_pre_seen" in raw|"") _pre_seen=none ;; esac
+    if [ "$_pre_seen" = "UNREADABLE" ]; then
+      echo "WARNING: $_pre_adapter exists but is not valid JSON -- cannot pre-check the server codec" >&2
+    elif [ "$_pre_seen" != "$_pre_expect" ]; then
+      echo "ERROR: L2 CODEC MISMATCH (pre-flight): this launch would use '$_pre_expect' but the RUNNING" >&2
+      echo "cache server stores '$_pre_seen' (see $_pre_adapter). The codec is part of the cache" >&2
+      echo "identity -- the engine and the server would disagree about which chunks are readable." >&2
+      echo "Fix ONE side to match the other and rerun:" >&2
+      echo "  server on zstd:    USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
+      echo "  then relaunch the engine with the same codec." >&2
+      return 1
+    else
+      echo "pre-flight: L2 codec matches the running server ($_pre_seen)"
+    fi
+  else
+    echo "NOTE: no $_pre_adapter -- the cache server may not be started yet (the post-launch gate will insist on it)"
+  fi
+  # (c2) lmcache version match -- mixed minor versions break the MP-connector
+  # protocol silently at register_kv_caches (round 42).
+  local _kvp_py="$(_kvp_python)"
+  local _host_lmcache
+  _host_lmcache="$("$_kvp_py" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
+  local _img_lmcache
+  _img_lmcache="$(docker run --rm --entrypoint python3 "$_image" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
+  if [ "$_host_lmcache" != "UNKNOWN" ] && [ "$_img_lmcache" != "UNKNOWN" ]; then
+    if [ "$_host_lmcache" != "$_img_lmcache" ]; then
+      echo "ERROR: LMCACHE VERSION MISMATCH (pre-flight): the host serves lmcache $_host_lmcache" >&2
+      echo "but the vLLM image ships lmcache $_img_lmcache. Mixed minor versions break the" >&2
+      echo "MP-connector protocol -- register_kv_caches will silently time out (300s)." >&2
+      echo "Align both sides to the SAME version:" >&2
+      echo "  host (server):  ~/.venvs/lmcache/bin/pip install lmcache==$_img_lmcache" >&2
+      return 1
+    fi
+    echo "pre-flight: lmcache version matches on both sides ($_host_lmcache)"
+  else
+    echo "NOTE: could not determine lmcache version (host=$_host_lmcache, image=$_img_lmcache) -- skipping version check"
+  fi
   # (a) lmcache RPC probe -- an open TCP port does not prove the RequestClient
   # protocol register_kv_caches rides. Exit 3 = lmcache not importable (honest
   # skip: the system python lacks it; use the venv python for a real probe).

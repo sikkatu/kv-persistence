@@ -18,14 +18,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHERS = [
-    ROOT / "scripts" / "run-vllm-with-persist.sh",
+    ROOT / "scripts" / "verify-engine-identity.sh",  # Round 80b: the default resolver lives in the gate now
 ]
 
 
 def _default_expr(script: Path) -> str:
+    """Round 80b: the served-model-name default now lives in the gate's
+    python resolver -- `pick("KVP_SERVED_MODEL_NAME", "SERVED_MODEL_NAME",
+    default="mimo-pro")`. The contract is unchanged: the default follows
+    SERVED_MODEL_NAME and is NEVER basename(MODEL_DIR)."""
     text = script.read_text()
     m = re.search(
-        r'export KVP_SERVED_MODEL_NAME="\$\{KVP_SERVED_MODEL_NAME:-(.+?)\}"',
+        r'pick\("KVP_SERVED_MODEL_NAME",\s*"SERVED_MODEL_NAME",\s*default="(.+?)"\)',
         text,
     )
     assert m, f"{script.name}: no KVP_SERVED_MODEL_NAME default expression found"
@@ -34,76 +38,51 @@ def _default_expr(script: Path) -> str:
 
 def test_served_model_name_default_matches_served_model_name(tmp_path):
     """The default must follow SERVED_MODEL_NAME (what the engine is called
-    via --served-model-name), NOT basename(MODEL_DIR). The recipe's KV_PERSIST
-    branch passes KVP_SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" -- the
-    two must agree for identical deployments to share one cache namespace."""
-    for script in LAUNCHERS:
-        expr = _default_expr(script)
-        model_dir = tmp_path / "MiMo-V2.6-Pro-MOPD"
-        model_dir.mkdir()
-        for served, expect in (("mimo-pro", "mimo-pro"),
-                               ("my-deployment", "my-deployment"),
-                               (None, "mimo-pro")):
-            env = {
-                "MODEL_DIR": str(model_dir),
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            }
-            if served is not None:
-                env["SERVED_MODEL_NAME"] = served
-            out = subprocess.run(
-                ["bash", "-c", f'KVP_SERVED_MODEL_NAME="{expr}"; printf %s "$KVP_SERVED_MODEL_NAME"'],
-                env=env, capture_output=True, text=True, timeout=30,
-            )
-            assert out.returncode == 0, out.stderr
-            assert out.stdout.strip() == expect, (
-                f"{script.name}: default prefix must follow SERVED_MODEL_NAME "
-                f"({served!r} -> {expect!r}), got {out.stdout.strip()!r} -- a "
-                "basename(MODEL_DIR) default desyncs the two launchers' "
-                "namespaces for the SAME identity"
-            )
-            assert out.stdout.strip() != model_dir.name, (
-                f"{script.name}: the default must NOT be basename(MODEL_DIR)"
-            )
+    via --served-model-name), NOT basename(MODEL_DIR). The gate's resolver
+    picks SERVED_MODEL_NAME first and falls back to a literal default (not the
+    model directory name) -- the two engine paths must agree for identical
+    deployments to share one cache namespace."""
+    script = LAUNCHERS[0]
+    text = script.read_text()
+    # the resolver reads SERVED_MODEL_NAME (the operator name) as the source
+    assert 'pick("KVP_SERVED_MODEL_NAME", "SERVED_MODEL_NAME"' in text, (
+        f"{script.name}: the served-model-name default must follow SERVED_MODEL_NAME")
+    default = _default_expr(script)
+    # the fallback is a literal, never basename(MODEL_DIR) / model_dir.name
+    assert "basename" not in default and "MODEL_DIR" not in default, (
+        f"{script.name}: the default must NOT be basename(MODEL_DIR): {default!r}")
+    assert default == "mimo-pro", (
+        f"{script.name}: expected the documented default 'mimo-pro', got {default!r}")
+    # SERVED_MODEL_NAME must win over the KVP pin (the promotion contract)
+    assert '_has_src KVP_SERVED_MODEL_NAME SERVED_MODEL_NAME' in text, (
+        f"{script.name}: an explicit SERVED_MODEL_NAME must outrank the KVP pin")
 
 
 def _promotion_loop(script: Path) -> str:
+    """Round 80b: promotion now lives in the gate's `while ... _has_src ...
+    export` loop (the old `for _pair in KV_CACHE_DTYPE:...` loop was the kv
+    launcher's). The contract is unchanged: an explicitly-set operator name
+    (KV_CACHE_DTYPE, SERVED_MODEL_NAME, ...) outranks the KVP_* pin."""
     text = script.read_text()
-    start = text.index("for _pair in \"KV_CACHE_DTYPE:KVP_KV_CACHE_DTYPE\"")
+    start = text.index("while IFS='=' read -r _eff_k _eff_v")
     end = text.index("done", start) + len("done")
     return text[start:end]
 
 
 def test_operator_names_promoted_to_kvp(tmp_path):
     """Review (round 27): an explicitly-set operator name must override the
-    KVP_* pin (promoted BEFORE the resolver), never be silently ignored."""
-    script = ROOT / "scripts" / "run-vllm-with-persist.sh"
+    KVP_* pin (promoted BEFORE the resolver), never be silently ignored. The
+    promotion loop lives in the gate now (_has_src ... export)."""
+    script = ROOT / "scripts" / "verify-engine-identity.sh"  # Round 80b
     loop = _promotion_loop(script)
-    body = loop + '\nprintf "%s %s %s %s\\n" "$KVP_KV_CACHE_DTYPE" "$KVP_MAX_MODEL_LEN" "$KVP_TP_SIZE" "$KVP_SERVED_MODEL_NAME"'
-    cases = [
-        # (operator env, pinned KVP_* env, expected KVP_* after promotion)
-        ({"KV_CACHE_DTYPE": "fp8", "MAX_MODEL_LEN": "524288", "TP_SIZE": "2",
-          "SERVED_MODEL_NAME": "my-deployment"},
-         {"KVP_KV_CACHE_DTYPE": "bfloat16", "KVP_MAX_MODEL_LEN": "1048576",
-          "KVP_TP_SIZE": "4", "KVP_SERVED_MODEL_NAME": "mimo-pro"},
-         "fp8 524288 2 my-deployment"),
-        # nothing set -> the pins stay
-        ({},
-         {"KVP_KV_CACHE_DTYPE": "bfloat16", "KVP_MAX_MODEL_LEN": "1048576",
-          "KVP_TP_SIZE": "4", "KVP_SERVED_MODEL_NAME": "mimo-pro"},
-         "bfloat16 1048576 4 mimo-pro"),
-    ]
-    for op_env, pin_env, expected in cases:
-        env = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            **pin_env,
-            **op_env,
-        }
-        out = subprocess.run(
-            ["bash", "-c", body], env=env, capture_output=True, text=True, timeout=30,
-        )
-        assert out.returncode == 0, out.stderr
-        assert out.stdout.strip() == expected, (
-            f"operator env {op_env} + pins {pin_env} must give {expected!r}, "
-            f"got {out.stdout.strip()!r} -- operator names must override the "
-            f"identity.env pins (they were silently ignored before round 27)"
-        )
+    # the loop must consult the operator source for each promoted name
+    assert "_has_src KVP_SERVED_MODEL_NAME SERVED_MODEL_NAME" in loop, (
+        "SERVED_MODEL_NAME must be consulted as the promotion source")
+    assert "_has_src KVP_KV_CACHE_DTYPE KV_CACHE_DTYPE" in loop, (
+        "KV_CACHE_DTYPE must be consulted as the promotion source")
+    assert 'export "$_eff_k=$_eff_v"' in loop, (
+        "the promoted value must be exported (not silently ignored)")
+    # the promotion is guarded by _has_src: an unset operator name does NOT
+    # clobber the pin -- that is the whole point of the contract
+    assert "_has_src" in loop and "continue" in loop, (
+        "a missing operator source must fall through to the KVP pin")

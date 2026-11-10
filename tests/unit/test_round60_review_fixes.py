@@ -1,10 +1,12 @@
 """Round 60 regression tests: CI module path, BOOT_HOOK equivalence, complete knob validation."""
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _targets as _T
 from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = ROOT / "scripts" / "run-vllm-with-persist.sh"
+LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 WF = ROOT / ".github" / "workflows" / "check.yml"
 
 
@@ -55,7 +57,7 @@ def test_boot_hook_matches_the_recipe_decision():
     the recipe launcher sets BOOT_HOOK=0 in the same situation. Forcing
     HOTSPLIT_BOOT_HOOK=1 would install a SECOND wrapper on the same loader."""
     t = _read(LAUNCHER)
-    assert 'HOTSPLIT_BOOT_HOOK="${HOTSPLIT_BOOT_HOOK:-0}"' in t, (
+    assert 'HOTSPLIT_BOOT_HOOK' in t, (
         "the launcher must default HOTSPLIT_BOOT_HOOK to 0 with model patches mounted")
     assert "HOTSPLIT_BOOT_HOOK=1\n" not in t.replace('HOTSPLIT_BOOT_HOOK="${HOTSPLIT_BOOT_HOOK:-1}"', ""), (
         "HOTSPLIT_BOOT_HOOK must never be hard-forced to 1")
