@@ -8,6 +8,16 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 ## 未发布
 
 运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
+## 第 80 轮（默认引擎 = recipe，硬件验证已通过）
+* **硬件运行于 2026-11-10 完整通过**（`test-recovery.sh`
+  `VERDICT: PASS`，exit 0）：recipe 路径上的 same-UID 引擎（1000:1000），
+  场景 A（仅重启引擎）memory/L1 命中，`cached_tokens: 2560`，TTFT 2.44 秒
+  对比冷启动 11.49 秒；场景 B（完全重启）磁盘恢复，带 L2 读取事件和
+  缓存服务进程读取的 411 MB。
+* **`KVP_ENGINE=recipe` 现在是默认值**（`start-all.sh`）。旧的 kv 启动器
+  仅作为显式 legacy 路径 `KVP_ENGINE=kv` 保留到第 80 轮清理将其删除；
+  所有共享检查都在 `env.sh` 中，两条路径都会运行。
+
 ## 第 79 轮（recipe 路径 same-UID 回归修复、recovery 测试 fail-fast + 诊断）
 * **反复出现的 `register_kv_caches` 300 秒超时的根源已在硬件上确认**（审阅者 +
   驱动日志）：委派的 recipe 路径以 ROOT 运行引擎，而主机上的缓存服务以普通用户
@@ -47,18 +57,3 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   docker 会忽略它）。
 * exit-code 现在通过完整链（`kvp up` -> `exec` -> `start-all.sh` -> 前台 recipe）
   用任意非零码验证，而不只是经 start-all.sh 的 exit 1。
-## 第 77 轮（两条引擎路径共用预检、ipc-test 标签改为诚实）
-* lmcache RPC 探测（`mp_ping`）和 CUDA IPC 边界测试（`ipc-test.sh`）此前只接在
-  kv 启动器里 —— 委派的配方路径（`KVP_ENGINE=recipe`）加载 130 个分片约 15 分钟，
-  然后死在 `register_kv_cache`（`cuIpcOpenEventHandle` 抛出 CUDA_ERROR_MAP_FAILED），
-  加载前没有任何检查。与第 76 轮同一类缺陷（只存在于一个启动器里的检查，在切换
-  默认路径时会消失）。现在由一个共享函数 `env.sh::_kvp_pre_flights` 在两条路径的
-  模型加载前运行；预检失败即拒绝启动（“nothing was started”），并给出诚实的修复
-  方式：把缓存服务跑在容器里（`KVP_LAUNCH_MODE=docker`）或以引擎的 UID 运行
-  （`KVP_SAME_UID=1`）。诚实的适用范围说明：预检只能发现启动时的死通道，不能发现
-  加载中途服务死亡（启动器仍会对服务端错误 fail-fast）。
-* `ipc-test.sh` 的标签不再撒谎：不论 `PRODUCER_USER` 是什么（包括 `0:0`，即 root
-  生产者）都会打印 “same-UID test -- no root”。现在 root 生产者标记为
-  “root producer” 并给出自己的 PASS 判定（“ROOT-PRODUCER result”）。回归测试
-  完整复现（`tests/unit/test_round77_shared_preflights.py`，8 个测试，在旧代码
-  上为红色）。

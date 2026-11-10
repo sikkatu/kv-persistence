@@ -58,12 +58,16 @@ fi
 
 echo "== 3/3 vLLM engine (model load takes ~13-16 min; Ctrl-C stops the launcher, use bash scripts/stop-engine.sh to stop the engine) =="
 # Round 70 (delegation, review step 2): the engine launch has TWO paths.
-#   KVP_ENGINE=kv     (DEFAULT) -- the kv-persistence launcher
-#                     (run-vllm-with-persist.sh), unchanged behaviour;
-#   KVP_ENGINE=recipe           -- the hardware-verified recipe launcher
-#                     (run-tp4-hotsplit.sh with KV_PERSIST=1). OFF by default
-#                     until the hardware run confirms it; the old code stays.
-KVP_ENGINE="${KVP_ENGINE:-kv}"
+# Round 80 (hardware validation PASSED 2026-11-10: same-UID engine, both
+# recovery scenarios PASS with disk-backed KV proven): the recipe launcher
+# is the DEFAULT now.
+#   KVP_ENGINE=recipe (DEFAULT) -- the hardware-verified recipe launcher
+#                     (run-tp4-hotsplit.sh with KV_PERSIST=1);
+#   KVP_ENGINE=kv     -- LEGACY kv-persistence launcher
+#                     (run-vllm-with-persist.sh), kept only until the round-80
+#                     cleanup deletes it (every check has been moved to the
+#                     shared modules both paths call).
+KVP_ENGINE="${KVP_ENGINE:-recipe}"
 case "$KVP_ENGINE" in
   kv)
     KVP_SAME_UID="${KVP_SAME_UID:-1}" bash "$HERE/run-vllm-with-persist.sh"
