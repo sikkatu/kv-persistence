@@ -124,10 +124,10 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
     # CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle), waiting out the
     # engine's 300s register_kv_caches timeout cannot fix it.
     if [ -n "$LOG" ] && [ -f "$LOG" ]; then
-      _srverr="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" 2>/dev/null | grep -a -m1 'Error handling operation' || true)"
+      _srverr="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" 2>/dev/null | grep -a -m1 'Error handling operation register_kv_cache' || true)"
       if [ -n "$_srverr" ]; then
         echo "  ABORT: cache server FAILED a request during the wait (fail-fast):" >&2
-        tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | grep -a -A20 'Error handling operation' | head -25 >&2
+        tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | grep -a -A20 'Error handling operation register_kv_cache' | head -25 >&2
         echo "  This is the root cause -- waiting 300s cannot fix it." >&2
         echo "  Fix: restart both services same-UID (KVP_SAME_UID=1 default) and rerun." >&2
         return 2
@@ -143,7 +143,7 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
          docker logs --tail 60 "$CONTAINER" >&2 || true
          if [ -n "$LOG" ] && [ -f "$LOG" ]; then
            echo "         ---- server log: last 'Error handling operation' (grep -a for NUL bytes) ----" >&2
-           grep -a -A20 'Error handling operation' "$LOG" | tail -25 >&2 || true
+           grep -a -A20 'Error handling operation register_kv_cache' "$LOG" | tail -25 >&2 || true
          fi
          return 2 ;;
     esac
@@ -383,12 +383,12 @@ kill -0 "$LIVE_PID" 2>/dev/null || PA B "cache service is dead right after start
 # exactly at register_kv_cache (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle).
 # Catch it here (same shared pre-flight both launchers run) instead of after a
 # ~15-min model load. The engine runs same-UID now (round 79), so _same=1.
-if [ "${KVP_SKIP_IPC_TEST:-0}" != "1" ] && [ -x "$HERE/scripts/ipc-test.sh" ]; then
+if [ "${KVP_SKIP_IPC_TEST:-0}" != "1" ] && [ -x "$HERE/ipc-test.sh" ]; then
   echo "  pre-flight: CUDA IPC boundary (B: before docker start)"
   _b_ipc_mode=host
   _b_pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
   [ -f "$_b_pidf" ] && [ "$(awk '/^Uid:/{print $2}' "/proc/$(tr -d '[:space:]' < "$_b_pidf")/status" 2>/dev/null || echo '')" = "0" ] && _b_ipc_mode=host-root
-  if IMAGE="${IMAGE:-}" CONSUMER="$_b_ipc_mode" PRODUCER_USER="$(id -u):$(id -g)" bash "$HERE/scripts/ipc-test.sh"; then
+  if IMAGE="${IMAGE:-}" CONSUMER="$_b_ipc_mode" PRODUCER_USER="$(id -u):$(id -g)" bash "$HERE/ipc-test.sh"; then
     echo "  pre-flight: CUDA IPC boundary OK (consumer=$_b_ipc_mode)"
   else
     PA B "pre-flight FAILED: CUDA IPC boundary broken before docker start -- engine would die at register_kv_cache (same-UID: both sides $(id -u):$(id -g))"

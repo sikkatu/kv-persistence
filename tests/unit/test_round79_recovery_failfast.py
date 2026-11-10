@@ -62,13 +62,30 @@ def test_api_ready_prints_docker_logs_on_death(recovery_text):
 
 def test_scenario_b_ipc_preflight_before_docker_start(recovery_text):
     """Scenario B must run the CUDA IPC pre-flight BEFORE `docker start` --
-    that is exactly where B died (register_kv_cache / cuIpcOpenEventHandle)."""
+    that is exactly where B died (register_kv_cache / cuIpcOpenEventHandle).
+    Round 79 review: the path must be $HERE/ipc-test.sh (HERE already points
+    at scripts/) -- $HERE/scripts/ipc-test.sh does not exist and the [ -x ]
+    guard silently SKIPPED the whole block (the old substring test missed it)."""
     b_start = recovery_text.index('docker start "$CONTAINER"')
     before = recovery_text[max(0, b_start - 2500):b_start]
-    assert "ipc-test.sh" in before, (
-        "the IPC pre-flight must run before `docker start` in scenario B")
+    assert "$HERE/ipc-test.sh" in before, (
+        "the IPC pre-flight must call $HERE/ipc-test.sh before `docker start`")
+    assert "$HERE/scripts/ipc-test.sh" not in recovery_text, (
+        "scripts/scripts/ipc-test.sh does not exist -- the -x guard would skip")
     assert "pre-flight" in before.lower(), (
         "the B pre-flight must announce itself")
+
+
+def test_fail_fast_pattern_targets_register_only(recovery_text):
+    """Round 79 review: the trigger must match 'Error handling operation
+    register_kv_cache' -- the broad 'Error handling operation' also matches
+    the benign 'unregister_kv_cache' / ZMQError: Host unreachable noise and
+    false-triggers fail-fast after the log mark."""
+    trigger = "grep -a -m1 'Error handling operation register_kv_cache'"
+    assert trigger in recovery_text, (
+        "the fail-fast trigger must be narrowed to register_kv_cache")
+    assert "grep -a -m1 'Error handling operation'" not in recovery_text, (
+        "the broad pattern would match benign unregister_kv_cache noise")
 
 
 def test_server_log_reads_use_grep_a(recovery_text):
