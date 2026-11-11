@@ -63,19 +63,35 @@ fi
 # next start-all "skipped" it again. Now the marker is written whenever the
 # running stack is PROVEN ours (compose label working_dir) or we just
 # started it, so the pair stop-all/start-all stays consistent.
+# -- obs ownership marker: BEGIN (tests extract and EXECUTE this block) --
 mkdir -p "$ROOT/live"   # live/ is gitignored -- absent on a fresh clone
+# Round 83 (fixed twice after the behavioural stand obs-ownership-stand.sh):
+# the marker is written when the running stack is PROVEN ours by the compose
+# label (pwd -P on BOTH sides -- a symlink must not flip us to "foreign", the
+# old label compare used logical pwd) or when this run just started it.
 _obs_ours=0
 [ "$_obs_all" = "0" ] && _obs_ours=1
-if [ "$_obs_ours" = "0" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_grafana; then
-  _obs_wd="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' obs_grafana 2>/dev/null || true)"
-  if [ -n "$_obs_wd" ] && [ -d "$_obs_wd" ]; then _obs_wd="$(cd "$_obs_wd" && pwd)"; fi
-  _obs_dir="$(cd "$HERE/../observability" 2>/dev/null && pwd || true)"
-  [ -n "$_obs_dir" ] && [ "$_obs_wd" = "$_obs_dir" ] && _obs_ours=1
+if [ "$_obs_ours" = "0" ]; then
+  _obs_wd=""
+  for _svc in obs_grafana obs_prometheus obs_tempo obs_otel_collector; do
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_svc"; then
+      _obs_wd="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$_svc" 2>/dev/null || true)"
+      [ -n "$_obs_wd" ] && break
+    fi
+  done
+  if [ -n "$_obs_wd" ]; then
+    [ -e "$_obs_wd" ] && _obs_wd="$(cd "$_obs_wd" 2>/dev/null && pwd -P || echo "$_obs_wd")"
+    _obs_dir="$(cd "$HERE/../observability" 2>/dev/null && pwd -P || true)"
+    [ -n "$_obs_dir" ] && [ "$_obs_wd" = "$_obs_dir" ] && _obs_ours=1
+  fi
 fi
 if [ "$_obs_ours" = "1" ]; then
-  printf '%s\n' "1" > "$ROOT/live/obs_started" 2>/dev/null || true
+  printf '%s
+' "1" > "$ROOT/live/obs_started" 2>/dev/null || true
+else
+  rm -f "$ROOT/live/obs_started" 2>/dev/null || true
 fi
-
+# -- obs ownership marker: END --
 echo "== 2/3 persistent cache service =="
 # Probe the EFFECTIVE cache root (from cache.env[.local]), not the default.
 if [ -f "$KVP_CACHE_ROOT/lmcache-server.pid" ] && \
@@ -186,6 +202,24 @@ case "$KVP_ENGINE" in
         exit 1
       fi
     fi
+    # -- MODEL_DIR remember: BEGIN (tests extract and EXECUTE this block) --
+    # Round 83 (review): live/model_dir was READ but never WRITTEN -- the
+    # wiki promises "set on first launch" and the chain
+    # live/model_dir > identity pin > ~/models relied on a file nobody wrote.
+    # Remember the EFFECTIVE MODEL_DIR here: covers both an explicit value
+    # and the auto-resolved one, so the next terminal (and the resolver)
+    # sees exactly what this run used.
+    if [ -n "${MODEL_DIR:-}" ]; then
+      if [ -f "$ROOT/live/model_dir" ] && \
+         [ "$(tr -d '[:space:]' < "$ROOT/live/model_dir")" = "$MODEL_DIR" ]; then
+        :   # already remembered -- do not touch the file every run
+      else
+        mkdir -p "$ROOT/live"
+        printf '%s\n' "$MODEL_DIR" > "$ROOT/live/model_dir" 2>/dev/null \
+          || echo "WARNING: cannot write live/model_dir -- next runs will re-resolve" >&2
+      fi
+    fi
+    # -- MODEL_DIR remember: END --
     export KV_PERSIST_HOST="${KV_PERSIST_HOST:-${LMCACHE_HOST:-127.0.0.1}}"
     export KV_PERSIST_PORT="${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}"
     # Round 77 (review): resolve the pinned image the same way the kv launcher
