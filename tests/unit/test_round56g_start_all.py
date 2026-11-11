@@ -53,8 +53,13 @@ def test_start_all_no_flags_needed():
     # No USER-FACING exports: IMAGE/MODEL_DIR resolve automatically. The single
     # internal `export LMCACHE_L2_SERDE=` (resolved codec handed to both
     # children) is allowed -- it is the point of the one-codec decision.
-    for var in ("export IMAGE=", "export MODEL_DIR=", "export KVP_MODEL_DIR="):
+    for var in ("export IMAGE=", "export KVP_MODEL_DIR="):
         assert var not in t, "start-all must not require manual %s" % var
+    # Round 81: the internal auto-resolution MAY export MODEL_DIR (that is the
+    # zero-config feature) -- but only inside the resolver block, never as a
+    # manual prerequisite (no bare 'export MODEL_DIR=<...>' outside it).
+    assert '_kvp_resolve_model_dir' in t, (
+        "MODEL_DIR must be auto-resolved (no manual export needed)")
     assert "KVP_SAME_UID" in t, "same-UID is the default, but keep the override"
     assert "_kvp_load_env" in t, "start-all must load cache.env/identity.env itself"
 

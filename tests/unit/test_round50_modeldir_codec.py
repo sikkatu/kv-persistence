@@ -19,26 +19,31 @@ LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 
 
 def test_model_dir_is_exported_for_the_gate():
-    t = _T.contract_text()
-    # export must exist and come BEFORE the gate INVOCATION (not a comment)
-    export_idx = t.index("MODEL_DIR=")
-    gate_idx = t.index('bash "$HERE/verify-engine-identity.sh"')
-    assert export_idx < gate_idx, (
-        "MODEL_DIR must be exported BEFORE the identity gate runs "
-        "(the gate is a subprocess and reads it from the environment)")
+    """P2.2 (round 81): compare INSIDE the launcher's own text -- in the
+    cross-file union the order is an artifact of concatenation (the resolver
+    lives in env.sh, the gate call in the launcher), so deleting the
+    launcher's resolution entirely kept the old union-based check green."""
+    assert LAUNCHER is not None
+    t = LAUNCHER.read_text()
+    # the resolution must exist and come BEFORE the gate INVOCATION
+    resolve_idx = t.index('MODEL_DIR="${MODEL_DIR:-')
+    gate_idx = t.index('bash "$KVP_REPO/scripts/verify-engine-identity.sh"')
+    assert resolve_idx < gate_idx, (
+        "inside the launcher: MODEL_DIR resolution must come BEFORE the "
+        "identity gate runs (the gate is a subprocess and reads the resolved "
+        "value from the environment)")
 
 
 def test_model_dir_export_follows_resolution():
-    """MODEL_DIR must be RESOLVED (assigned/defaulted) before the gate uses it.
-    Round 80 review: the old check verified the kv launcher's export order;
-    the recipe resolves MODEL_DIR itself -- the real contract is that the
-    resolution precedes the identity-gate invocation."""
-    t = _T.contract_text()
-    resolve_idx = t.index('MODEL_DIR="${MODEL_DIR')
-    gate_idx = t.index('bash "$KVP_REPO/scripts/verify-engine-identity.sh"')
-    assert resolve_idx < gate_idx, (
-        "MODEL_DIR resolution must come BEFORE the identity gate (the gate "
-        "reads the resolved value from the environment)")
+    """The export must sit after the resolution block, near the directory
+    check -- inside the launcher's own text (see P2.2)."""
+    assert LAUNCHER is not None
+    t = LAUNCHER.read_text()
+    check_idx = t.index('MODEL_DIR not found')
+    resolve_idx = t.index('MODEL_DIR="${MODEL_DIR:-')
+    assert resolve_idx < check_idx, (
+        "inside the launcher: MODEL_DIR resolution must come BEFORE the "
+        "existence check")
 
 
 def test_config_codec_default_is_zstd_in_all_locales():

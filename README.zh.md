@@ -98,19 +98,19 @@ MODEL_DIR 从 `live/model_dir`/身份固定值/`~/models` 解析，same-UID 为�
 
 * `KVP_ENGINE=recipe`（默认）——recipe 启动器
   （`run-tp4-hotsplit.sh`，带 `KV_PERSIST=1`）；
-* legacy kv 启动器（`run-tp4-hotsplit.sh`）已在第 80b 轮删除——
+* legacy kv 启动器（`run-vllm-with-persist.sh`）已在第 80b 轮删除——
   `KVP_ENGINE=kv` 诚实地报错退出（没有任何东西丢失：所有共享检查都在
   `env.sh` / `hotsplit_env.sh` 中）。
 * `KVP_ENGINE=recipe`——`sikkatu/recipes` 中经硬件验证的
   `run-tp4-hotsplit.sh`（`KV_PERSIST=1`），一条命令，无需手工步骤。
 
-两条路径共用一个密钥（`~/.config/kvp/api_key`，两条路径在 loopback 绑定下
+整个技术栈共用一个密钥（`~/.config/kvp/api_key`，在 loopback 绑定下
 都会自动生成）、一个热专家预算默认值和一条容器名记录
 （每次启动都写 `live/engine_container`，因此 `stop-engine.sh` / `kvp down`
 停止的正是已启动的容器）。委托固定 `KV_CACHE_DTYPE=bfloat16`（recipe 的默认
 `auto` 解析为模型 dtype——相同的缓存 namespace，经行为验证）。recipe 路径已经硬件验证
 （2026-11-10），自第 80 轮起为默认值。
-两条路径在模型加载前运行相同的预检（第 77 轮）：lmcache RPC 探测（`mp_ping`）
+模型加载前运行预检（第 77 轮）：lmcache RPC 探测（`mp_ping`）
 和 CUDA IPC 边界测试（`ipc-test.sh`）——损坏的通道或边界会在几秒内拒绝启动，
 而不是在约 15 分钟的模型加载后才失败。
 

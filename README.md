@@ -116,18 +116,18 @@ through either path:
 
 * `KVP_ENGINE=recipe` (DEFAULT) -- the recipe launcher
   (`run-tp4-hotsplit.sh` with `KV_PERSIST=1`);
-* the legacy kv launcher (`run-tp4-hotsplit.sh`) was DELETED in
+* the legacy kv launcher (`run-vllm-with-persist.sh`) was DELETED in
   round 80b -- `KVP_ENGINE=kv` fails with an honest error (nothing is lost:
   every shared check lives in `env.sh` / `hotsplit_env.sh`).
 
-Both paths share one key (`~/.config/kvp/api_key`, auto-generated on a
+The engine path shares one key (`~/.config/kvp/api_key`, auto-generated on a
 loopback bind on BOTH paths), one hot-expert budget default and one
 container-name record (`live/engine_container`, written by each launch, so
 `stop-engine.sh` / `kvp down` stop exactly what was started). The delegation
 pins `KV_CACHE_DTYPE=bfloat16` (the recipe default `auto` resolves to the
 model dtype -- the SAME cache namespace, verified behaviourally). The
 recipe path was hardware-confirmed (2026-11-10) and is the default since round 80.
-Both paths run the same pre-flights before the model load (round 77): the
+The pre-flights run before the model load (round 77): the
 lmcache RPC probe (`mp_ping`) and the CUDA IPC boundary test (`ipc-test.sh`)
 -- a broken channel or boundary refuses the launch in seconds instead of
 dying after a ~15-minute model load.

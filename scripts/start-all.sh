@@ -41,10 +41,24 @@ export LMCACHE_L2_SERDE="$EFFECTIVE_SERDE"
 echo "codec: $EFFECTIVE_SERDE (resolved once, used by cache and engine)"
 
 echo "== 1/3 observability (Grafana on :3000) =="
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q obs_grafana; then
-  echo "observability already running -- skipping"
+# Round 81 (review): the check used to look at obs_grafana only -- a running
+# Grafana with a dead Prometheus/OTel silently skipped the whole stack. Now
+# ALL services are checked and the compose file is (re)applied idempotently:
+# a missing component is started, nothing running is touched down.
+_obs_all=1
+for _svc in obs_otel_collector obs_tempo obs_prometheus obs_grafana; do
+  docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$_svc" || _obs_all=0
+done
+if [ "$_obs_all" = "1" ]; then
+  echo "observability already running (all 4 services) -- skipping"
 else
   bash "$HERE/start-observability.sh" || echo "WARNING: observability failed to start -- continuing without metrics (the cache works fine without it)"
+fi
+# Round 81 (review): record that THIS start-all launched the stack, so
+# stop-all.sh stops it only when we own it (a foreign docker compose stack
+# on the same host must not be touched).
+if [ "$_obs_all" = "0" ]; then
+  printf '%s\n' "1" > "$ROOT/live/obs_started" 2>/dev/null || true
 fi
 
 echo "== 2/3 persistent cache service =="
@@ -131,6 +145,23 @@ case "$KVP_ENGINE" in
     # SAME host/port the cache service listens on (the single codec decision
     # above is already exported as LMCACHE_L2_SERDE).
     export KV_PERSIST=1
+    # Round 81 (review): wire the SHARED MODEL_DIR resolver into the delegated
+    # path -- the wiki promises zero-config MODEL_DIR (explicit > live/model_dir
+    # > identity pin > the single model dir under ~/models) but the new engine
+    # path never called _kvp_resolve_model_dir. Keep the explicit-value
+    # priority: an operator-set MODEL_DIR/KVP_MODEL_DIR always wins.
+    if [ -z "${MODEL_DIR:-${KVP_MODEL_DIR:-}}" ]; then
+      _resolved_model="$(_kvp_resolve_model_dir "$ROOT")"
+      if [ -n "$_resolved_model" ] && [ -d "$_resolved_model" ]; then
+        export MODEL_DIR="$_resolved_model"
+        echo "MODEL_DIR resolved: $MODEL_DIR (override: MODEL_DIR=... or live/model_dir)"
+      else
+        echo "ERROR: MODEL_DIR is not set and could not be auto-resolved." >&2
+        echo "  Tried: live/model_dir -> identity pin -> the single model dir under ${KVP_MODELS_ROOT:-\$HOME/models}" >&2
+        echo "  Fix: export MODEL_DIR=<your-model-dir> (or run scripts/setup-identity.sh) and rerun." >&2
+        exit 1
+      fi
+    fi
     export KV_PERSIST_HOST="${KV_PERSIST_HOST:-${LMCACHE_HOST:-127.0.0.1}}"
     export KV_PERSIST_PORT="${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}"
     # Round 77 (review): resolve the pinned image the same way the kv launcher
