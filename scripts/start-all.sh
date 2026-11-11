@@ -57,8 +57,21 @@ fi
 # Round 81 (review): record that THIS start-all launched the stack, so
 # stop-all.sh stops it only when we own it (a foreign docker compose stack
 # on the same host must not be touched).
-if [ "$_obs_all" = "0" ]; then
-  mkdir -p "$ROOT/live"   # live/ is gitignored -- absent on a fresh clone (the marker write used to fail silently)
+# Round 83 (user report): the marker used to be written ONLY when the stack
+# was just started -- if it was already up (earlier run / other script) the
+# marker stayed absent and stop-all.sh refused to stop OUR OWN stack, and the
+# next start-all "skipped" it again. Now the marker is written whenever the
+# running stack is PROVEN ours (compose label working_dir) or we just
+# started it, so the pair stop-all/start-all stays consistent.
+mkdir -p "$ROOT/live"   # live/ is gitignored -- absent on a fresh clone
+_obs_ours=0
+[ "$_obs_all" = "0" ] && _obs_ours=1
+if [ "$_obs_ours" = "0" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_grafana; then
+  _obs_wd="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' obs_grafana 2>/dev/null || true)"
+  if [ -n "$_obs_wd" ] && [ -d "$_obs_wd" ]; then _obs_wd="$(cd "$_obs_wd" && pwd)"; fi
+  [ "$_obs_wd" = "$HERE/../observability" ] && _obs_ours=1
+fi
+if [ "$_obs_ours" = "1" ]; then
   printf '%s\n' "1" > "$ROOT/live/obs_started" 2>/dev/null || true
 fi
 
