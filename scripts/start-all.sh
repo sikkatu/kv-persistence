@@ -58,6 +58,7 @@ fi
 # stop-all.sh stops it only when we own it (a foreign docker compose stack
 # on the same host must not be touched).
 if [ "$_obs_all" = "0" ]; then
+  mkdir -p "$ROOT/live"   # live/ is gitignored -- absent on a fresh clone (the marker write used to fail silently)
   printf '%s\n' "1" > "$ROOT/live/obs_started" 2>/dev/null || true
 fi
 
@@ -150,7 +151,14 @@ case "$KVP_ENGINE" in
     # > identity pin > the single model dir under ~/models) but the new engine
     # path never called _kvp_resolve_model_dir. Keep the explicit-value
     # priority: an operator-set MODEL_DIR/KVP_MODEL_DIR always wins.
-    if [ -z "${MODEL_DIR:-${KVP_MODEL_DIR:-}}" ]; then
+    # Round 81b (review): an operator-set KVP_MODEL_DIR must become MODEL_DIR
+    # -- the recipe launcher reads MODEL_DIR only, so a bare KVP_MODEL_DIR was
+    # silently ignored. Explicit priority: MODEL_DIR > KVP_MODEL_DIR > auto.
+    if [ -n "${KVP_MODEL_DIR:-}" ] && [ -z "${MODEL_DIR:-}" ]; then
+      export MODEL_DIR="$KVP_MODEL_DIR"
+      echo "MODEL_DIR taken from KVP_MODEL_DIR: $MODEL_DIR"
+    fi
+    if [ -z "${MODEL_DIR:-}" ]; then
       _resolved_model="$(_kvp_resolve_model_dir "$ROOT")"
       if [ -n "$_resolved_model" ] && [ -d "$_resolved_model" ]; then
         export MODEL_DIR="$_resolved_model"

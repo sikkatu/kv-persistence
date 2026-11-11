@@ -47,11 +47,14 @@ def test_start_all_calls_the_shared_model_dir_resolver():
     assert '_kvp_resolve_model_dir "$ROOT"' in t, (
         "start-all.sh must call the shared MODEL_DIR resolver on the "
         "delegated path (the wiki promises zero-config MODEL_DIR)")
-    # the explicit value must win over the resolution
+    # the explicit value must win over the resolution: KVP_MODEL_DIR is
+    # exported as MODEL_DIR first (the recipe reads MODEL_DIR only), then the
+    # resolver runs only when neither is set
+    idx_export = t.index('export MODEL_DIR="$KVP_MODEL_DIR"')
     idx_res = t.index('_kvp_resolve_model_dir "$ROOT"')
-    idx_guard = t.index('if [ -z "${MODEL_DIR:-${KVP_MODEL_DIR:-}}" ]')
-    assert idx_guard < idx_res, (
-        "the resolver must run ONLY when MODEL_DIR/KVP_MODEL_DIR are unset")
+    idx_guard = t.index('if [ -z "${MODEL_DIR:-}" ]')
+    assert idx_export < idx_guard < idx_res, (
+        "KVP_MODEL_DIR export -> resolver guard -> resolver (in that order)")
 
 
 def test_model_dir_resolution_behaviour(tmp_path):
