@@ -27,7 +27,8 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_grafana; then
   _obs_running=1
   _obs_wd="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' obs_grafana 2>/dev/null || true)"
   if [ -n "$_obs_wd" ] && [ -d "$_obs_wd" ]; then _obs_wd="$(cd "$_obs_wd" && pwd)"; fi
-  [ "$_obs_wd" = "$HERE/../observability" ] && _obs_ours=1
+  _obs_dir="$(cd "$HERE/../observability" 2>/dev/null && pwd || true)"
+  [ -n "$_obs_dir" ] && [ "$_obs_wd" = "$_obs_dir" ] && _obs_ours=1
 fi
 [ "$_obs_ours" = "0" ] && [ -f "$HERE/../live/obs_started" ] && _obs_ours=1
 if [ "${KVP_STOP_OBS:-0}" = "1" ] && [ "$_obs_running" = "1" ]; then
