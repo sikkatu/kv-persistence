@@ -12,7 +12,7 @@ Nothing here is claimed working without its marker.
 |---|---|---|
 | vLLM build | `vllm/vllm-openai:nightly-8e2beaa3bff…` pinned `@sha256:167ccd86…` | VERIFIED |
 | vLLM commit | `8e2beaa3bff595577a069d49d96bde9074294ec2` (2026-10-21) | VERIFIED |
-| Python | 3.12 | VERIFIED |
+| Python | 3.12+ (host venv VERIFIED on 3.13.15; the pinned image ships 3.12) | VERIFIED |
 | `LMCacheMPConnector` in image | `kv_connector_module_path` supported | VERIFIED (source) |
 | LMCache | **0.5.6** (matches the pinned vLLM image; pinned in `requirements-lmcache.txt`) | VERIFIED (hardware 2026-11-10) |
 | MP-protocol fit (lmcache ↔ vLLM) | ZMQ request channel | VERIFIED (hardware 2026-11-10: register_kv_caches + API served) |

@@ -10,7 +10,8 @@
 #   vLLM image: vllm/vllm-openai:nightly-8e2beaa3bff...@sha256:167ccd86...
 #               commit 8e2beaa3bff595577a069d49d96bde9074294ec2 (2026-10-21)
 #   lmcache:    0.5.6   (pin below -- matches the vLLM image)
-#   python:     3.12
+#   python:     3.12+ (host venv verified on 3.13.15; the production
+#               image itself ships 3.12 -- the venv just needs 3.12+)
 #
 # The exact wheel variant must match the image's PyTorch/CUDA ABI.
 # If imports fail (undefined symbols), do not upgrade blindly: the fallback is

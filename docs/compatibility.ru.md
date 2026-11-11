@@ -12,7 +12,7 @@
 |---|---|---|
 | Сборка vLLM | `vllm/vllm-openai:nightly-8e2beaa3bff…` pinned `@sha256:167ccd86…` | VERIFIED |
 | Коммит vLLM | `8e2beaa3bff595577a069d49d96bde9074294ec2` (2026-10-21) | VERIFIED |
-| Python | 3.12 | VERIFIED |
+| Python | 3.12+ (host-venv ПРОВЕРЕН на 3.13.15; закреплённый образ содержит 3.12) | VERIFIED |
 | `LMCacheMPConnector` в образе | поддерживается `kv_connector_module_path` | VERIFIED (по исходникам) |
 | LMCache | **0.5.6** (соответствует закреплённому образу vLLM; закреплён в `requirements-lmcache.txt`) | VERIFIED (железо 2026-11-10) |
 | Совместимость MP-протокола (lmcache ↔ vLLM) | ZMQ-канал запросов | VERIFIED (железо 2026-11-10: register_kv_caches + API обслужен) |

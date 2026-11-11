@@ -149,7 +149,7 @@ _kvp_gpu_preflight(){
 _kvp_resolve_l2_serde(){
   # Fold the operator switch USE_LOSSLESS_SERDE into the effective
   # LMCACHE_L2_SERDE and EXPORT the result, so EVERY consumer (start-cache.sh,
-  # run-vllm-with-persist.sh, verify-engine-identity.sh and the Python identity
+  # start-all.sh, verify-engine-identity.sh and the Python identity
   # loader) computes the SAME cache-identity namespace. Without this a
   # `USE_LOSSLESS_SERDE=1` launch would store zstd chunks while the identity
   # gate still hashed the namespace as "none" -- two deployments sharing a
@@ -228,7 +228,7 @@ _kvp_python(){
   command -v python3 2>/dev/null || echo python3
 }
 
-# Round 51 (user): ONE MODEL_DIR resolver shared by run-vllm-with-persist.sh
+# Round 51 (user): ONE MODEL_DIR resolver shared by start-all.sh
 # and verify-engine-identity.sh. A standalone gate in a fresh terminal used
 # to report model_dir=unset (the resolution chain lived only in the launcher)
 # -> num_kv_heads/head_dim UNAVAILABLE -> INCONCLUSIVE -> cache reuse blocked.
@@ -478,7 +478,7 @@ _kvp_pre_flights(){
   local _uid="${6:-}" _gid="${7:-}" _same="${8:-0}" _mode="${9:-host}"
   local _ping_out _ping_rc=0 _ipc_mode _ipc_pidf _ipc_pid _ipc_uid _ipc_pu
   # ---- Round 80b: three pre-flight checks preserved from the legacy kv
-  # launcher (they lived ONLY in run-vllm-with-persist.sh and would vanish
+  # launcher (they lived ONLY in the legacy kv launcher and would vanish
   # with it -- the round-76 defect class). All refuse BEFORE the model load.
   # (c0) TCP reachability -- a clear "server not reachable" beats a 300 s
   #      register_kv_caches timeout after 15 min of loading.

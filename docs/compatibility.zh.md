@@ -11,7 +11,7 @@
 |---|---|---|
 | vLLM 构建 | `vllm/vllm-openai:nightly-8e2beaa3bff…` pinned `@sha256:167ccd86…` | VERIFIED |
 | vLLM 提交 | `8e2beaa3bff595577a069d49d96bde9074294ec2`（2026-10-21） | VERIFIED |
-| Python | 3.12 | VERIFIED |
+| Python | 3.12+（主机 venv 已在 3.13.15 验证；固定镜像自带 3.12） | VERIFIED |
 | 镜像中的 `LMCacheMPConnector` | 支持 `kv_connector_module_path` | VERIFIED（据源码） |
 | LMCache | **0.5.6**（与固定 vLLM 镜像匹配；固定于 `requirements-lmcache.txt`） | VERIFIED（硬件 2026-11-10） |
 | MP 协议兼容（lmcache ↔ vLLM） | ZMQ 请求通道 | VERIFIED（硬件 2026-11-10：register_kv_caches + API 服务正常） |

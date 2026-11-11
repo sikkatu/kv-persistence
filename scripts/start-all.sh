@@ -29,7 +29,7 @@ _kvp_load_env "$ROOT"
 
 # ONE codec decision (review round 58): resolve the effective L2 codec ONCE
 # here and pass the SAME value to both children. start-cache.sh and
-# run-vllm-with-persist.sh then never re-decide, so an lz4 (or raw) pin can
+# the engine then never re-decides, so an lz4 (or raw) pin can
 # never split the cache server and the engine into two codecs.
 # Round 63 (review): seed the recipe's tp4.env BEFORE resolving the codec --
 # a USE_LOSSLESS_SERDE=0 (or LMCACHE_L2_SERDE=lz4) set in tp4.env must reach the
@@ -136,10 +136,12 @@ case "$KVP_ENGINE" in
     fi
     export API_KEY
 
-    # ---- KV_CACHE_DTYPE (checklist): pin explicitly. The recipe defaults to
-    # auto (= bfloat16 for MiMo; the kv identity gate resolves auto the same
-    # way, so the namespace is identical), but a pin removes the dependency on
-    # the model's dtype resolution -- the warmed cache must keep its namespace.
+    # ---- KV_CACHE_DTYPE (checklist, round 82 honest wording): a value from
+    # tp4.env WINS (the recipe's default there is `auto`), so this is NOT a
+    # forced pin -- it is a fallback when nothing is set. `auto` resolves to
+    # the model dtype (bfloat16 for MiMo) via the identity gate, and the
+    # RESOLVED value is what the cache namespace hashes; switching values is
+    # a safe cache miss, never a wrong read.
     export KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"
 
     # ---- the recipe's KV_PERSIST block needs the cache endpoint: pass the
@@ -196,7 +198,7 @@ case "$KVP_ENGINE" in
     export KVP_PREFLIGHTS_DONE=1
     echo "KVP_ENGINE=recipe: launching the hardware-verified recipe launcher"
     echo "  container: $CONTAINER (recorded in live/engine_container)"
-    echo "  KV_CACHE_DTYPE=$KV_CACHE_DTYPE (pinned; auto would resolve identically for MiMo)"
+    echo "  KV_CACHE_DTYPE=$KV_CACHE_DTYPE (from tp4.env/export or the bfloat16 fallback; auto resolves to the model dtype -- the identity gate enforces the resolved value)"
     echo "  cache endpoint: $KV_PERSIST_HOST:$KV_PERSIST_PORT, codec: $LMCACHE_L2_SERDE"
     # Foreground: the recipe launcher's exit code (activation check, smoke
     # test) is the code start-all.sh and kvp up report -- never swallowed.
