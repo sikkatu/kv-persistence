@@ -86,8 +86,7 @@ if [ "$_obs_ours" = "0" ]; then
   fi
 fi
 if [ "$_obs_ours" = "1" ]; then
-  printf '%s
-' "1" > "$ROOT/live/obs_started" 2>/dev/null || true
+  printf '%s\n' "1" > "$ROOT/live/obs_started" 2>/dev/null || true
 else
   rm -f "$ROOT/live/obs_started" 2>/dev/null || true
 fi
@@ -204,11 +203,14 @@ case "$KVP_ENGINE" in
     fi
     # -- MODEL_DIR remember: BEGIN (tests extract and EXECUTE this block) --
     # Round 83 (review): live/model_dir was READ but never WRITTEN -- the
-    # wiki promises "set on first launch" and the chain
-    # live/model_dir > identity pin > ~/models relied on a file nobody wrote.
-    # Remember the EFFECTIVE MODEL_DIR here: covers both an explicit value
-    # and the auto-resolved one, so the next terminal (and the resolver)
-    # sees exactly what this run used.
+    # chain live/model_dir > identity pin > ~/models relied on a file nobody
+    # wrote. Remember the EFFECTIVE MODEL_DIR here: covers both an explicit
+    # value and the auto-resolved one.
+    # Round 85 (review) SEMANTICS: this is a "LAST USED" memory, not a
+    # pin written once. A later run with a different explicit MODEL_DIR
+    # updates it -- the docs say exactly that ("the last MODEL_DIR used"),
+    # so no run is silently hijacked by an undocumented rule. An explicit
+    # MODEL_DIR wins for that run either way.
     if [ -n "${MODEL_DIR:-}" ]; then
       if [ -f "$ROOT/live/model_dir" ] && \
          [ "$(tr -d '[:space:]' < "$ROOT/live/model_dir")" = "$MODEL_DIR" ]; then
