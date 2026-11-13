@@ -1,0 +1,68 @@
+# observability/docker-compose.override.yml -- extras-only services (part B
+# round 87). Compose picks this up automatically as an override.
+#
+# Every service here is opt-in through a compose profile: `docker compose up -d`
+# (the base path) never starts them. start-observability.sh activates the
+# profiles explicitly (COMPOSE_PROFILES) and always as a SECOND, best-effort
+# step -- extras can never block or break the base stack (R8).
+#
+# Pinned images (R3) -- NO :latest, NO floating tags. NOTE: these tag checks
+# (`docker manifest inspect`) require network access; run extras/check.sh
+# --static to see the pins as text on an offline host.
+# NO published host ports anywhere here (R7 / docs/security.md): Prometheus
+# scrapes exporters over the compose network; the relay binds the bridge
+# gateway address only (see extras/relay/nginx.conf.template).
+services:
+  # ---- vLLM metrics relay (profile: extras) -----------------------------
+  # Nginx serves exactly ONE endpoint (GET /metrics) and forwards it to the
+  # engine's loopback port; Authorization is stripped on the way (5.1 D1).
+  vllm-relay:
+    image: nginx:1.29.4-alpine
+    container_name: obs_vllm_relay
+    profiles: ["extras"]
+    network_mode: host   # reaches 127.0.0.1:<engine-port> on the host
+    volumes:
+      - ../live/obs-relay/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    # extra hardening: nothing is writable inside the container
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # ---- GPU telemetry, default (profile: gpu) ---------------------------
+  # DCGM exporter. Access to GPUs through the standard reservation -- no
+  # SYS_ADMIN, no extra capabilities, profiling counters off by default
+  # (see extras/gpu/dcgm-counters.prof.csv, opt-in via KVP_OBS_GPU_PROF=1).
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.3.0-4.6.0-ubuntu24.04
+    container_name: obs_dcgm_exporter
+    profiles: ["gpu"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./extras/gpu/dcgm-counters.csv:/etc/dcgm-exporter/dcp-counters.csv:ro
+    # port 9400 (metrics) stays INSIDE the compose network -- scraped by
+    # prometheus service name dcgm-exporter:9400, never published to host.
+    restart: unless-stopped
+
+  # ---- GPU telemetry fallback (profile: gpu-smi) -----------------------
+  # Reads what `nvidia-smi` shows (power / memory / temp / clocks / util).
+  # Enabled with KVP_OBS_GPU_EXPORTER=smi; NO PCIe traffic metrics here.
+  nvidia-smi-exporter:
+    image: utkuozdemir/nvidia_gpu_exporter:1.3.0
+    container_name: obs_nvidia_smi_exporter
+    profiles: ["gpu-smi"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # internal port 9835 (the exporter's default) -- not published.
+    restart: unless-stopped
