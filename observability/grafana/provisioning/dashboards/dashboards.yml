@@ -1,6 +1,11 @@
 apiVersion: 1
 
 providers:
+  - name: kvp-extras
+    type: file
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/kvp-extras/grafana/dashboards
   - name: lmcache
     type: file
     disableDeletion: false

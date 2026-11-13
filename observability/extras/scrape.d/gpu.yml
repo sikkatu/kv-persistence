@@ -1,0 +1,10 @@
+# extras/scrape.d/gpu.yml -- GPU telemetry (DCGM exporter, opt-in).
+# dcgm-exporter lives in the same compose network; NO port is published on
+# the host (security contract: loopback only). Service/profile names in the
+# job entry are informational -- targets come from file_sd as well.
+- job_name: gpu
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /metrics
+  file_sd_configs:
+    - files: ["/etc/kvp-extras/targets/gpu.json"]

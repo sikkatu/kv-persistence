@@ -1,0 +1,8 @@
+# extras/gpu/dcgm-counters.prof.csv -- OPTIONAL profiling counters.
+# NOT enabled by default: DCGM profiling often needs SYS_ADMIN and conflicts
+# with Nsight / CUPTI-based tools (documented constraint). Enable explicitly
+# with KVP_OBS_GPU_PROF=1 (start-observability.sh then mounts this file).
+DCGM_FI_PROF_SM_ACTIVE,sm_active
+DCGM_FI_PROF_DRAM_ACTIVE,dram_active
+DCGM_FI_PROF_PCIE_TX_BYTES,pcie_tx_bytes
+DCGM_FI_PROF_PCIE_RX_BYTES,pcie_rx_bytes

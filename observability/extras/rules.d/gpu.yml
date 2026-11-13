@@ -1,0 +1,41 @@
+# extras/rules.d/gpu.yml -- one `kvp:gpu_*` surface for BOTH exporters.
+# DCGM (`dcgm-exporter`, default) and nvidia_gpu_exporter (`KVP_OBS_GPU_EXPORTER=smi`)
+# name their series differently; the rules normalize both to the same names,
+# with a `gpu` label carrying the device index ("0".."3").
+#
+# CAUTION: names were NOT verified against a live exporter on RTX PRO 6000
+# (no hardware stand here) -- `promtool test rules` covers the expressions on
+# synthetic series (see tests/unit/test_obs_extras_rules.py).
+# NVML UTIL/MEM_UTIL mean "a kernel was resident", NOT "all SMs busy" -- see
+# the panel descriptions and extras/README.md.
+groups:
+  - name: kvp-gpu
+    interval: 15s
+    rules:
+      - record: kvp:gpu_power_watts
+        expr: max by (gpu) (DCGM_FI_DEV_POWER_USAGE) or max by (gpu) (nvidia_smi_power_draw_watts)
+      - record: kvp:gpu_memory_used_bytes
+        expr: max by (gpu) (DCGM_FI_DEV_FB_USED * 1024 * 1024) or max by (gpu) (nvidia_smi_memory_used_bytes)
+      - record: kvp:gpu_memory_total_bytes
+        expr: max by (gpu) ((DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE) * 1024 * 1024) or max by (gpu) (nvidia_smi_memory_total_bytes)
+      - record: kvp:gpu_temperature_celsius
+        expr: max by (gpu) (DCGM_FI_DEV_GPU_TEMP) or max by (gpu) (nvidia_smi_temperature_gpu_celsius)
+      - record: kvp:gpu_util_percent
+        expr: max by (gpu) (DCGM_FI_DEV_GPU_UTIL) or max by (gpu) (nvidia_smi_utilization_gpu_percent)
+      - record: kvp:gpu_mem_util_percent
+        expr: max by (gpu) (DCGM_FI_DEV_MEM_COPY_UTIL) or max by (gpu) (nvidia_smi_utilization_memory_percent)
+      - record: kvp:gpu_sm_clock_hertz
+        expr: max by (gpu) (DCGM_FI_DEV_SM_CLOCK * 1000000) or max by (gpu) (nvidia_smi_clocks_current_sm_mhz * 1000000)
+      - record: kvp:gpu_mem_clock_hertz
+        expr: max by (gpu) (DCGM_FI_DEV_MEM_CLOCK * 1000000) or max by (gpu) (nvidia_smi_clocks_current_memory_mhz * 1000000)
+      # --- profile-only (DCGM_FI_PROF_*): tend to need SYS_ADMIN and are NOT
+      #     enabled by default (extras/gpu/dcgm-counters.prof.csv, opt-in).
+      #     Absent series -> the dashboard panel shows "no data", no error.
+      - record: kvp:gpu_sm_active_ratio
+        expr: max by (gpu) (DCGM_FI_PROF_SM_ACTIVE)
+      - record: kvp:gpu_dram_active_ratio
+        expr: max by (gpu) (DCGM_FI_PROF_DRAM_ACTIVE)
+      - record: kvp:gpu_pcie_rx_bytes_per_second
+        expr: max by (gpu) (rate(DCGM_FI_PROF_PCIE_RX_BYTES[1m]))
+      - record: kvp:gpu_pcie_tx_bytes_per_second
+        expr: max by (gpu) (rate(DCGM_FI_PROF_PCIE_TX_BYTES[1m]))

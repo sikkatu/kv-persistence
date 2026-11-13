@@ -54,6 +54,7 @@ services:
     container_name: obs_prometheus
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./extras:/etc/kvp-extras:ro
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9091:9090"
@@ -72,6 +73,7 @@ services:
     container_name: obs_grafana
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./extras/grafana:/etc/kvp-extras/grafana:ro
       - grafana_data:/var/lib/grafana
     ports:
       - "127.0.0.1:3000:3000"

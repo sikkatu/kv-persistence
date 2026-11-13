@@ -1,6 +1,8 @@
 global:
   scrape_interval: 5s
 
+scrape_config_files: ["/etc/kvp-extras/scrape.d/*.yml"]
+rule_files: ["/etc/kvp-extras/rules.d/*.yml"]
 scrape_configs:
   # LMCache metrics re-exposed by the OTel Collector
   - job_name: lmcache

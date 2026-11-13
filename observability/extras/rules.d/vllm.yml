@@ -1,0 +1,56 @@
+# extras/rules.d/vllm.yml -- stable `kvp:*` names for the vLLM engine.
+# The dashboards query ONLY these names; when vLLM renames a metric in a new
+# release, one line here is fixed (with an `or`-fallback while both names
+# really exist) -- the dashboard panels stay untouched.
+#
+# Baseline: vLLM v0.32.1rc1.dev197 (see extras/expected-metrics.txt).
+# Labels on *_by_source_total / *_by_reason / *_by_stage / request_success_total
+# were NOT verified against a live engine, so every rule here aggregates with
+# bare `sum()` / `max()` -- no label dependence.
+groups:
+  - name: kvp-vllm
+    interval: 5s
+    rules:
+      - record: kvp:vllm_requests_running
+        expr: sum(vllm:num_requests_running)
+      - record: kvp:vllm_requests_waiting
+        expr: sum(vllm:num_requests_waiting)
+      # kv_cache_usage_perc is the current name; gpu_cache_usage_perc is kept
+      # as an `or`-fallback for older vLLM builds.
+      - record: kvp:vllm_kv_usage_ratio
+        expr: max(vllm:kv_cache_usage_perc) or max(vllm:gpu_cache_usage_perc)
+      - record: kvp:vllm_generation_tokens_per_second
+        expr: sum(rate(vllm:generation_tokens_total[30s]))
+      - record: kvp:vllm_prompt_tokens_per_second
+        expr: sum(rate(vllm:prompt_tokens_total[30s]))
+      # per-stream speed = 1 / mean(inter-token latency); NaN at zero traffic
+      # is normal (no requests -> no token intervals).
+      - record: kvp:vllm_stream_tokens_per_second
+        expr: 1 / (sum(rate(vllm:inter_token_latency_seconds_sum[1m])) / sum(rate(vllm:inter_token_latency_seconds_count[1m])))
+      - record: kvp:vllm_itl_seconds:p50
+        expr: histogram_quantile(0.5, sum by (le) (rate(vllm:inter_token_latency_seconds_bucket[1m])))
+      - record: kvp:vllm_itl_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le) (rate(vllm:inter_token_latency_seconds_bucket[1m])))
+      - record: kvp:vllm_ttft_seconds:p50
+        expr: histogram_quantile(0.5, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[1m])))
+      - record: kvp:vllm_ttft_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[1m])))
+      - record: kvp:vllm_queue_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le) (rate(vllm:request_queue_time_seconds_bucket[1m])))
+      - record: kvp:vllm_preemptions_per_second
+        expr: sum(rate(vllm:num_preemptions_total[1m]))
+      - record: kvp:vllm_requests_finished_per_second
+        expr: sum(rate(vllm:request_success_total[1m]))
+      - record: kvp:vllm_prefix_cache_hit_ratio
+        expr: sum(rate(vllm:prefix_cache_hits_total[5m])) / sum(rate(vllm:prefix_cache_queries_total[5m]))
+      - record: kvp:vllm_external_cache_hit_ratio
+        expr: sum(rate(vllm:external_prefix_cache_hits_total[5m])) / sum(rate(vllm:external_prefix_cache_queries_total[5m]))
+      - record: kvp:vllm_step_tokens_avg
+        expr: sum(rate(vllm:iteration_tokens_total_sum[1m])) / sum(rate(vllm:iteration_tokens_total_count[1m]))
+      # vLLM's own ESTIMATE from the model profile -- not a hardware
+      # measurement. Per-rank label was not verified live, so we take the max
+      # over whatever labels exist (one value per rank at most).
+      - record: kvp:vllm_est_flops_per_gpu
+        expr: max(rate(vllm:estimated_flops_per_gpu_total[1m]))
+      - record: kvp:vllm_est_read_bytes_per_second_per_gpu
+        expr: max(rate(vllm:estimated_read_bytes_per_gpu_total[1m]))

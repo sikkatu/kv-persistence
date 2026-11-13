@@ -1,0 +1,12 @@
+# extras/gpu/dcgm-counters.csv -- the DEFAULT dcgm-exporter counter set
+# (mounted into the exporter by docker-compose.override.yml).
+# Core fields only -- no SYS_ADMIN needed, no profiling.
+# Format: DCGM_FI_<field_id>,<prometheus_name>
+DCGM_FI_DEV_POWER_USAGE,power_usage
+DCGM_FI_DEV_GPU_TEMP,temperature_gpu
+DCGM_FI_DEV_GPU_UTIL,utilization_gpu
+DCGM_FI_DEV_MEM_COPY_UTIL,utilization_memory
+DCGM_FI_DEV_FB_USED,memory_used
+DCGM_FI_DEV_FB_FREE,memory_free
+DCGM_FI_DEV_SM_CLOCK,clocks_sm
+DCGM_FI_DEV_MEM_CLOCK,clocks_memory
