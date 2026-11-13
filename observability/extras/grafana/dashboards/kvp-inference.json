@@ -1,0 +1,1335 @@
+{
+ "id": null,
+ "uid": "kvp-inference",
+ "title": "kv-persistence - Inference (vLLM + GPU)",
+ "tags": [
+  "kvp",
+  "vllm",
+  "gpu"
+ ],
+ "timezone": "browser",
+ "editable": false,
+ "schemaVersion": 39,
+ "refresh": "5s",
+ "time": {
+  "from": "now-30m",
+  "to": "now"
+ },
+ "timepicker": {},
+ "fiscalYearStartMonth": 0,
+ "liveNow": false,
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "0. Summary (stat)",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Running",
+   "description": "Requests being computed in the current engine batch (live batch size, capped by --max-num-seqs).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 3,
+    "h": 3
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_requests_running",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Waiting",
+   "description": "Requests queued by the vLLM scheduler: MAX_NUM_SEQS reached -- surplus chats wait, they do NOT fail.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 3,
+    "y": 1,
+    "w": 3,
+    "h": 3
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_requests_waiting",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "KV usage %",
+   "description": "Fill of the shared KV pool (allocated at engine start; invisible in nvidia-smi). >=90% is the knee.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 6,
+    "y": 1,
+    "w": 3,
+    "h": 3
+   },
+   "targets": [
+    {
+     "expr": "100 * kvp:vllm_kv_usage_ratio",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0,
+     "max": 100
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Aggregate tok/s",
+   "description": "Sum of generation speed over ALL streams (tokens per second).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 9,
+    "y": 1,
+    "w": 3,
+    "h": 3
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_generation_tokens_per_second",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "Per-stream tok/s",
+   "description": "One chat's speed (1 / mean inter-token latency) -- the 'did chats get slower' number. NaN at zero traffic is normal.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 1,
+    "w": 3,
+    "h": 3
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_stream_tokens_per_second",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 7,
+   "type": "stat",
+   "title": "GPU power sum",
+   "description": "Total GPU draw of the four cards -- the honest workload proxy (NVML 'sm 100%' is NOT load).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 15,
+    "y": 1,
+    "w": 3,
+    "h": 3
+   },
+   "targets": [
+    {
+     "expr": "sum(kvp:gpu_power_watts)",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "watt",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 8,
+   "type": "stat",
+   "title": "Preemptions/s",
+   "description": "KV-pressure evictions per second. >0 means the KV pool is too small for this traffic.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 18,
+    "y": 1,
+    "w": 3,
+    "h": 3
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_preemptions_per_second",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 9,
+   "type": "row",
+   "title": "1. Concurrency -- headroom & per-chat speed",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Running vs Waiting",
+   "description": "Headline: how many chats compute now vs queue. Waiting==0 and steady per-stream speed = headroom left.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 5,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_requests_running",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:vllm_requests_waiting",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "Aggregate tok/s vs per-stream tok/s",
+   "description": "The clash panel: aggregate must GROW with N while per-stream stays flat. Per-stream falling while aggregate plateaus = the knee (offline: scripts/concurrency-sweep.sh reports exactly this).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 5,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_generation_tokens_per_second",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:vllm_stream_tokens_per_second",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 12,
+   "type": "row",
+   "title": "2. Latency (seconds)",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 13,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 13,
+   "type": "timeseries",
+   "title": "ITL p50 / p95",
+   "description": "Inter-token latency per chat stream. Stable ITL despite more parallel chats = the system is comfortable.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 14,
+    "w": 8,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_itl_seconds:p50",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:vllm_itl_seconds:p95",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 14,
+   "type": "timeseries",
+   "title": "TTFT p50 / p95",
+   "description": "Time to first token (prompt processing + queue wait). Rises first when the engine saturates.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 14,
+    "w": 8,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_ttft_seconds:p50",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:vllm_ttft_seconds:p95",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 15,
+   "type": "timeseries",
+   "title": "Queue time p95",
+   "description": "Scheduler queue wait. Only >0 once the batch is full (MAX_NUM_SEQS reached).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 14,
+    "w": 8,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_queue_seconds:p95",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 16,
+   "type": "row",
+   "title": "3. KV pool & cache",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 21,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 17,
+   "type": "gauge",
+   "title": "KV usage %",
+   "description": "Shared KV pool fill (all requests). Yellow 80%, red 90%: at >=90% preemptions begin.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 22,
+    "w": 4,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "100 * kvp:vllm_kv_usage_ratio",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0,
+     "max": 100,
+     "thresholds": {
+      "steps": [
+       {
+        "color": "green"
+       },
+       {
+        "color": "yellow",
+        "value": 80
+       },
+       {
+        "color": "red",
+        "value": 90
+       }
+      ]
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 18,
+   "type": "timeseries",
+   "title": "Preemptions/s (any spike = KV pressure)",
+   "description": "Requests evicted from the KV cache under memory pressure -- forces prompt re-computation. Anything >0 is red: enlarge the KV pool (gpu-memory-utilization) or lower MAX_NUM_SEQS.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 22,
+    "w": 5,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_preemptions_per_second",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0,
+     "max": {
+      "thresholds": {
+       "steps": [
+        {
+         "color": "green"
+        },
+        {
+         "color": "red",
+         "value": 0
+        }
+       ]
+      }
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 19,
+   "type": "timeseries",
+   "title": "Prefix cache hit ratio (local)",
+   "description": "Prompt-prefill tokens served from vLLM's local prefix cache (chat history, system prompts).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 9,
+    "y": 22,
+    "w": 5,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_prefix_cache_hit_ratio",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0,
+     "max": 1
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 20,
+   "type": "timeseries",
+   "title": "External (LMCache) hit ratio",
+   "description": "Prompt KV blocks served from the persistent LMCache L2 after an engine restart -- the kv-persistence payoff number.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 14,
+    "y": 22,
+    "w": 5,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_external_cache_hit_ratio",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0,
+     "max": 1
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 21,
+   "type": "timeseries",
+   "title": "Avg tokens / step  &  Finished req/s",
+   "description": "Engine step throughput (tokens per scheduler step -- roughly batch + prefill chunk) alongside completed requests per second.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 19,
+    "y": 22,
+    "w": 5,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_step_tokens_avg",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:vllm_requests_finished_per_second",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 22,
+   "type": "row",
+   "title": "4. GPU (optional -- DCGM / nvidia-smi exporter)",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 28,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 23,
+   "type": "timeseries",
+   "title": "Power per GPU + total (W)",
+   "description": "The honest workload signal: power draw per card and the sum. Requests arriving do not raise it -- computing tokens does.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 29,
+    "w": 8,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:gpu_power_watts",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "sum(kvp:gpu_power_watts)",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "watt",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 24,
+   "type": "timeseries",
+   "title": "Memory used per GPU (MiB) -- flat by design",
+   "description": "The KV pool is allocated at engine start, so this line is FLAT under load. It would grow only on a leak. Do not read incoming requests from this panel.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 29,
+    "w": 8,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:gpu_memory_used_bytes / 1048576",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "deckim",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 25,
+   "type": "timeseries",
+   "title": "Temperature (C)",
+   "description": "Thermal headroom across the four cards -- watch for temperature-induced clocks drop (next panel).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 29,
+    "w": 4,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:gpu_temperature_celsius",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "celsius",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 26,
+   "type": "timeseries",
+   "title": "NVML util % & mem-util % -- NOT a load meter",
+   "description": "IMPORTANT: NVML 'utilization' means 'a kernel was resident at sample time' -- it reads 100% even when nothing is computed. Use the Power panel as the load signal, not this one.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 36,
+    "w": 8,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:gpu_util_percent",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:gpu_mem_util_percent",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0,
+     "max": 100
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 27,
+   "type": "timeseries",
+   "title": "Clocks: SM / memory (MHz)",
+   "description": "Clock frequencies per card. Dipping clocks under load = thermal or power throttling, check power limits.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 36,
+    "w": 16,
+    "h": 7
+   },
+   "targets": [
+    {
+     "expr": "kvp:gpu_sm_clock_hertz / 1e6",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:gpu_mem_clock_hertz / 1e6",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "hertz",
+     "noValue": "no data -- see extras/README.md#empty-panels",
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 28,
+   "type": "row",
+   "collapsed": true,
+   "title": "5. GPU profile (DCGM profiling counters -- opt-in, KVP_OBS_GPU_PROF=1)",
+   "gridPos": {
+    "x": 0,
+    "y": 43,
+    "w": 24,
+    "h": 1
+   },
+   "panels": [
+    {
+     "id": 29,
+     "type": "timeseries",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "title": "SM active / DRAM active (ratio 0..1)",
+     "description": "What saturates FIRST under this recipe: compute core (SM active) or memory controller (DRAM active). Sits near 0 = neither saturated. One of these pegged at 1.0 while power is low = the bottleneck is core/memory, not PCIe.",
+     "gridPos": {
+      "x": 0,
+      "y": 0,
+      "w": 12,
+      "h": 7
+     },
+     "targets": [
+      {
+       "expr": "kvp:gpu_sm_active_ratio",
+       "refId": "A",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       }
+      },
+      {
+       "expr": "kvp:gpu_dram_active_ratio",
+       "refId": "B",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       }
+      }
+     ],
+     "fieldConfig": {
+      "defaults": {
+       "unit": "percentunit",
+       "min": 0,
+       "max": 1,
+       "noValue": "no data -- see extras/README.md#empty-panels",
+       "custom": {
+        "spanNulls": true,
+        "lineWidth": 1,
+        "fillOpacity": 10
+       }
+      },
+      "overrides": []
+     },
+     "options": {
+      "legend": {
+       "displayMode": "list",
+       "placement": "bottom"
+      }
+     }
+    },
+    {
+     "id": 30,
+     "type": "timeseries",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "title": "PCIe RX / TX bytes/s (the offload path)",
+     "description": "Expert weights offload crosses PCIe (host memory). If ITL rises while PCIe traffic is high and SM active is low, the PCIe Gen4 link is the bottleneck -- expected at high load for this recipe.",
+     "gridPos": {
+      "x": 12,
+      "y": 0,
+      "w": 12,
+      "h": 7
+     },
+     "targets": [
+      {
+       "expr": "kvp:gpu_pcie_rx_bytes_per_second",
+       "refId": "A",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       }
+      },
+      {
+       "expr": "kvp:gpu_pcie_tx_bytes_per_second",
+       "refId": "B",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       }
+      }
+     ],
+     "fieldConfig": {
+      "defaults": {
+       "unit": "Bps",
+       "min": 0,
+       "noValue": "no data -- see extras/README.md#empty-panels",
+       "custom": {
+        "spanNulls": true,
+        "lineWidth": 1,
+        "fillOpacity": 10
+       }
+      },
+      "overrides": []
+     },
+     "options": {
+      "legend": {
+       "displayMode": "list",
+       "placement": "bottom"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": 31,
+   "type": "row",
+   "title": "6. vLLM's own estimates (claims, not hardware counters)",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 44,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 32,
+   "type": "timeseries",
+   "title": "Est. FLOPs/GPU  &  Est. read bytes/s/GPU",
+   "description": "vLLM's analytical estimates from the model profile -- NOT hardware counters. Useful for shape only, never for absolute values.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 45,
+    "w": 12,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "kvp:vllm_est_flops_per_gpu",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "expr": "kvp:vllm_est_read_bytes_per_second_per_gpu",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "noValue": "no data -- see extras/README.md#empty-panels"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 33,
+   "type": "row",
+   "title": "7. Diagnostics -- target health / scrape age",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 51,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "id": 34,
+   "type": "table",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "title": "Target up-state & scrape age",
+   "description": "Which scrape targets are alive and how fresh their data is. up==1 and low scrape-age = healthy. up==0 = the exporter or relay is down (see extras/README.md#empty-panels).",
+   "gridPos": {
+    "x": 0,
+    "y": 52,
+    "w": 12,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "up{job=~\"vllm|gpu\"}",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "expr": "time() - timestamp(up{job=~\"vllm|gpu\"})",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "instant": true,
+     "format": "table"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "noValue": "no data -- see extras/README.md#empty-panels"
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   }
+  }
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "gpu",
+    "label": "GPU",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": {
+     "query": "label_values(kvp:gpu_power_watts, gpu)",
+     "refId": "A"
+    },
+    "includeAll": true,
+    "multi": true,
+    "refresh": 2,
+    "current": {}
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "name": "Deployments",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "enable": true,
+    "hide": false,
+    "type": "dashboard"
+   }
+  ]
+ },
+ "links": []
+}
