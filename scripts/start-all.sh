@@ -91,6 +91,18 @@ else
   rm -f "$ROOT/live/obs_started" 2>/dev/null || true
 fi
 # -- obs ownership marker: END --
+# Round 87 (part B): an extra-extra layer -- the EXTRA dashboard (kvp-inference),
+# vLLM relay and optional GPU exporters. Must run whenever the base stack is up,
+# INCLUDING when it was already running (update path: user pulled new code and
+# re-ran start-all.sh). Never touches base containers -- enforces extras-only
+# add-ons via extras-up.sh.
+if [ "${KVP_OBS_EXTRAS:-1}" != "0" ]; then
+  bash "$HERE/extras-up.sh" 2>&1 || \
+    echo "[extras] extras-up.sh failed (base stack unaffected)" >&2
+elif [ "${KVP_OBS_EXTRAS:-}" = "0" ]; then
+  echo "[extras] disabled (KVP_OBS_EXTRAS=0) -- base stack retained as-is"
+fi
+
 echo "== 2/3 persistent cache service =="
 # Probe the EFFECTIVE cache root (from cache.env[.local]), not the default.
 if [ -f "$KVP_CACHE_ROOT/lmcache-server.pid" ] && \

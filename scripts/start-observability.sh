@@ -75,3 +75,9 @@ echo "  * L1 / L2 usage           -- tier occupancy vs capacity"
 echo "  * store / retrieve throughput  -- bytes per second written and read"
 echo "  * evictions               -- LRU evictions per tier"
 echo "  * restore (prefetch) time -- how fast a restarted server refills L1 from NVMe"
+
+# --- observability EXTRA layer (part B round 87): never blocks the base ---
+# Idempotent, opt-out with KVP_OBS_EXTRAS=0. Extra dashboard (kvp-inference),
+# vLLM metrics relay, GPU exporters. Best-effort: failures here never change
+# the exit status of THIS script (base stack is the deliverable).
+bash "$HERE/extras-up.sh" || echo "[extras] extras-up.sh returned non-zero -- base stack is unaffected (see above)" >&2

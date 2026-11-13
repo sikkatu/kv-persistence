@@ -69,14 +69,20 @@ else
   echo "(force: KVP_STOP_OBS=1 bash scripts/stop-all.sh)"
 fi
 if [ "$_obs_ours" = "1" ]; then
+  # part B round 87: also shut down the extras services (vllm-relay,
+  # dcgm-exporter/nvidia-smi-exporter). Without --profile '*' `docker compose
+  # down` silently ignores inactive-profile services (X6).
+  for _svc in obs_vllm_relay obs_dcgm_exporter obs_nvidia_smi_exporter; do
+    docker rm -f "$_svc" >/dev/null 2>&1 || true
+  done
   if [ -d "$HERE/../observability" ]; then
-    (cd "$HERE/../observability" && docker compose down >/dev/null 2>&1) \
+    (cd "$HERE/../observability" && COMPOSE_PROFILES='*' docker compose --profile '*' down >/dev/null 2>&1) \
       || echo "(observability was not running)"
     rm -f "$HERE/../live/obs_started"
     echo "observability stopped (volumes grafana_data/prometheus_data/tempo_data kept)"
   else
     echo "(observability directory not found -- stopping containers by name)"
-    for _svc in obs_grafana obs_prometheus obs_tempo obs_otel_collector; do
+    for _svc in obs_grafana obs_prometheus obs_tempo obs_otel_collector obs_vllm_relay obs_dcgm_exporter obs_nvidia_smi_exporter; do
       docker rm -f "$_svc" >/dev/null 2>&1 || true
     done
     rm -f "$HERE/../live/obs_started"
