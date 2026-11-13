@@ -24,7 +24,7 @@ fi
 
 # ------------------------- 1. engine port + gateway IP --------------------
 ENGINE_PORT="${PORT:-30007}"
-RPC_PORT="${KVP_OBS_RELAY_PORT:-30008}"
+RELAY_PORT="${KVP_OBS_RELAY_PORT:-30008}"   # the relay listens here (L6)
 
 GW_IP="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
 [ -n "$GW_IP" ] || GW_IP="172.17.0.1"
@@ -39,7 +39,7 @@ TPL="$EXTRAS/relay/nginx.conf.template"
 RENDERED="$ROOT/live/obs-relay/nginx.conf"
 if [ -f "$TPL" ]; then
   sed -e "s|@ENGINE_PORT@|$ENGINE_PORT|g" \
-      -e "s|@RELAY_PORT@|$RPC_PORT|g" \
+      -e "s|@RELAY_PORT@|$RELAY_PORT|g" \
       -e "s|@LISTEN_IP@|$GW_IP|g" "$TPL" > "$RENDERED" 2>/dev/null \
     || warn "cannot render $RENDERED (permissions?) -- the relay will fail to start"
 else
@@ -48,8 +48,9 @@ fi
 
 # ------------------------- 3. file_sd target: vLLM relay ------------------
 mkdir -p "$EXTRAS/targets" 2>/dev/null || true
-printf '[{"targets": ["%s:%s"], "labels": {"engine": "vllm"}}]\n' \
-  "$GW_IP" "$RPC_PORT" > "$EXTRAS/targets/vllm.json" 2>/dev/null \
+# L3: NO static engine/model labels -- vLLM exports its own (label collision = exported_engine)
+printf '[{"targets": ["%s:%s"]}]\n' \
+  "$GW_IP" "$RELAY_PORT" > "$EXTRAS/targets/vllm.json" 2>/dev/null \
   || warn "cannot write extras/targets/vllm.json"
 
 # engine down is NOT an error -- up=0 will show in dashboards later
@@ -83,20 +84,39 @@ esac
 if [ -n "$GPU_PROF" ] && [ "${KVP_OBS_GPU_EXPORTER:-dcgm}" = "smi" ]; then
   GPU_PROF="gpu-smi"
 fi
-# Opt-in profiling counters (SYSTEM ADMIN needed): extras/gpu/dcgm-counters.prof.csv
-if [ -n "$GPU_PROF" ] && [ "${KVP_OBS_GPU_PROF:-0}" = "1" ] && [ "$GPU_PROF" = "gpu" ]; then
+# Opt-in profiling counters (H2.4): KVP_OBS_GPU_PROF=1 ACTUALLY switches the
+# csv mount and adds SYS_ADMIN -- the choice is exported for compose via
+# live/obs-gpu.env (rendered below; live/ is gitignored).
+GPU_PROF_ON=0
+if [ "$GPU_PROF" = "gpu" ] && [ "${KVP_OBS_GPU_PROF:-0}" = "1" ]; then
+  GPU_PROF_ON=1
   cp "$EXTRAS/gpu/dcgm-counters.prof.csv" "$EXTRAS/gpu/dcgm-counters.live.csv" 2>/dev/null \
     || warn "cannot install the profiling counters csv -- running with base counters"
 fi
+mkdir -p "$ROOT/live" 2>/dev/null || true
+{ echo "GPU_PROF_ON=$GPU_PROF_ON"
+  echo "GPU_PROF_COUNTERS=dcgm-counters$([ "$GPU_PROF_ON" = 1 ] && echo '.live').csv"
+} > "$ROOT/live/obs-gpu.env" 2>/dev/null || warn "cannot write live/obs-gpu.env"
 
-# file_sd target for the GPU exporter (inside the compose network)
-printf '[{"targets": ["dcgm-exporter:9400"]}]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \
-  || warn "cannot write extras/targets/gpu.json"
+# file_sd target for the GPU exporter (inside the compose network).
+# H2.1 (review 88): the target follows the ACTIVATED exporter -- dcgm for
+# profile `gpu`, nvidia-smi-exporter for `gpu-smi`, and an EMPTY list when the
+# GPU row is disabled (an always-down gpu target would be a permanent FAIL).
+if [ "$GPU_PROF" = "gpu" ]; then
+  printf '[{"targets": ["dcgm-exporter:9400"]}]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \
+    || warn "cannot write extras/targets/gpu.json"
+elif [ "$GPU_PROF" = "gpu-smi" ]; then
+  printf '[{"targets": ["nvidia-smi-exporter:9835"]}]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \
+    || warn "cannot write extras/targets/gpu.json"
+else
+  printf '[]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \
+    || warn "cannot write extras/targets/gpu.json"
+fi
 
 # ------------------------- 5. compose up with profiles --------------------
 PROFILES="extras"
 [ -n "$GPU_PROF" ] && PROFILES="extras,$GPU_PROF"
-echo "[extras] docker compose up -d (COMPOSE_PROFILES=$PROFILES) -- idempotent, base untouched"
+echo "[extras] docker compose up -d (COMPOSE_PROFILES=$PROFILES) -- idempotent. NOTE (r88 M2): the FIRST run after adding extras recreates obs_prometheus/obs_grafana once (new volume mounts); their DATA volumes are preserved."
 if ! ( cd "$OBS_DIR" && COMPOSE_PROFILES="$PROFILES" docker compose up -d 2>&1 ); then
   warn "extras compose step failed -- base stack is intact, extras partially missing (see above)"
 fi

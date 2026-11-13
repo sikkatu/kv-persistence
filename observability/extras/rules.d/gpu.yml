@@ -1,35 +1,98 @@
-# extras/rules.d/gpu.yml -- one `kvp:gpu_*` surface for BOTH exporters.
-# DCGM (`dcgm-exporter`, default) and nvidia_gpu_exporter (`KVP_OBS_GPU_EXPORTER=smi`)
-# name their series differently; the rules normalize both to the same names,
-# with a `gpu` label carrying the device index ("0".."3").
+# extras/rules.d/gpu.yml -- one `kvp:gpu_*` surface for BOTH GPU exporters.
+# DCGM (`dcgm-exporter`, default) and nvidia_gpu_exporter
+# (`KVP_OBS_GPU_EXPORTER=smi`) name their series differently; the rules below
+# normalize both onto the same `kvp:gpu_*` names, with a `gpu` label carrying
+# the numeric device index "0".."3".
 #
-# CAUTION: names were NOT verified against a live exporter on RTX PRO 6000
-# (no hardware stand here) -- `promtool test rules` covers the expressions on
-# synthetic series (see tests/unit/test_obs_extras_rules.py).
-# NVML UTIL/MEM_UTIL mean "a kernel was resident", NOT "all SMs busy" -- see
-# the panel descriptions and extras/README.md.
+# METRIC NAMES WERE VERIFIED AGAINST UPSTREAM DOCUMENTATION
+# (docs/METRICS.md of github.com/utkuozdemir/nvidia_gpu_exporter) during
+# review round 88 -- NOT guessed:
+#   nvidia_smi_power_draw_watts{uuid}       gauge, watts
+#   nvidia_smi_temperature_gpu{uuid}        gauge, degrees C (NO _celsius suffix)
+#   nvidia_smi_utilization_gpu_ratio{uuid}  gauge, 0..1 RATIO (NOT _percent)
+#   nvidia_smi_memory_used_bytes{uuid}      gauge, bytes
+#   nvidia_smi_gpu_info{uuid,index,...}=1   identity series, the ONLY place
+#                                           where the numeric `index` lives
+#
+# The smi-series are labelled by GPU `uuid`, not by `gpu`. To normalize we
+# JOIN each per-GPU series with nvidia_smi_gpu_info on `uuid`
+# (`* on(uuid) group_left(index)`) and copy `index` -> `gpu` via label_replace.
+# Names NOT confirmed on the exec backend by the upstream doc
+# (nvidia_smi_memory_total_bytes, nvidia_smi_utilization_memory_ratio,
+# nvidia_smi_clocks_current_{sm,memory}_mhz) are marked UNVERIFIED in comments
+# -- check.sh --live reports metric drift loudly when a name doesn't exist.
+#
+# NVML UTIL / MEM_COPY_UTIL mean "a kernel was resident at sample time", NOT
+# "all SMs busy" -- see panel descriptions and extras/README.md.
 groups:
   - name: kvp-gpu
     interval: 15s
     rules:
+      # ---- power (W) ----
       - record: kvp:gpu_power_watts
-        expr: max by (gpu) (DCGM_FI_DEV_POWER_USAGE) or max by (gpu) (nvidia_smi_power_draw_watts)
+        expr: |
+          max by (gpu) (DCGM_FI_DEV_POWER_USAGE)
+          or
+          max by (gpu) (
+            label_replace(nvidia_smi_power_draw_watts * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)")
+          )
+      # ---- memory used (bytes) ----
       - record: kvp:gpu_memory_used_bytes
-        expr: max by (gpu) (DCGM_FI_DEV_FB_USED * 1024 * 1024) or max by (gpu) (nvidia_smi_memory_used_bytes)
+        expr: |
+          max by (gpu) (DCGM_FI_DEV_FB_USED * 1024 * 1024)
+          or
+          max by (gpu) (
+            label_replace(nvidia_smi_memory_used_bytes * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)")
+          )
+      # ---- memory total (bytes) -- UNVERIFIED name on the smi path ----
       - record: kvp:gpu_memory_total_bytes
-        expr: max by (gpu) ((DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE) * 1024 * 1024) or max by (gpu) (nvidia_smi_memory_total_bytes)
+        expr: |
+          max by (gpu) ((DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE) * 1024 * 1024)
+          or
+          max by (gpu) (
+            label_replace(nvidia_smi_memory_total_bytes * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)")
+          )
+      # ---- temperature (deg C) ----
       - record: kvp:gpu_temperature_celsius
-        expr: max by (gpu) (DCGM_FI_DEV_GPU_TEMP) or max by (gpu) (nvidia_smi_temperature_gpu_celsius)
+        expr: |
+          max by (gpu) (DCGM_FI_DEV_GPU_TEMP)
+          or
+          max by (gpu) (
+            label_replace(nvidia_smi_temperature_gpu * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)")
+          )
+      # ---- utilisation (percent; smi reports a 0..1 ratio -> x100) ----
       - record: kvp:gpu_util_percent
-        expr: max by (gpu) (DCGM_FI_DEV_GPU_UTIL) or max by (gpu) (nvidia_smi_utilization_gpu_percent)
+        expr: |
+          max by (gpu) (DCGM_FI_DEV_GPU_UTIL)
+          or
+          max by (gpu) (
+            100 * label_replace(nvidia_smi_utilization_gpu_ratio * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)")
+          )
+      # ---- memory-controller utilisation (percent) -- UNVERIFIED name ----
       - record: kvp:gpu_mem_util_percent
-        expr: max by (gpu) (DCGM_FI_DEV_MEM_COPY_UTIL) or max by (gpu) (nvidia_smi_utilization_memory_percent)
+        expr: |
+          max by (gpu) (DCGM_FI_DEV_MEM_COPY_UTIL)
+          or
+          max by (gpu) (
+            100 * label_replace(nvidia_smi_utilization_memory_ratio * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)")
+          )
+      # ---- clocks (Hz) -- UNVERIFIED names on the smi path ----
       - record: kvp:gpu_sm_clock_hertz
-        expr: max by (gpu) (DCGM_FI_DEV_SM_CLOCK * 1000000) or max by (gpu) (nvidia_smi_clocks_current_sm_mhz * 1000000)
+        expr: |
+          max by (gpu) (DCGM_FI_DEV_SM_CLOCK * 1000000)
+          or
+          max by (gpu) (
+            label_replace(nvidia_smi_clocks_current_sm_mhz * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)") * 1000000
+          )
       - record: kvp:gpu_mem_clock_hertz
-        expr: max by (gpu) (DCGM_FI_DEV_MEM_CLOCK * 1000000) or max by (gpu) (nvidia_smi_clocks_current_memory_mhz * 1000000)
-      # --- profile-only (DCGM_FI_PROF_*): tend to need SYS_ADMIN and are NOT
-      #     enabled by default (extras/gpu/dcgm-counters.prof.csv, opt-in).
+        expr: |
+          max by (gpu) (DCGM_FI_DEV_MEM_CLOCK * 1000000)
+          or
+          max by (gpu) (
+            label_replace(nvidia_smi_clocks_current_memory_mhz * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)") * 1000000
+          )
+      # --- profile-only (DCGM_FI_PROF_*): opt-in via KVP_OBS_GPU_PROF=1,
+      #     needs SYS_ADMIN (cap_add wired in docker-compose.override.yml).
       #     Absent series -> the dashboard panel shows "no data", no error.
       - record: kvp:gpu_sm_active_ratio
         expr: max by (gpu) (DCGM_FI_PROF_SM_ACTIVE)

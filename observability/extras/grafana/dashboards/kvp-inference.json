@@ -249,7 +249,7 @@
    },
    "targets": [
     {
-     "expr": "sum(kvp:gpu_power_watts)",
+     "expr": "sum(kvp:gpu_power_watts{gpu=~\"$gpu\"})",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -848,7 +848,7 @@
    },
    "targets": [
     {
-     "expr": "kvp:gpu_power_watts",
+     "expr": "kvp:gpu_power_watts{gpu=~\"$gpu\"}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -856,7 +856,7 @@
      }
     },
     {
-     "expr": "sum(kvp:gpu_power_watts)",
+     "expr": "sum(kvp:gpu_power_watts{gpu=~\"$gpu\"})",
      "refId": "B",
      "datasource": {
       "type": "prometheus",
@@ -896,7 +896,7 @@
    },
    "targets": [
     {
-     "expr": "kvp:gpu_memory_used_bytes / 1048576",
+     "expr": "kvp:gpu_memory_used_bytes{gpu=~\"$gpu\"} / 1048576",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -912,7 +912,7 @@
    },
    "fieldConfig": {
     "defaults": {
-     "unit": "deckim",
+     "unit": "mbytes",
      "noValue": "no data -- see extras/README.md#empty-panels",
      "min": 0
     },
@@ -936,7 +936,7 @@
    },
    "targets": [
     {
-     "expr": "kvp:gpu_temperature_celsius",
+     "expr": "kvp:gpu_temperature_celsius{gpu=~\"$gpu\"}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -976,7 +976,7 @@
    },
    "targets": [
     {
-     "expr": "kvp:gpu_util_percent",
+     "expr": "kvp:gpu_util_percent{gpu=~\"$gpu\"}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -984,7 +984,7 @@
      }
     },
     {
-     "expr": "kvp:gpu_mem_util_percent",
+     "expr": "kvp:gpu_mem_util_percent{gpu=~\"$gpu\"}",
      "refId": "B",
      "datasource": {
       "type": "prometheus",
@@ -1025,7 +1025,7 @@
    },
    "targets": [
     {
-     "expr": "kvp:gpu_sm_clock_hertz / 1e6",
+     "expr": "kvp:gpu_sm_clock_hertz{gpu=~\"$gpu\"}",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -1033,7 +1033,7 @@
      }
     },
     {
-     "expr": "kvp:gpu_mem_clock_hertz / 1e6",
+     "expr": "kvp:gpu_mem_clock_hertz{gpu=~\"$gpu\"}",
      "refId": "B",
      "datasource": {
       "type": "prometheus",
@@ -1085,7 +1085,7 @@
      },
      "targets": [
       {
-       "expr": "kvp:gpu_sm_active_ratio",
+       "expr": "kvp:gpu_sm_active_ratio{gpu=~\"$gpu\"}",
        "refId": "A",
        "datasource": {
         "type": "prometheus",
@@ -1093,7 +1093,7 @@
        }
       },
       {
-       "expr": "kvp:gpu_dram_active_ratio",
+       "expr": "kvp:gpu_dram_active_ratio{gpu=~\"$gpu\"}",
        "refId": "B",
        "datasource": {
         "type": "prometheus",
@@ -1139,7 +1139,7 @@
      },
      "targets": [
       {
-       "expr": "kvp:gpu_pcie_rx_bytes_per_second",
+       "expr": "kvp:gpu_pcie_rx_bytes_per_second{gpu=~\"$gpu\"}",
        "refId": "A",
        "datasource": {
         "type": "prometheus",
@@ -1147,7 +1147,7 @@
        }
       },
       {
-       "expr": "kvp:gpu_pcie_tx_bytes_per_second",
+       "expr": "kvp:gpu_pcie_tx_bytes_per_second{gpu=~\"$gpu\"}",
        "refId": "B",
        "datasource": {
         "type": "prometheus",
@@ -1313,7 +1313,8 @@
     "includeAll": true,
     "multi": true,
     "refresh": 2,
-    "current": {}
+    "current": {},
+    "allValue": ".*"
    }
   ]
  },

@@ -81,3 +81,4 @@ echo "  * restore (prefetch) time -- how fast a restarted server refills L1 from
 # vLLM metrics relay, GPU exporters. Best-effort: failures here never change
 # the exit status of THIS script (base stack is the deliverable).
 bash "$HERE/extras-up.sh" || echo "[extras] extras-up.sh returned non-zero -- base stack is unaffected (see above)" >&2
+_obs_extras_started=1  # L4 (r88): tell start-all.sh extras already ran this session

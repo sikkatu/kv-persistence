@@ -34,7 +34,7 @@ services:
   # SYS_ADMIN, no extra capabilities, profiling counters off by default
   # (see extras/gpu/dcgm-counters.prof.csv, opt-in via KVP_OBS_GPU_PROF=1).
   dcgm-exporter:
-    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.3.0-4.6.0-ubuntu24.04
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
     container_name: obs_dcgm_exporter
     profiles: ["gpu"]
     deploy:

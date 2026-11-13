@@ -91,17 +91,32 @@ else
   rm -f "$ROOT/live/obs_started" 2>/dev/null || true
 fi
 # -- obs ownership marker: END --
-# Round 87 (part B): an extra-extra layer -- the EXTRA dashboard (kvp-inference),
-# vLLM relay and optional GPU exporters. Must run whenever the base stack is up,
-# INCLUDING when it was already running (update path: user pulled new code and
-# re-ran start-all.sh). Never touches base containers -- enforces extras-only
-# add-ons via extras-up.sh.
+# -- extras deploy: BEGIN (tests extract and EXECUTE this block) --
+# Round 87 (part B) + r88 review M1: extras layer (kvp-inference dashboard,
+# vLLM relay, optional GPU exporters). Runs whenever the stack is OURS (fresh
+# start or owned update path). A FOREIGN stack (different clone) is NEVER
+# touched -- both clones share the compose project name `observability`, so
+# letting these two compose invocations race would recreate each other's
+# containers. On foreign ownership: log one line and skip.
+# NOTE (r88 M2): the FIRST extra-enabled run DOES recreate base containers
+# obs_prometheus and obs_grafana once -- compose must remount the freshly
+# added volumes. Their DATA volumes are untouched and survive; after that
+# one-time restart, subsequent `up -d` is a no-op for unchanged services.
 if [ "${KVP_OBS_EXTRAS:-1}" != "0" ]; then
-  bash "$HERE/extras-up.sh" 2>&1 || \
-    echo "[extras] extras-up.sh failed (base stack unaffected)" >&2
+  if [ "$_obs_ours" = "1" ]; then
+    if [ "${_obs_extras_started:-0}" = "1" ]; then
+      echo "[extras] already deployed by start-observability.sh in this run (L4) -- skipping"
+    else
+      bash "$HERE/extras-up.sh" 2>&1 || \
+        echo "[extras] extras-up.sh failed (base stack unaffected)" >&2
+    fi
+  else
+    echo "[extras] observability stack belongs to a DIFFERENT clone (foreign compose label) -- extras not deployed from here."
+  fi
 elif [ "${KVP_OBS_EXTRAS:-}" = "0" ]; then
   echo "[extras] disabled (KVP_OBS_EXTRAS=0) -- base stack retained as-is"
 fi
+# -- extras deploy: END --
 
 echo "== 2/3 persistent cache service =="
 # Probe the EFFECTIVE cache root (from cache.env[.local]), not the default.

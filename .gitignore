@@ -10,3 +10,5 @@ configs/generic/lmcache-server.env.local
 configs/mimo-v2.6-pro/identity.env.local
 .DS_Store
 tests/**/__pycache__/
+observability/extras/targets/*.json
+observability/extras/gpu/dcgm-counters.live.csv

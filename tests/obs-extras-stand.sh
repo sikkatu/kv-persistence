@@ -106,19 +106,59 @@ else
   fail "X3 KVP_OBS_EXTRAS=0" leave start
 fi
 
-# ---- X4 extras error -> start-observability still exits 0 + WARN ----
+# ---- X4 extras error -> start-observability.sh still exits 0 + WARN --------
+# Exercise the REAL hook line the way the real script runs it (review r88:
+# "X4 must verify start-observability.sh behaviour, not just that the stub
+# returns 1"). We extract the literal extras-hook line from the real
+# start-observability.sh and execute it against a FAILING extras-up.sh in the
+# sandbox: the hook must neutralise the failure (exit 0 + a warning line).
 : > "$S/log"
-printf '#!/bin/bash\necho "SIMULATED FAILURE"; exit 1\n' > "$S/repo/scripts/extras-up.sh.bak"
 mv "$S/repo/scripts/extras-up.sh" "$S/repo/scripts/extras-up.sh.real"
 printf '#!/bin/bash\necho "SIMULATED FAILURE"; exit 1\n' > "$S/repo/scripts/extras-up.sh"
 chmod +x "$S/repo/scripts/extras-up.sh"
-( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" bash "$S/repo/scripts/extras-up.sh" > "$S/out" 2>&1 )
-RC_EXP=$?
-mv "$S/repo/scripts/extras-up.sh.real" "$S/repo/scripts/extras-up.sh"
-if [ "$RC_EXP" = "1" ]; then
-  pass "X4 (stub failure -> non-zero noted; real start-observability ignores it)" warn
+HOOK_LINE="$(grep -n 'bash \"$HERE/extras-up.sh\"' "$REPO_SRC/scripts/start-observability.sh" | tail -1 | cut -d: -f2-)"
+if [ -z "$HOOK_LINE" ]; then
+  fail "X4 hook line missing in start-observability.sh" warn intact
 else
-  fail "X4 extras error signal" warn rc0
+  ( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" \
+      bash -c "extras-up.sh() { :; }; $HOOK_LINE" > "$S/out" 2>&1 )
+  RC_EXP=$?
+  # The hook line above substitutes $HERE/extras-up.sh -> real path; but we pass
+  # HERE=$S/repo/scripts so it resolves to the SIMULATED FAILURE copy.
+  if [ "$RC_EXP" = "0" ] && grep -qi "SIMULATED FAILURE" "$S/out"; then
+    pass "X4 extras failure -> start-observability hook ignores it (rc=0)" warn
+  else
+    fail "X4 extras failure handling" warn "rc=$RC_EXP"
+  fi
+fi
+mv "$S/repo/scripts/extras-up.sh.real" "$S/repo/scripts/extras-up.sh"
+
+# ---- X2 base already running, extras missing -> extras block still deploys --
+# Extract the extras block from the REAL start-all.sh and run it standalone in
+# the sandbox with _obs_ours=1 (the update path: model already loaded, user
+# re-runs start-all.sh after git pull). It must STILL bring extras up.
+EXTRAS_BLOCK="$(sed -n '/-- extras deploy: BEGIN/,/-- extras deploy: END --/p' "$REPO_SRC/scripts/start-all.sh")"
+rm -f "$S/repo/live/obs-relay/nginx.conf" "$S/repo/observability/extras/targets/vllm.json"
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" _obs_ours=1 \
+    bash -c "$EXTRAS_BLOCK" > "$S/out" 2>&1 )
+if grep -q "COMPOSE up" "$S/log" && [ -f "$S/repo/live/obs-relay/nginx.conf" ]; then
+  pass "X2 base already running -> extras deploy still runs" stop
+else
+  fail "X2 base already running" stop deploy
+fi
+
+# ---- X7 foreign stack -> extras must NOT deploy from this clone ------------
+# Same block, _obs_ours=0 (foreign compose label): the block must refuse and
+# print the foreign-clone line -- both clones name the compose project
+# `observability`, so deploying here would recreate the foreign containers.
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" _obs_ours=0 \
+    bash -c "$EXTRAS_BLOCK" > "$S/out" 2>&1 )
+if ! grep -q "COMPOSE up" "$S/log" && grep -qi "different clone\|foreign" "$S/out"; then
+  pass "X7 foreign stack -> extras NOT deployed" leave
+else
+  fail "X7 foreign stack" leave deploy
 fi
 
 # ---- X6 stop: owner -> compose down with --profile '*' ----

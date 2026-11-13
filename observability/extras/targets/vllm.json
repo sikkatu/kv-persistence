@@ -1,1 +1,0 @@
-[{"targets": ["172.17.0.1:30008"], "labels": {"engine": "vllm"}}]

@@ -1,8 +1,13 @@
-# extras/gpu/dcgm-counters.prof.csv -- OPTIONAL profiling counters.
-# NOT enabled by default: DCGM profiling often needs SYS_ADMIN and conflicts
-# with Nsight / CUPTI-based tools (documented constraint). Enable explicitly
-# with KVP_OBS_GPU_PROF=1 (start-observability.sh then mounts this file).
-DCGM_FI_PROF_SM_ACTIVE,sm_active
-DCGM_FI_PROF_DRAM_ACTIVE,dram_active
-DCGM_FI_PROF_PCIE_TX_BYTES,pcie_tx_bytes
-DCGM_FI_PROF_PCIE_RX_BYTES,pcie_rx_bytes
+# extras/gpu/dcgm-counters.prof.csv -- OPTIONAL PROFILING counters.
+# Same three-column FIELD,type,help schema as dcgm-counters.csv.
+# Opt-in ONLY (KVP_OBS_GPU_PROF=1): DCGM profiling fields touch CUPTI and
+# typically need SYS_ADMIN (elevated cap_add -- see extras/README.md).
+# Profiling also conflicts with Nsight / CUPTI-based tools (documented NVIDIA
+# constraint noted in extras/README.md -- do not run both).
+# These fields only show up on GPUs/driver combos that expose the GPM /
+# DCGM_FI_PROF_* interface -- absent series simply show "no data" on the
+# panel, never an error.
+DCGM_FI_PROF_SM_ACTIVE,gauge,Ratio of time (in %) SMs are active.
+DCGM_FI_PROF_DRAM_ACTIVE,gauge,Ratio of time (in %) DRAM is active.
+DCGM_FI_PROF_PCIE_TX_BYTES,gauge,PCIe bytes transmitted per sample interval (raw counter, use rate()).
+DCGM_FI_PROF_PCIE_RX_BYTES,gauge,PCIe bytes received per sample interval (raw counter, use rate()).
