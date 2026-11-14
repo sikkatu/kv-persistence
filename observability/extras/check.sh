@@ -145,7 +145,27 @@ print("OK: no host-published ports in docker-compose.override.yml")
 PY
 fi
 
-# 5) promtool check rules + config (skip gracefully)
+# 5) relay contract (TZ 8.4): GET /metrics proxied (200), anything else
+run_py - "$EXTRAS/relay/nginx.conf.template" <<'PY'
+import pathlib, re, sys
+tpl = pathlib.Path(sys.argv[1]).read_text()
+code = "\n".join(l for l in tpl.splitlines() if not l.strip().startswith("#"))
+bad = []
+if "location = /metrics" not in code:
+    bad.append("relay template lacks `location = /metrics`")
+if not re.search(r"location = /metrics\s*\{[^}]*proxy_pass", code, re.S):
+    bad.append("/metrics must proxy_pass to the engine (200 path)")
+if not re.search(r"location = /metrics\s*\{[^}]*return 405", code, re.S):
+    bad.append("/metrics must return 405 for non-GET methods")
+if not re.search(r"location /\s*\{[^}]*return 404", code, re.S):
+    bad.append("any path other than /metrics must 404 (location / -> return 404)")
+for b in bad:
+    print(f"FAIL: relay contract: {b}")
+if not bad:
+    print("OK: relay contract (200 /metrics, 404 elsewhere, 405 non-GET)")
+PY
+
+# 7) promtool check rules + config (skip gracefully)
 if command -v promtool >/dev/null 2>&1; then
   for y in "$EXTRAS"/rules.d/*.yml; do
     if promtool check rules "$y" >/dev/null 2>&1; then
@@ -221,13 +241,53 @@ else
   _warn "obs_vllm_relay not running -- relay probe skipped"
 fi
 
-# Metric drift: call relay on its REAL listen address (bridge GW), not 127.0.0.1
+# Metric drift: compare LIVE vllm:* names (fetched through the relay on its
+# REAL bridge-GW address) against extras/expected-metrics.txt. Histograms in
+# the fingerprint are stored WITHOUT the _bucket/_count/_sum/_created
+# suffixes -- the live scrape is normalised the same way (an `_created`
+# series is NEVER counted as an unrelated `_total`). Drift is reported as
+# WARN (the fingerprint is informative, not an assertion) -- but a fuzzy
+# "check ran" without comparison is worthless, so removed/renamed/new names
+# are listed explicitly.
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_vllm_relay; then
   RELAY_PORT="${KVP_OBS_RELAY_PORT:-30008}"
   GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo 172.17.0.1)"
   live_metrics="$(curl -fsS --max-time 8 "http://$GW:$RELAY_PORT/metrics" 2>/dev/null | grep -oE '^vllm:[A-Za-z0-9_]+' | sort -u || true)"
   if [ -n "$live_metrics" ]; then
-    _ok "metric drift check ran through the relay on $GW:$RELAY_PORT"
+    _live_file="$(mktemp 2>/dev/null || echo /tmp/kvp-live-metrics.$$)"
+    printf '%s\n' "$live_metrics" > "$_live_file"
+    run_py - "$EXTRAS/expected-metrics.txt" "$_live_file" <<'PY'
+import re, sys
+exp_lines = open(sys.argv[1]).read().splitlines()
+live_names = {ln.strip() for ln in open(sys.argv[2]) if ln.strip()}
+
+def norm(n):
+    # keep histogram suffix normalisation identical in BOTH lists:
+    # _bucket/_count/_sum/_created are family markers, not separate names
+    return re.sub(r"_(bucket|count|sum|created)$", "", n)
+
+exp = set()
+for ln in exp_lines:
+    ln = ln.strip()
+    if not ln or ln.startswith("#"):
+        continue
+    exp.add(norm(ln.split()[0]))
+
+live = {norm(n) for n in live_names}
+
+missing = sorted(exp - live)
+unexpected = sorted(live - exp)
+
+if not missing and not unexpected:
+    print("OK: no metric-name drift vs expected-metrics.txt")
+else:
+    for m in missing:
+        print(f"WARN: metric expected but NOT live any more (renamed/removed?): {m}")
+    for u in unexpected:
+        print(f"WARN: NEW live metric not in the fingerprint (needs rules/panel review): {u}")
+    print(f"OK: drift comparison finished ({len(exp)} expected vs {len(live)} live, {len(missing)} missing, {len(unexpected)} new)")
+PY
+    rm -f "$_live_file"
   else
     _warn "engine metrics not reachable through the relay on $GW:$RELAY_PORT (engine down? -- drift check skipped)"
   fi

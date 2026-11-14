@@ -81,4 +81,10 @@ echo "  * restore (prefetch) time -- how fast a restarted server refills L1 from
 # vLLM metrics relay, GPU exporters. Best-effort: failures here never change
 # the exit status of THIS script (base stack is the deliverable).
 bash "$HERE/extras-up.sh" || echo "[extras] extras-up.sh returned non-zero -- base stack is unaffected (see above)" >&2
-_obs_extras_started=1  # L4 (r88): tell start-all.sh extras already ran this session
+# L4 (r89): the old `_obs_extras_started=1` was set in THIS child shell and
+# never reached start-all.sh (not exported, script not sourced) -- the
+# "already deployed" branch there was dead code and extras ran TWICE (extra
+# compose up + extra HUP). A marker FILE is the only channel that crosses
+# process boundaries: record it here, start-all.sh reads and clears it.
+mkdir -p "$ROOT/live" 2>/dev/null || true
+printf '1\n' > "$ROOT/live/extras_started" 2>/dev/null || true

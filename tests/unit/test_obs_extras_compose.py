@@ -59,7 +59,59 @@ def test_images_are_pinned_not_latest():
         assert re.search(r":[\w][\w.\-]*$", ref), f"unpinned (no tag): {ref}"
 
 
-# ---------------------------------------------------------------- relay
+# ------------------------------------------------- dcgm mount + command + caps
+def _block(service: str) -> str:
+    """Extract the YAML block of one top-level service (indent 2) from the
+    override file WITHOUT requiring pyyaml -- the file is small and regular."""
+    lines = OVR.read_text().splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == f"{service}:" and ln.startswith("  ") and not ln.startswith("   "):
+            start = i
+            break
+    assert start is not None, f"service {service} not found in the override"
+    out = [lines[start]]
+    for ln in lines[start + 1:]:
+        if ln.strip() == "":        # keep blank lines inside the block
+            out.append(ln)
+            continue
+        if ln.startswith("  ") and not ln.startswith("   "):
+            break                    # next top-level service
+        out.append(ln)
+    return "\n".join(out)
+
+
+def test_dcgm_counter_file_mount():
+    """The DCGM exporter must READ the overrides' counters CSV: the file is
+    mounted at /etc/dcgm-exporter/default-counters.csv AND the container is
+    started with `command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]`.
+    MUTATION caught: mounting at /etc/dcgm-exporter/dcp-counters.csv (which
+    the exporter never reads) or dropping the `command:` line."""
+    b = _block("dcgm-exporter")
+    assert "./extras/gpu/dcgm-counters.csv:/etc/dcgm-exporter/default-counters.csv:ro" in b, (
+        "base counters CSV must be mounted at /etc/dcgm-exporter/default-counters.csv")
+    assert 'command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]' in b, (
+        "dcgm-exporter must point at the mounted file with command -f")
+    assert "dcp-counters" not in b, (
+        "dcp-counters.csv is the stock file the exporter ignores -- never mount there")
+
+
+def test_dcgm_prof_needs_sys_admin_and_base_does_not():
+    """KVP_OBS_GPU_PROF is implemented as a separate dcgm-exporter-prof
+    service (profile gpu-prof): it carries cap_add: [SYS_ADMIN]; the BASE
+    dcgm-exporter service must NOT (least privilege).
+    MUTATION caught: adding cap_add to the base service, or shipping the prof
+    service without SYS_ADMIN."""
+    base = _block("dcgm-exporter")
+    prof = _block("dcgm-exporter-prof")
+    assert "cap_add" not in base, "the base dcgm-exporter must run WITHOUT extra caps"
+    assert re.search(r"cap_add:\s*\[SYS_ADMIN\]", prof), (
+        "dcgm-exporter-prof needs cap_add: [SYS_ADMIN] (CUPTI profiling fields)")
+    assert 'profiles: ["gpu-prof"]' in prof, (
+        "dcgm-exporter-prof is activated under the gpu-prof profile")
+    assert "./extras/gpu/dcgm-counters.live.csv:/etc/dcgm-exporter/default-counters.csv:ro" in prof, (
+        "prof counters CSV must be mounted at the default-counters path")
+
 def test_nginx_relay_renders_and_strips_auth(tmp_path):
     """Build the rendered conf the way start-observability.sh does and run it
     against a fake upstream when a local `nginx` binary exists (SKIP else)."""

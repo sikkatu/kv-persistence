@@ -30,7 +30,8 @@ network, and the relay reaches the engine over host loopback.
 | service | profile | image (pinned) | what it does |
 |---|---|---|---|
 | `vllm-relay` | `extras` | `nginx:1.29.4-alpine` | proxies GET /metrics from the engine (127.0.0.1) on the Docker bridge gateway address, so bridge-network Prometheus can scrape a loopback-only engine. Authorization header is stripped; anything but GET /metrics is 404/405. |
-| `dcgm-exporter` | `gpu` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | NVIDIA DCGM GPU telemetry. Counter list comes from `gpu/dcgm-counters.csv` mounted at `/etc/dcgm-exporter/default-counters.csv` (and pointed at with `--collectors=`). Tag confirmed live against `https://nvcr.io/v2/nvidia/k8s/dcgm-exporter/tags/list` on 2026-11-13 -- run `docker manifest inspect` on your own host to double-check before profit. |
+| `dcgm-exporter` | `gpu` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | NVIDIA DCGM GPU telemetry. Counter list comes from `gpu/dcgm-counters.csv` mounted at `/etc/dcgm-exporter/default-counters.csv`; the container is started with `command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]` so the exporter really reads this file (the stock `dcp-counters.csv` is NOT used). Tag exists in the NGC catalog; verify on your own host with `docker manifest inspect` before deploying. |
+| `dcgm-exporter-prof` | `gpu-prof` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | same image, but with the PROFILING counters (`dcgm-counters.live.csv`) and `cap_add: [SYS_ADMIN]` (CUPTI). Activated instead of `dcgm-exporter` when `KVP_OBS_GPU_PROF=1`. |
 | `nvidia-smi-exporter` | `gpu-smi` | `utkuozdemir/nvidia_gpu_exporter:1.3.0` | fallback GPU telemetry reusing `nvidia-smi` calls (`KVP_OBS_GPU_EXPORTER=smi`). No PCIe traffic metrics. |
 
 **Image sizes were NOT invented** (rule 11.3: no made-up numbers) -- run
@@ -50,7 +51,7 @@ nginx                                            1.29.4-alpine           (fill i
 | `KVP_OBS_EXTRAS` | `1` | `0` = do not deploy ANY extras service or dashboard (base stack untouched) |
 | `KVP_OBS_GPU` | `auto` | `off` = never start a GPU exporter; `on` = force; `auto` = start if `nvidia-smi` + NVIDIA container runtime are detected |
 | `KVP_OBS_GPU_EXPORTER` | `dcgm` | `smi` = swap to the `nvidia_gpu_exporter` fallback (`gpu-smi` profile) |
-| `KVP_OBS_GPU_PROF` | `0` | `1` = enable DCGM PROFIling fields (SM active / DRAM active / PCIe RX-TX). Only under `gpu` (dcgm) profile. Adds `cap_add: SYS_ADMIN` to the exporter -- read `# Caps and profiling` below first. |
+| `KVP_OBS_GPU_PROF` | `0` | `1` = enable DCGM PROFIling fields (SM active / DRAM active / PCIe RX-TX). Only under `gpu` (dcgm) exporter; switches to the dedicated `dcgm-exporter-prof` service (profile `gpu-prof`) which gets `cap_add: [SYS_ADMIN]` -- read `# Caps and profiling` below first. |
 | `KVP_OBS_RELAY_PORT` | `30008` | relay listen port (bound to the bridge gateway address only, never 0.0.0.0) |
 
 ## First start caveat -- one-time restart of base containers
@@ -93,9 +94,12 @@ in `rules.d/*.yml` is fixed and all 32 panels keep working.
 
 NVIDIA DCGM profiling fields (SM-active, DRAM-active, PCIe bandwidth) are
 collected through CUPTI and typically require `SYS_ADMIN` in the container.
-`KVP_OBS_GPU_PROF=1` therefore adds `cap_add: SYS_ADMIN` to the dcgm
-exporter and swaps the mounted counters file to `dcgm-counters.live.csv`
-(copy of `dcgm-counters.prof.csv`; gitignored). Two documented NVIDIA caveats:
+Instead of mutating the base service, `KVP_OBS_GPU_PROF=1` activates a SEPARATE
+container `dcgm-exporter-prof` (compose profile `gpu-prof`) that swaps the
+mounted counters file to `dcgm-counters.live.csv` (copy of
+`dcgm-counters.prof.csv`; gitignored) and adds `cap_add: [SYS_ADMIN]`. The
+base `dcgm-exporter` (profile `gpu`) runs WITHOUT extra capabilities in any
+case. Two documented NVIDIA caveats:
 
 * profiling counters CONFLICT with Nsight / CUPTI-based tools -- do not run
   both at once on the same GPU;

@@ -27,7 +27,8 @@ compose 网络访问 exporter，中继通过宿主机 loopback 访问引擎。
 | 服务 | profile | 镜像（固定标签） | 作用 |
 |---|---|---|---|
 | `vllm-relay` | `extras` | `nginx:1.29.4-alpine` | 将引擎（127.0.0.1）的 GET /metrics 代理到 Docker bridge 网关地址；Authorization 头被剥离；非 GET /metrics 的请求返回 404/405。 |
-| `dcgm-exporter` | `gpu` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | NVIDIA DCGM GPU 遥测。计数器来自 `gpu/dcgm-counters.csv`（挂载到 `/etc/dcgm-exporter/default-counters.csv`）。标签已于 2026-11-13 通过 `https://nvcr.io/v2/nvidia/k8s/dcgm-exporter/tags/list` API 确认。 |
+| `dcgm-exporter` | `gpu` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | NVIDIA DCGM GPU 遥测。计数器来自 `gpu/dcgm-counters.csv`，挂载到 `/etc/dcgm-exporter/default-counters.csv`；容器以 `command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]` 启动，确保导出器真正读取该文件（自带的 `dcp-counters.csv` 不会使用）。标签存在于 NGC 目录；请在自己的主机上用 `docker manifest inspect` 复查。
+| `dcgm-exporter-prof` | `gpu-prof` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | 同一镜像，但使用性能剖析计数器（`dcgm-counters.live.csv`）并添加 `cap_add: [SYS_ADMIN]`（CUPTI）。当 `KVP_OBS_GPU_PROF=1` 时替代 `dcgm-exporter`。 |
 | `nvidia-smi-exporter` | `gpu-smi` | `utkuozdemir/nvidia_gpu_exporter:1.3.0` | 通过 nvidia-smi 采集的备用 exporter（`KVP_OBS_GPU_EXPORTER=smi`），无 PCIe 流量指标。 |
 
 **镜像大小未凭空编造**（规则 11.3）——首次拉取后运行 `docker image ls`，将实际
@@ -40,7 +41,7 @@ compose 网络访问 exporter，中继通过宿主机 loopback 访问引擎。
 | `KVP_OBS_EXTRAS` | `1` | `0` = 不部署任何 extras 服务或仪表盘（基础栈不变） |
 | `KVP_OBS_GPU` | `auto` | `off` = 从不启动 GPU exporter；`on` = 强制；`auto` = 检测到 nvidia-smi + NVIDIA container runtime 时启动 |
 | `KVP_OBS_GPU_EXPORTER` | `dcgm` | `smi` = 切换到 nvidia_gpu_exporter（gpu-smi profile） |
-| `KVP_OBS_GPU_PROF` | `0` | `1` = 启用 DCGM 性能剖析字段（SM active / DRAM active / PCIe RX-TX）。仅限 gpu profile；添加 cap_add: SYS_ADMIN |
+| `KVP_OBS_GPU_PROF` | `0` | `1` = 启用 DCGM 性能剖析字段（SM active / DRAM active / PCIe RX-TX）。仅限 dcgm 导出器；切换到专用的 `dcgm-exporter-prof` 服务（profile `gpu-prof`），该服务添加 `cap_add: [SYS_ADMIN]`——请先阅读 `# 权限与性能剖析` 一节 |
 | `KVP_OBS_RELAY_PORT` | `30008` | 中继监听端口（仅绑定 bridge 网关地址，绝不绑定 0.0.0.0） |
 
 ## 首次启动提示 —— 基础容器一次性重启
@@ -79,7 +80,12 @@ Dashboards → kv-persistence。自上而下回答：
 
 ## 权限与性能剖析（`KVP_OBS_GPU_PROF=1`）
 
-DCGM 性能剖析字段通过 CUPTI 采集，通常需要容器 `SYS_ADMIN` 权限：
+DCGM 性能剖析字段通过 CUPTI 采集，通常需要容器 `SYS_ADMIN` 权限。
+`KVP_OBS_GPU_PROF=1` 不会修改基础服务，而是启动独立的 `dcgm-exporter-prof`
+容器（compose profile `gpu-prof`）：挂载的计数器文件切换为
+`dcgm-counters.live.csv`（`dcgm-counters.prof.csv` 的副本，已 gitignore），
+并添加 `cap_add: [SYS_ADMIN]`。基础 `dcgm-exporter`（profile `gpu`）
+始终不带任何额外权限。说明：
 `KVP_OBS_GPU_PROF=1` 将计数器切换到 `dcgm-counters.live.csv`
 （`dcgm-counters.prof.csv` 的副本，已加入 .gitignore）并在 override 中
 启用 cap_add。NVIDIA 文档标注的两个限制：性能剖析与 Nsight/CUPTI 工具

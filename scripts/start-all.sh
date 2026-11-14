@@ -104,7 +104,8 @@ fi
 # one-time restart, subsequent `up -d` is a no-op for unchanged services.
 if [ "${KVP_OBS_EXTRAS:-1}" != "0" ]; then
   if [ "$_obs_ours" = "1" ]; then
-    if [ "${_obs_extras_started:-0}" = "1" ]; then
+    if [ -f "$ROOT/live/extras_started" ]; then
+      rm -f "$ROOT/live/extras_started"
       echo "[extras] already deployed by start-observability.sh in this run (L4) -- skipping"
     else
       bash "$HERE/extras-up.sh" 2>&1 || \

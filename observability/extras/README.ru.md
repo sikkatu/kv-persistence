@@ -29,7 +29,8 @@ compose-сеть, релей — к движку через loopback хоста.
 | сервис | профиль | образ (закреплён) | что делает |
 |---|---|---|---|
 | `vllm-relay` | `extras` | `nginx:1.29.4-alpine` | проксирует GET /metrics от движка (127.0.0.1) на адрес шлюза Docker bridge; заголовок Authorization удаляется, всё кроме GET /metrics — 404/405. |
-| `dcgm-exporter` | `gpu` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | телеметрия GPU через NVIDIA DCGM. Список счётчиков — `gpu/dcgm-counters.csv` (монтируется в `/etc/dcgm-exporter/default-counters.csv`). Тег проверен по `https://nvcr.io/v2/nvidia/k8s/dcgm-exporter/tags/list` 2026-11-13. |
+| `dcgm-exporter` | `gpu` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | телеметрия GPU через NVIDIA DCGM. Список счётчиков — `gpu/dcgm-counters.csv`, монтируется в `/etc/dcgm-exporter/default-counters.csv`; контейнер запускается с `command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]`, чтобы экспортёр действительно читал этот файл (штатный `dcp-counters.csv` не используется). Тег существует в каталоге NGC; проверьте на своём хосте `docker manifest inspect` перед развёртыванием. |
+| `dcgm-exporter-prof` | `gpu-prof` | `nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04` | тот же образ, но с профилирующими счётчиками (`dcgm-counters.live.csv`) и `cap_add: [SYS_ADMIN]` (CUPTI). Включается вместо `dcgm-exporter` при `KVP_OBS_GPU_PROF=1`. |
 | `nvidia-smi-exporter` | `gpu-smi` | `utkuozdemir/nvidia_gpu_exporter:1.3.0` | запасной экспортёр через nvidia-smi (`KVP_OBS_GPU_EXPORTER=smi`), без метрик PCIe. |
 
 **Размеры образов не выдуманы** (правило 11.3) — выполните `docker image ls`
@@ -42,7 +43,7 @@ compose-сеть, релей — к движку через loopback хоста.
 | `KVP_OBS_EXTRAS` | `1` | `0` = не разворачивать ничего из extras (базовый стек не трогается) |
 | `KVP_OBS_GPU` | `auto` | `off` = GPU-экспортёр никогда; `on` = принудительно; `auto` = если есть nvidia-smi + NVIDIA container runtime |
 | `KVP_OBS_GPU_EXPORTER` | `dcgm` | `smi` = экспортёр nvidia_gpu_exporter (профиль gpu-smi) |
-| `KVP_OBS_GPU_PROF` | `0` | `1` = профилирующие поля DCGM (SM/DRAM active, PCIe RX-TX). Только профиль gpu; добавляет cap_add: SYS_ADMIN |
+| `KVP_OBS_GPU_PROF` | `0` | `1` = профилирующие поля DCGM (SM/DRAM active, PCIe RX-TX). Только при dcgm-экспортёре: переключает на отдельный сервис `dcgm-exporter-prof` (профиль `gpu-prof`) с `cap_add: [SYS_ADMIN]` -- читайте раздел `# Ограничения и профилирование` |
 | `KVP_OBS_RELAY_PORT` | `30008` | порт релея (только адрес шлюза bridge, никогда 0.0.0.0) |
 
 ## Особенность первого запуска — однократный перезапуск базовых контейнеров
@@ -83,9 +84,12 @@ Extras монтирует **новые тома в `obs_prometheus` и `obs_graf
 
 ## Ограничения и профилирование (`KVP_OBS_GPU_PROF=1`)
 
-Профилирующие поля DCGM собираются через CUPTI и обычно требуют `SYS_ADMIN`:
-`KVP_OBS_GPU_PROF=1` переключает счётчики на `dcgm-counters.live.csv` (копия
-`dcgm-counters.prof.csv`, в .gitignore) и включает cap_add в override.
+Профилирующие поля DCGM собираются через CUPTI и обычно требуют `SYS_ADMIN`.
+Вместо изменения базового сервиса `KVP_OBS_GPU_PROF=1` поднимает ОТДЕЛЬНЫЙ
+контейнер `dcgm-exporter-prof` (профиль compose `gpu-prof`): счётчики
+переключаются на `dcgm-counters.live.csv` (копия `dcgm-counters.prof.csv`,
+в .gitignore), и добавляется `cap_add: [SYS_ADMIN]`. Базовый `dcgm-exporter`
+(профиль `gpu`) в любом случае работает БЕЗ дополнительных возможностей.
 Два задокументированных ограничения NVIDIA: профилирование КОНФЛИКТУЕТ с
 Nsight/CUPTI-инструментами (не запускайте одновременно); на виртуализированных
 узлах профилирование может быть отключено — панель покажет `no data`, не ошибку.

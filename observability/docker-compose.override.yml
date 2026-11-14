@@ -30,9 +30,13 @@ services:
       - /tmp
 
   # ---- GPU telemetry, default (profile: gpu) ---------------------------
-  # DCGM exporter. Access to GPUs through the standard reservation -- no
-  # SYS_ADMIN, no extra capabilities, profiling counters off by default
-  # (see extras/gpu/dcgm-counters.prof.csv, opt-in via KVP_OBS_GPU_PROF=1).
+  # DCGM exporter.  The counter set comes from extras/gpu/dcgm-counters.csv
+  # mounted at /etc/dcgm-exporter/default-counters.csv and pointed to with
+  # `command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]`; the stock
+  # dcp-counters.csv is NOT used.  The base `gpu` profile runs with NO extra
+  # capabilities.  Profiling fields (SM-active, DRAM-active, PCIe RX-TX) live
+  # in the separate dcgm-exporter-prof service (profile gpu-prof, opt-in
+  # KVP_OBS_GPU_PROF=1) which adds cap_add: [SYS_ADMIN] for CUPTI.
   dcgm-exporter:
     image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
     container_name: obs_dcgm_exporter
@@ -44,10 +48,39 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    # the exporter reads EXACTLY this counters file (no --collectors flag
+    # mismatch: the CSV is mounted where command: -f points at).
+    command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]
     volumes:
-      - ./extras/gpu/dcgm-counters.csv:/etc/dcgm-exporter/dcp-counters.csv:ro
+      - ./extras/gpu/dcgm-counters.csv:/etc/dcgm-exporter/default-counters.csv:ro
     # port 9400 (metrics) stays INSIDE the compose network -- scraped by
     # prometheus service name dcgm-exporter:9400, never published to host.
+    restart: unless-stopped
+
+  # ---- GPU telemetry WITH profiling counters (profile: gpu-prof) -------
+  # KVP_OBS_GPU_PROF=1 -> extras-up.sh activates profile `gpu-prof` instead
+  # of `gpu` and copies dcgm-counters.prof.csv onto dcgm-counters.live.csv.
+  # Profiling fields (DCGM_FI_PROF_*) are collected through CUPTI and need
+  # SYS_ADMIN in the container (documented NVIDIA caveat).  Mutually
+  # exclusive with the base dcgm-exporter -- same DCGM instance must not be
+  # driven twice.
+  dcgm-exporter-prof:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+    container_name: obs_dcgm_exporter_prof
+    profiles: ["gpu-prof"]
+    cap_add: [SYS_ADMIN]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["-f", "/etc/dcgm-exporter/default-counters.csv"]
+    volumes:
+      # rendered by extras-up.sh from dcgm-counters.prof.csv (live/ is gitignored)
+      - ./extras/gpu/dcgm-counters.live.csv:/etc/dcgm-exporter/default-counters.csv:ro
+    # internal port 9400 only -- scraped as dcgm-exporter-prof:9400.
     restart: unless-stopped
 
   # ---- GPU telemetry fallback (profile: gpu-smi) -----------------------

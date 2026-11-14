@@ -84,26 +84,27 @@ esac
 if [ -n "$GPU_PROF" ] && [ "${KVP_OBS_GPU_EXPORTER:-dcgm}" = "smi" ]; then
   GPU_PROF="gpu-smi"
 fi
-# Opt-in profiling counters (H2.4): KVP_OBS_GPU_PROF=1 ACTUALLY switches the
-# csv mount and adds SYS_ADMIN -- the choice is exported for compose via
-# live/obs-gpu.env (rendered below; live/ is gitignored).
-GPU_PROF_ON=0
+# Opt-in profiling counters (H2.4): KVP_OBS_GPU_PROF=1 ACTUALLY switches to
+# the dedicated dcgm-exporter-prof service (profile `gpu-prof`: profiling
+# CSV + cap_add SYS_ADMIN -- see docker-compose.override.yml). The base
+# `gpu` profile keeps NO extra capabilities. No env file is involved: the
+# profile choice is made here and passed to compose via COMPOSE_PROFILES.
 if [ "$GPU_PROF" = "gpu" ] && [ "${KVP_OBS_GPU_PROF:-0}" = "1" ]; then
-  GPU_PROF_ON=1
+  GPU_PROF="gpu-prof"
   cp "$EXTRAS/gpu/dcgm-counters.prof.csv" "$EXTRAS/gpu/dcgm-counters.live.csv" 2>/dev/null \
-    || warn "cannot install the profiling counters csv -- running with base counters"
+    || warn "cannot install the profiling counters csv -- the prof exporter will fail its mount, check.sh reports FAIL"
 fi
-mkdir -p "$ROOT/live" 2>/dev/null || true
-{ echo "GPU_PROF_ON=$GPU_PROF_ON"
-  echo "GPU_PROF_COUNTERS=dcgm-counters$([ "$GPU_PROF_ON" = 1 ] && echo '.live').csv"
-} > "$ROOT/live/obs-gpu.env" 2>/dev/null || warn "cannot write live/obs-gpu.env"
 
 # file_sd target for the GPU exporter (inside the compose network).
 # H2.1 (review 88): the target follows the ACTIVATED exporter -- dcgm for
-# profile `gpu`, nvidia-smi-exporter for `gpu-smi`, and an EMPTY list when the
+# profile `gpu`, the profiling instance dcgm-exporter-prof for `gpu-prof`,
+# nvidia-smi-exporter for `gpu-smi`, and an EMPTY list when the
 # GPU row is disabled (an always-down gpu target would be a permanent FAIL).
 if [ "$GPU_PROF" = "gpu" ]; then
   printf '[{"targets": ["dcgm-exporter:9400"]}]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \
+    || warn "cannot write extras/targets/gpu.json"
+elif [ "$GPU_PROF" = "gpu-prof" ]; then
+  printf '[{"targets": ["dcgm-exporter-prof:9400"]}]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \
     || warn "cannot write extras/targets/gpu.json"
 elif [ "$GPU_PROF" = "gpu-smi" ]; then
   printf '[{"targets": ["nvidia-smi-exporter:9835"]}]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \

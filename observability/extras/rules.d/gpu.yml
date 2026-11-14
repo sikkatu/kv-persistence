@@ -92,7 +92,8 @@ groups:
             label_replace(nvidia_smi_clocks_current_memory_mhz * on(uuid) group_left(index) nvidia_smi_gpu_info, "gpu", "$1", "index", "(.*)") * 1000000
           )
       # --- profile-only (DCGM_FI_PROF_*): opt-in via KVP_OBS_GPU_PROF=1,
-      #     needs SYS_ADMIN (cap_add wired in docker-compose.override.yml).
+      #     needs SYS_ADMIN (cap_add lives on the dcgm-exporter-prof service,
+      #     profile gpu-prof, in docker-compose.override.yml).
       #     Absent series -> the dashboard panel shows "no data", no error.
       - record: kvp:gpu_sm_active_ratio
         expr: max by (gpu) (DCGM_FI_PROF_SM_ACTIVE)
