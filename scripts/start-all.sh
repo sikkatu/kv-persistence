@@ -102,10 +102,21 @@ fi
 # obs_prometheus and obs_grafana once -- compose must remount the freshly
 # added volumes. Their DATA volumes are untouched and survive; after that
 # one-time restart, subsequent `up -d` is a no-op for unchanged services.
+# r89 (stale-marker fix): consume the extras_started marker UNCONDITIONALLY
+# before any branching -- no matter whether the stack is ours, foreign, or
+# extras are disabled. A marker left behind (manual start-observability.sh,
+# foreign stack, KVP_OBS_EXTRAS=0 half-run) must NEVER mute a later deploy:
+# that is how "change KVP_OBS_GPU_PROF and the first start silently keeps
+# the old wiring" happened. The marker only ever means "extras ran inside
+# THIS start-all.sh, started by start-observability.sh earlier in step 1/3".
+_extras_by_obs=0
+if [ -f "$ROOT/live/extras_started" ]; then
+  _extras_by_obs=1
+  rm -f "$ROOT/live/extras_started"
+fi
 if [ "${KVP_OBS_EXTRAS:-1}" != "0" ]; then
   if [ "$_obs_ours" = "1" ]; then
-    if [ -f "$ROOT/live/extras_started" ]; then
-      rm -f "$ROOT/live/extras_started"
+    if [ "$_extras_by_obs" = "1" ]; then
       echo "[extras] already deployed by start-observability.sh in this run (L4) -- skipping"
     else
       bash "$HERE/extras-up.sh" 2>&1 || \

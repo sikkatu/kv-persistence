@@ -80,11 +80,19 @@ echo "  * restore (prefetch) time -- how fast a restarted server refills L1 from
 # Idempotent, opt-out with KVP_OBS_EXTRAS=0. Extra dashboard (kvp-inference),
 # vLLM metrics relay, GPU exporters. Best-effort: failures here never change
 # the exit status of THIS script (base stack is the deliverable).
-bash "$HERE/extras-up.sh" || echo "[extras] extras-up.sh returned non-zero -- base stack is unaffected (see above)" >&2
-# L4 (r89): the old `_obs_extras_started=1` was set in THIS child shell and
-# never reached start-all.sh (not exported, script not sourced) -- the
-# "already deployed" branch there was dead code and extras ran TWICE (extra
-# compose up + extra HUP). A marker FILE is the only channel that crosses
-# process boundaries: record it here, start-all.sh reads and clears it.
-mkdir -p "$ROOT/live" 2>/dev/null || true
-printf '1\n' > "$ROOT/live/extras_started" 2>/dev/null || true
+# --- extras hook: BEGIN (tests extract and EXECUTE this block) ---
+if [ "${KVP_OBS_EXTRAS:-1}" != "0" ]; then
+  bash "$HERE/extras-up.sh" || echo "[extras] extras-up.sh returned non-zero -- base stack is unaffected (see above)" >&2
+  # L4 (r89): the old `_obs_extras_started=1` was set in THIS child shell and
+  # never reached start-all.sh (not exported, script not sourced) -- the
+  # "already deployed" branch there was dead code and extras ran TWICE (extra
+  # compose up + extra HUP). A marker FILE is the only channel that crosses
+  # process boundaries: record it here, start-all.sh reads and clears it.
+  # Only when extras ACTUALLY ran: with KVP_OBS_EXTRAS=0 there is nothing to
+  # skip later, and a stale marker would mute the NEXT start-all's extras run
+  # (e.g. right after switching KVP_OBS_GPU_PROF -- the change would silently
+  # not apply).
+  mkdir -p "$ROOT/live" 2>/dev/null || true
+  printf '1\n' > "$ROOT/live/extras_started" 2>/dev/null || true
+fi
+# --- extras hook: END ---

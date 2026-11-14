@@ -54,6 +54,11 @@ nginx                                            1.29.4-alpine           (fill i
 | `KVP_OBS_GPU_PROF` | `0` | `1` = enable DCGM PROFIling fields (SM active / DRAM active / PCIe RX-TX). Only under `gpu` (dcgm) exporter; switches to the dedicated `dcgm-exporter-prof` service (profile `gpu-prof`) which gets `cap_add: [SYS_ADMIN]` -- read `# Caps and profiling` below first. |
 | `KVP_OBS_RELAY_PORT` | `30008` | relay listen port (bound to the bridge gateway address only, never 0.0.0.0) |
 
+Switching any `KVP_OBS_GPU*` value is safe on a re-run: `extras-up.sh`
+stops and removes the GPU exporter(s) of the mode you switched AWAY from
+(r89 -- `docker compose up -d` alone does not stop inactive-profile
+services) before bringing the selected one up.
+
 ## First start caveat -- one-time restart of base containers
 
 Adding these extras mounts **new volumes into `obs_prometheus` and

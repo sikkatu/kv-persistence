@@ -17,6 +17,17 @@
 #  X6 stop owner -> compose down with --profile '*' (extras stopped)
 #  X7 stop foreign / force -> unchanged from before (stand A-G covers this)
 #  X8 old 7 scenarios of obs-ownership-stand.sh still pass (invoked inline)
+#  X9 extras_started marker discipline (r89 L4):
+#     X9a KVP_OBS_EXTRAS=0 -> the hook does NOT write the marker
+#     X9b default -> the hook DOES write the marker when extras ran
+#     X9c stale marker + foreign stack -> the start-all extras block CONSUMES
+#         the marker anyway, so the NEXT run's deploy is never muted
+#     X9d marker + our stack -> extras skipped ONCE ("already deployed"), marker gone
+#  X10 targets/gpu.json content follows the selected exporter (r89 4):
+#     gpu -> dcgm-exporter:9400 | gpu-prof -> dcgm-exporter-prof:9400 |
+#     gpu-smi -> nvidia-smi-exporter:9835 | off -> []
+#  X11 GPU mode switch stops the INACTIVE exporters (r89 3): `compose rm -sf`
+#      runs with the non-selected services BEFORE the compose up
 set -u
 REPO_SRC="${1:?usage: $0 /path/to/kv-persistence}"
 [ -f "$REPO_SRC/scripts/extras-up.sh" ] || { echo "no scripts/extras-up.sh in $REPO_SRC" >&2; exit 2; }
@@ -31,6 +42,7 @@ sed 's/^/ /' /dev/null > "$S/repo/scripts/stop-engine.sh"   # silent no-op stubs
 printf '#!/bin/bash\nexit 0\n' > "$S/repo/scripts/stop-engine.sh"
 cp "$S/repo/scripts/stop-engine.sh" "$S/repo/scripts/stop-cache.sh"
 cp "$REPO_SRC/observability/extras/relay/nginx.conf.template" "$S/repo/observability/extras/relay/" 2>/dev/null || true
+cp "$REPO_SRC/observability/extras/gpu/dcgm-counters.prof.csv" "$S/repo/observability/extras/gpu/" 2>/dev/null || true
 cp "$REPO_SRC/observability/docker-compose.override.yml" "$S/repo/observability/" 2>/dev/null || true
 cp "$REPO_SRC/observability/docker-compose.yml" "$S/repo/observability/" 2>/dev/null || true
 
@@ -171,7 +183,108 @@ else
   fail "X6 owner down" stop profile
 fi
 
-# ---- X8 old scenarios obs-ownership-stand.sh still green ----
+# ---- X9a extras hook, KVP_OBS_EXTRAS=0 -> the marker is NOT written (r89 L4) --
+# Execute the REAL extras-hook block from start-observability.sh with extras
+# DISABLED: nothing may run and, crucially, no extras_started marker may appear
+# (a stale marker would mute the next start-all's extras deploy -- e.g. right
+# after switching KVP_OBS_GPU_PROF the change silently did not apply).
+HOOK_BLOCK="$(sed -n '/-- extras hook: BEGIN/,/-- extras hook: END --/p' "$REPO_SRC/scripts/start-observability.sh")"
+rm -f "$S/repo/live/extras_started"
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" KVP_OBS_EXTRAS=0 \
+    bash -c "$HOOK_BLOCK" > "$S/out" 2>&1 )
+if [ ! -f "$S/repo/live/extras_started" ] && ! grep -q "COMPOSE up" "$S/log"; then
+  pass "X9a KVP_OBS_EXTRAS=0 -> no marker written" leave
+else
+  fail "X9a no-marker when disabled" leave "marker=$(test -f "$S/repo/live/extras_started" && echo present || echo absent)"
+fi
+
+# ---- X9b extras hook, default -> the marker IS written (r89 L4) -------------
+rm -f "$S/repo/live/extras_started"
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" \
+    bash -c "$HOOK_BLOCK" > "$S/out" 2>&1 )
+if [ -f "$S/repo/live/extras_started" ] && grep -q "COMPOSE up" "$S/log"; then
+  pass "X9b default run -> marker written for start-all" write
+else
+  fail "X9b marker written when extras ran" write "marker=$(test -f "$S/repo/live/extras_started" && echo present || echo absent)"
+fi
+
+# ---- X9c stale marker + FOREIGN stack -> consumed anyway (r89 L4) -----------
+# Even when the stack is foreign and extras MUST NOT run, the start-all extras
+# block still consumes the marker -- otherwise the NEXT (our-stack) run skips
+# its deploy once and a real config change is silently lost.
+: > "$S/log"
+mkdir -p "$S/repo/live"; echo 1 > "$S/repo/live/extras_started"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" _obs_ours=0 \
+    bash -c "$EXTRAS_BLOCK" > "$S/out" 2>&1 )
+if [ ! -f "$S/repo/live/extras_started" ] && ! grep -q "COMPOSE up" "$S/log"; then
+  pass "X9c foreign stack still CONSUMES the stale marker" consume
+else
+  fail "X9c stale marker consumption on foreign stack" consume "marker=$(test -f "$S/repo/live/extras_started" && echo present || echo absent)"
+fi
+
+# ---- X9d marker + our stack -> skipped ONCE, marker gone (r89 L4) -----------
+: > "$S/log"
+mkdir -p "$S/repo/live"; echo 1 > "$S/repo/live/extras_started"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" _obs_ours=1 \
+    bash -c "$EXTRAS_BLOCK" > "$S/out" 2>&1 )
+if [ ! -f "$S/repo/live/extras_started" ] && ! grep -q "COMPOSE up" "$S/log" && grep -qi "already deployed" "$S/out"; then
+  pass "X9d marker -> extras skipped once, marker consumed" skip
+else
+  fail "X9d marker honored then consumed" skip consume
+fi
+
+# ---- X10 targets/gpu.json follows the selected exporter (r89 4) -------------
+# Four modes compose (gpu, gpu-prof, gpu-smi, off). The reviewer caught that
+# substituting the port/service name in extras-up.sh went unnoticed: the file
+# CONTENT was never checked -- only that the file exists.
+check_gpu_target(){
+  # $1 = label, $2 = expected content fragment (e.g. dcgm-exporter:9400 or [])
+  if [ -f "$S/repo/observability/extras/targets/gpu.json" ] && \
+     grep -qF "$2" "$S/repo/observability/extras/targets/gpu.json"; then
+    pass "$1" "$2"
+  else
+    fail "$1" "$2" "$(cat "$S/repo/observability/extras/targets/gpu.json" 2>/dev/null | tr -d '\n')"
+  fi
+}
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" NVIDIA_RT=1 KVP_OBS_GPU=on KVP_OBS_GPU_PROF=0 \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+check_gpu_target "X10a gpu mode -> target dcgm-exporter:9400" "dcgm-exporter:9400"
+
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" NVIDIA_RT=1 KVP_OBS_GPU=on KVP_OBS_GPU_PROF=1 \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+check_gpu_target "X10b gpu-prof mode -> target dcgm-exporter-prof:9400" "dcgm-exporter-prof:9400"
+
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" NVIDIA_RT=1 KVP_OBS_GPU=on KVP_OBS_GPU_EXPORTER=smi \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+check_gpu_target "X10c gpu-smi mode -> target nvidia-smi-exporter:9835" "nvidia-smi-exporter:9835"
+
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" KVP_OBS_GPU=off \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+check_gpu_target "X10d gpu=off -> empty target list" '[]'
+
+# ---- X11 GPU mode switch stops INACTIVE exporters before up (r89 3) ---------
+# `docker compose up -d` does not stop services of inactive profiles: switching
+# KVP_OBS_GPU_PROF 0<->1 (or dcgm<->smi) used to leave the old exporter running
+# side by side. extras-up.sh must `compose rm -sf` the NOT-selected GPU
+# services BEFORE calling up -d.
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" NVIDIA_RT=1 KVP_OBS_GPU=on KVP_OBS_GPU_PROF=1 \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+# gpu-prof selected: dcgm-exporter AND nvidia-smi-exporter must be removed
+if grep -q "rm -sf" "$S/log" && grep -q "dcgm-exporter " "$S/log" && grep -q "nvidia-smi-exporter" "$S/log" \
+   && ! grep "rm -sf" "$S/log" | grep -q "dcgm-exporter-prof"; then
+  pass "X11 gpu-prof switch: inactive exporters rm -sf'ed first" rm
+else
+  fail "X11 gpu mode switch cleanup" rm "no rm -sf of inactive GPU services"
+fi
+
+echo
 if [ -f "$S/repo/tests/obs-ownership-stand.sh" ]; then
   bash "$S/repo/tests/obs-ownership-stand.sh" "$S/repo" >/dev/null 2>&1
   if [ $? = 0 ]; then

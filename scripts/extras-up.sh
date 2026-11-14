@@ -117,6 +117,26 @@ fi
 # ------------------------- 5. compose up with profiles --------------------
 PROFILES="extras"
 [ -n "$GPU_PROF" ] && PROFILES="extras,$GPU_PROF"
+# r89 (GPU mode switch): `docker compose up -d` does NOT stop services of
+# INACTIVE profiles -- switching KVP_OBS_GPU_PROF 0<->1 (or dcgm<->smi) used
+# to leave the old exporter running next to the new one (two DCGM instances
+# on the same GPUs; in the prof->base direction a SYS_ADMIN container stayed
+# alive). Grep targets/gpu.json only sees ONE, so dashboards never showed it.
+# Stop+remove every GPU service that is NOT in the selected profile first.
+_gpu_inactive=""
+for _svc in dcgm-exporter dcgm-exporter-prof nvidia-smi-exporter; do
+  case "$_svc" in
+    dcgm-exporter)        _want="gpu" ;;
+    dcgm-exporter-prof)   _want="gpu-prof" ;;
+    nvidia-smi-exporter)  _want="gpu-smi" ;;
+  esac
+  [ "$GPU_PROF" = "$_want" ] || _gpu_inactive="$_gpu_inactive $_svc"
+done
+if [ -n "$_gpu_inactive" ]; then
+  # shellcheck disable=SC2086 -- intentional word splitting of the service list
+  ( cd "$OBS_DIR" && COMPOSE_PROFILES="*" docker compose rm -sf $_gpu_inactive >/dev/null 2>&1 ) \
+    || warn "could not stop inactive GPU exporter(s):$_gpu_inactive -- stop them manually (docker compose rm -sf <svc>)"
+fi
 echo "[extras] docker compose up -d (COMPOSE_PROFILES=$PROFILES) -- idempotent. NOTE (r88 M2): the FIRST run after adding extras recreates obs_prometheus/obs_grafana once (new volume mounts); their DATA volumes are preserved."
 if ! ( cd "$OBS_DIR" && COMPOSE_PROFILES="$PROFILES" docker compose up -d 2>&1 ); then
   warn "extras compose step failed -- base stack is intact, extras partially missing (see above)"

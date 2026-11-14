@@ -44,6 +44,10 @@ compose 网络访问 exporter，中继通过宿主机 loopback 访问引擎。
 | `KVP_OBS_GPU_PROF` | `0` | `1` = 启用 DCGM 性能剖析字段（SM active / DRAM active / PCIe RX-TX）。仅限 dcgm 导出器；切换到专用的 `dcgm-exporter-prof` 服务（profile `gpu-prof`），该服务添加 `cap_add: [SYS_ADMIN]`——请先阅读 `# 权限与性能剖析` 一节 |
 | `KVP_OBS_RELAY_PORT` | `30008` | 中继监听端口（仅绑定 bridge 网关地址，绝不绑定 0.0.0.0） |
 
+切换任何 `KVP_OBS_GPU*` 变量后重新运行是安全的：`extras-up.sh` 会先停止并
+删除旧模式的 GPU 导出器（r89 —— 仅 `docker compose up -d` 不会停止非激活
+profile 的服务），再启动新选择的导出器。
+
 ## 首次启动提示 —— 基础容器一次性重启
 
 Extras 会向 `obs_prometheus` 和 `obs_grafana` **挂载新卷**。首次启用 extras

@@ -63,7 +63,11 @@ services:
   # Profiling fields (DCGM_FI_PROF_*) are collected through CUPTI and need
   # SYS_ADMIN in the container (documented NVIDIA caveat).  Mutually
   # exclusive with the base dcgm-exporter -- same DCGM instance must not be
-  # driven twice.
+  # driven twice. ENFORCED (r89): `docker compose up -d` does NOT stop
+  # services of inactive profiles, so extras-up.sh stops+removes the GPU
+  # exporter(s) NOT selected this run (compose rm -sf) before up -d --
+  # switching KVP_OBS_GPU_PROF / KVP_OBS_GPU_EXPORTER never leaves the old
+  # exporter running side by side with the new one.
   dcgm-exporter-prof:
     image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
     container_name: obs_dcgm_exporter_prof

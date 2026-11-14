@@ -242,13 +242,16 @@ else
 fi
 
 # Metric drift: compare LIVE vllm:* names (fetched through the relay on its
-# REAL bridge-GW address) against extras/expected-metrics.txt. Histograms in
-# the fingerprint are stored WITHOUT the _bucket/_count/_sum/_created
-# suffixes -- the live scrape is normalised the same way (an `_created`
-# series is NEVER counted as an unrelated `_total`). Drift is reported as
-# WARN (the fingerprint is informative, not an assertion) -- but a fuzzy
-# "check ran" without comparison is worthless, so removed/renamed/new names
-# are listed explicitly.
+# REAL bridge-GW address) against extras/expected-metrics.txt. The
+# comparison logic lives in extras/metric_drift.py (unit-tested in
+# tests/unit/test_obs_extras_drift.py):
+#   * `*_created` bookkeeping series are DROPPED entirely (they are appended
+#     by prometheus_client to every counter -- keeping (even normalising) them
+#     produced 19 false "NEW" hits against the _total fingerprint names);
+#   * histogram suffixes _bucket/_count/_sum fold into the family name on
+#     BOTH sides (the fingerprint lists families).
+# Drift is reported as WARN (the fingerprint is informative, not an
+# assertion) -- removed/renamed/new names are listed explicitly.
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_vllm_relay; then
   RELAY_PORT="${KVP_OBS_RELAY_PORT:-30008}"
   GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo 172.17.0.1)"
@@ -256,27 +259,15 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_vllm_relay; then
   if [ -n "$live_metrics" ]; then
     _live_file="$(mktemp 2>/dev/null || echo /tmp/kvp-live-metrics.$$)"
     printf '%s\n' "$live_metrics" > "$_live_file"
-    run_py - "$EXTRAS/expected-metrics.txt" "$_live_file" <<'PY'
-import re, sys
-exp_lines = open(sys.argv[1]).read().splitlines()
-live_names = {ln.strip() for ln in open(sys.argv[2]) if ln.strip()}
+    run_py - "$EXTRAS/expected-metrics.txt" "$_live_file" "$EXTRAS" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[3])
+from metric_drift import compare
 
-def norm(n):
-    # keep histogram suffix normalisation identical in BOTH lists:
-    # _bucket/_count/_sum/_created are family markers, not separate names
-    return re.sub(r"_(bucket|count|sum|created)$", "", n)
+exp_text = open(sys.argv[1]).read()
+live_names = [ln.strip() for ln in open(sys.argv[2]) if ln.strip()]
 
-exp = set()
-for ln in exp_lines:
-    ln = ln.strip()
-    if not ln or ln.startswith("#"):
-        continue
-    exp.add(norm(ln.split()[0]))
-
-live = {norm(n) for n in live_names}
-
-missing = sorted(exp - live)
-unexpected = sorted(live - exp)
+missing, unexpected = compare(exp_text, live_names)
 
 if not missing and not unexpected:
     print("OK: no metric-name drift vs expected-metrics.txt")
@@ -285,7 +276,7 @@ else:
         print(f"WARN: metric expected but NOT live any more (renamed/removed?): {m}")
     for u in unexpected:
         print(f"WARN: NEW live metric not in the fingerprint (needs rules/panel review): {u}")
-    print(f"OK: drift comparison finished ({len(exp)} expected vs {len(live)} live, {len(missing)} missing, {len(unexpected)} new)")
+    print(f"OK: drift comparison finished ({len(missing)} missing, {len(unexpected)} new)")
 PY
     rm -f "$_live_file"
   else
