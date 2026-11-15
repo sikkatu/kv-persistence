@@ -83,22 +83,50 @@ PY
 fi
 
 # ======================== STATIC checks ==================================
-# 1) YAML syntax of scrape.d & rules.d
+# 1) YAML syntax of rules.d + SHAPE of scrape.d (r89d)
+# The YAML-parses check alone missed the production bug: Prometheus requires
+# every scrape_config_files entry to be a FULL ScrapeConfigs document (top
+# level `scrape_configs:` + list of jobs). A bare job list (the old shape)
+# parses as plain YAML -- but Prometheus rejects it ("cannot unmarshal !!seq
+# into config.ScrapeConfigs") and the WHOLE server fails to start. Check the
+# shape here, then let promtool check config confirm (docker fallback below).
 run_py - "$EXTRAS" <<'PY'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
 try:
     import yaml
 except ImportError:
-    print("WARN: pyyaml module not installed -- YAML syntax not validated (parsed by promtool when available)")
+    print("WARN: pyyaml module not installed -- YAML syntax not validated (promtool below validates it when a runner is available)")
     sys.exit(0)
-for sub in ("scrape.d", "rules.d"):
-    for p in sorted((root / sub).glob("*.yml")):
-        try:
-            yaml.safe_load(p.read_text())
-            print(f"OK: {sub}/{p.name} YAML parses")
-        except Exception as e:
-            print(f"FAIL: {sub}/{p.name} YAML broken: {e}")
+
+# rules.d: plain documents, Prometheus rule format -- YAML parses is enough
+for p in sorted((root / "rules.d").glob("*.yml")):
+    try:
+        yaml.safe_load(p.read_text())
+        print(f"OK: rules.d/{p.name} YAML parses")
+    except Exception as e:
+        print(f"FAIL: rules.d/{p.name} YAML broken: {e}")
+
+# scrape.d: MUST be a ScrapeConfigs document -- see the header of vllm.yml
+for p in sorted((root / "scrape.d").glob("*.yml")):
+    try:
+        doc = yaml.safe_load(p.read_text())
+    except Exception as e:
+        print(f"FAIL: scrape.d/{p.name} YAML broken: {e}")
+        continue
+    if not isinstance(doc, dict) or "scrape_configs" not in doc:
+        print(f"FAIL: scrape.d/{p.name} lacks the top-level `scrape_configs:` key -- "
+              "a bare job list makes Prometheus refuse to start: "
+              "cannot unmarshal !!seq into config.ScrapeConfigs")
+        continue
+    if not isinstance(doc["scrape_configs"], list) or not doc["scrape_configs"]:
+        print(f"FAIL: scrape.d/{p.name}: `scrape_configs` must be a non-empty list of jobs")
+        continue
+    if not all(isinstance(j, dict) and j.get("job_name") for j in doc["scrape_configs"]):
+        print(f"FAIL: scrape.d/{p.name}: every job needs a `job_name`")
+        continue
+    print(f"OK: scrape.d/{p.name} is a proper ScrapeConfigs document "
+          f"({len(doc['scrape_configs'])} job(s))")
 PY
 
 # 2) dashboard contract (7.5)
@@ -229,7 +257,27 @@ if not bad:
 PY
 
 # 7) promtool check rules + config (skip gracefully)
+# r89d: when promtool is NOT installed locally, fall back to running it from
+# the pinned Prometheus docker image -- the scrape.d shape bug (r89d) was
+# missed precisely because every promtool test SKIPPED on the coder's host.
+# Offline (no docker, no image): WARN with a manual command, never silent.
+PROMTOOL_OK=0
 if command -v promtool >/dev/null 2>&1; then
+  PROMTOOL_OK=1
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  if docker run --rm --entrypoint promtool --version prom/prometheus:v3.15.1 >/dev/null 2>&1 \
+     || docker image inspect prom/prometheus:v3.15.1 >/dev/null 2>&1; then
+    promtool() {
+      docker run --rm --entrypoint promtool \
+        -v "$ROOT/observability:/observability:ro" \
+        -v "$EXTRAS:/extras:ro" \
+        prom/prometheus:v3.15.1 "$@"
+    }
+    PROMTOOL_OK=1
+    _ok "promtool not installed -- running promtool from prom/prometheus:v3.15.1 (docker fallback)"
+  fi
+fi
+if [ "$PROMTOOL_OK" = "1" ]; then
   for y in "$EXTRAS"/rules.d/*.yml; do
     if promtool check rules "$y" >/dev/null 2>&1; then
       _ok "promtool check rules: $(basename "$y")"
@@ -238,14 +286,28 @@ if command -v promtool >/dev/null 2>&1; then
     fi
   done
   if [ -f "$ROOT/observability/prometheus.yml" ]; then
-    if promtool check config "$ROOT/observability/prometheus.yml" >/dev/null 2>&1; then
-      _ok "promtool check config: prometheus.yml"
+    if _cfg_out="$(promtool check config "$ROOT/observability/prometheus.yml" 2>&1)"; then
+      _ok "promtool check config: prometheus.yml (+ scrape.d/rules.d via config)"
     else
-      _fail "promtool check config REJECTED prometheus.yml"
+      _fail "promtool check config REJECTED prometheus.yml: $(printf '%s' "$_cfg_out" | tail -3)"
     fi
+    # the scrape.d flavour is checked as a WHOLE too: each file is fed to
+    # promtool through a temp config with `scrape_config_files: [<file>]` --
+    # the EXACT shape Prometheus loads (and what failed in production with
+    # "cannot unmarshal !!seq into config.ScrapeConfigs" before r89d).
+    for s in "$EXTRAS"/scrape.d/*.yml; do
+      _tmpcfg="$(mktemp 2>/dev/null || echo /tmp/kvp-scrape.$$.yml)"
+      printf 'scrape_config_files: ["%s"]\n' "$s" > "$_tmpcfg"
+      if promtool check config "$_tmpcfg" >/dev/null 2>&1; then
+        _ok "promtool check config: scrape.d/$(basename "$s") (via scrape_config_files)"
+      else
+        _fail "promtool REJECTED scrape.d/$(basename "$s"): $(promtool check config "$_tmpcfg" 2>&1 | tail -3)"
+      fi
+      rm -f "$_tmpcfg"
+    done
   fi
 else
-  _warn "promtool not installed -- rule/config syntax checked on the operator stand only"
+  _warn "promtool not installed and docker fallback unavailable -- rule/config syntax NOT checked here; run: docker run --rm --entrypoint promtool -v \$PWD/observability:/o:ro prom/prometheus:v3.15.1 check config /o/prometheus.yml"
 fi
 
 # ======================== LIVE checks ====================================

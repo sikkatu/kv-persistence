@@ -52,11 +52,20 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 echo
-if [ "$READY" = 1 ]; then
+if [ "$READY" = "1" ]; then
   echo "=== observability stack is UP (after $(( $(date +%s) - START_TS ))s) ==="
 else
   echo "WARNING: Grafana did not answer within 180s -- check: docker logs obs_grafana" >&2
   docker ps -a --filter name=obs_ --format '{{.Names}} {{.State}} {{.Status}}' 2>/dev/null || true
+fi
+# r89d: Prometheus liveness is checked EXPLICITLY -- the scrape.d shape bug
+# (r89d) left obs_prometheus crash-looping while Grafana alone answered fine,
+# so the stack looked healthy and "no data" was the only symptom. Report the
+# container state DIRECTLY when Prometheus is not ready.
+if ! curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:9091/-/ready 2>/dev/null; then
+  echo "WARNING: Prometheus is NOT answering on :9091 -- dashboards will show 'no data'. Check: docker ps -a --filter name=obs_prometheus; docker logs --tail 15 obs_prometheus" >&2
+  docker ps -a --filter name=obs_prometheus --format '{{.Names}} {{.State}} {{.Status}}' 2>/dev/null || true
+  echo "  A founding cause before r89d: scrape.d files without a top-level 'scrape_configs:' key -- run: bash observability/extras/check.sh --static" >&2
 fi
 echo
 echo "  Grafana     : http://localhost:3000   (anonymous Admin, no login)"

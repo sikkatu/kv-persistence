@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 KV = Path(__file__).resolve().parents[2]
 OBS = KV / "observability"
@@ -111,6 +112,29 @@ def test_dcgm_prof_needs_sys_admin_and_base_does_not():
         "dcgm-exporter-prof is activated under the gpu-prof profile")
     assert "./extras/gpu/dcgm-counters.live.csv:/etc/dcgm-exporter/default-counters.csv:ro" in prof, (
         "prof counters CSV must be mounted at the default-counters path")
+
+
+def test_all_scrape_d_files_are_scrapeconfigs_documents():
+    """r89d regression: prometheus.yml pulls `scrape_config_files: [.../scrape.d/*.yml]`,
+    and Prometheus requires EVERY such file to start with a top-level
+    `scrape_configs:` mapping (a bare `- job_name:` list makes the server
+    refuse to start: "cannot unmarshal !!seq into config.ScrapeConfigs").
+    MUTATION caught: dropping the `scrape_configs:` key from any scrape file."""
+    sd = OBS / "extras" / "scrape.d"
+    files = sorted(sd.glob("*.yml"))
+    assert files, "no scrape.d files found"
+    for f in files:
+        doc = yaml.safe_load(f.read_text())
+        if not isinstance(doc, dict) or "scrape_configs" not in doc:
+            pytest.fail(
+                f"{f.name}: missing top-level `scrape_configs:` key -- "
+                "a bare job list is REJECTED by Prometheus "
+                "(cannot unmarshal !!seq into config.ScrapeConfigs)")
+        assert isinstance(doc["scrape_configs"], list) and doc["scrape_configs"], (
+            f"{f.name}: scrape_configs must be a non-empty list")
+        for job in doc["scrape_configs"]:
+            assert isinstance(job, dict) and "job_name" in job, (
+                f"{f.name}: every job needs a job_name")
 
 
 # ------------------------------------------------- inactive exporter cleanup

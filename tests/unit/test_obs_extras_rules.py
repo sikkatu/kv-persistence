@@ -26,7 +26,10 @@ VLLM_TEST = """\
 rule_files:
   - vllm.yml
 
-evaluation_interval: 30s
+# r89d: aligned with the 5s input cadence below and with the rule group's own
+# `interval: 5s` -- an evaluation_interval of 30s made every instant lookup
+# fall back to the t=0 sample (the reviewed symptom: got 3, exp 4).
+evaluation_interval: 5s
 
 tests:
   # ---- running / waiting / kv usage -------------------------------
@@ -40,32 +43,36 @@ tests:
         values: '0.55 0.62 0.7'
     promql_expr_test:
       - expr: kvp:vllm_requests_running
-        eval_time: 10s
+        eval_time: 5s
         exp_samples:
-          - labels: '{}'
+          - labels: '{__name__="kvp:vllm_requests_running"}'
             value: 4
       - expr: kvp:vllm_requests_waiting
-        eval_time: 10s
+        eval_time: 5s
         exp_samples:
-          - labels: '{}'
+          - labels: '{__name__="kvp:vllm_requests_waiting"}'
             value: 1
       - expr: kvp:vllm_kv_usage_ratio
-        eval_time: 10s
+        eval_time: 5s
         exp_samples:
-          - labels: '{}'
+          - labels: '{__name__="kvp:vllm_kv_usage_ratio"}'
             value: 0.62
 
-  # ---- generation tokens/s: 50 tokens over 30s window -> 50/30 ≈ 1.666---
-  - interval: 30s
+  # ---- generation tokens/s: linear ramp 0,10,20,... (interval 10s) -------
+  # rate(...) over a [30s] window needs >=2 points INSIDE the window: with the
+  # old interval 30s there was only ONE point in (t-30s, t] and rate() was
+  # numerically -- undefined (got: nil on real promtool 3.15.1, r89d). With a
+  # 10s cadence the slope is exactly 10 tokens / 10s = 1 token/s.
+  - interval: 10s
     input_series:
       - series: 'vllm:generation_tokens_total{engine="vllm"}'
-        values: '0 50 100'
+        values: '0 10 20 30 40 50 60 70 80 90'
     promql_expr_test:
       - expr: kvp:vllm_generation_tokens_per_second
         eval_time: 60s
         exp_samples:
-          - labels: '{}'
-            value: 1.6666666666666667
+          - labels: '{__name__="kvp:vllm_generation_tokens_per_second"}'
+            value: 1
 """
 
 GPU_TEST = """\
@@ -95,27 +102,27 @@ tests:
       - expr: kvp:gpu_power_watts
         eval_time: 15s
         exp_samples:
-          - labels: '{gpu="3"}'
+          - labels: '{__name__="kvp:gpu_power_watts", gpu="3"}'
             value: 120
       - expr: kvp:gpu_memory_used_bytes
         eval_time: 15s
         exp_samples:
-          - labels: '{gpu="3"}'
+          - labels: '{__name__="kvp:gpu_memory_used_bytes", gpu="3"}'
             value: 2147483648
       - expr: kvp:gpu_memory_total_bytes
         eval_time: 15s
         exp_samples:
-          - labels: '{gpu="3"}'
+          - labels: '{__name__="kvp:gpu_memory_total_bytes", gpu="3"}'
             value: 3221225472
       - expr: kvp:gpu_temperature_celsius
         eval_time: 15s
         exp_samples:
-          - labels: '{gpu="3"}'
+          - labels: '{__name__="kvp:gpu_temperature_celsius", gpu="3"}'
             value: 55
       - expr: kvp:gpu_util_percent
         eval_time: 15s
         exp_samples:
-          - labels: '{gpu="3"}'
+          - labels: '{__name__="kvp:gpu_util_percent", gpu="3"}'
             value: 88
 
   # smi branch (DCGM absent): ONLY the nvidia_gpu_exporter series exist; the
@@ -138,25 +145,45 @@ tests:
       - expr: kvp:gpu_power_watts
         eval_time: 15s
         exp_samples:
-          - labels: '{gpu="0"}'
+          - labels: '{__name__="kvp:gpu_power_watts", gpu="0"}'
             value: 10
-          - labels: '{gpu="1"}'
+          - labels: '{__name__="kvp:gpu_power_watts", gpu="1"}'
             value: 20
       - expr: kvp:gpu_util_percent
         eval_time: 15s
         exp_samples:
-          - labels: '{gpu="0"}'
+          - labels: '{__name__="kvp:gpu_util_percent", gpu="0"}'
             value: 50
 """
 
 
 @pytest.fixture(scope="module")
 def promtool():
+    """Return run_promtool(*args, cwd) -> CompletedProcess. Prefers a local
+    promtool binary, falls back to the pinned prom/prometheus docker image
+    (r89d review request -- before, these tests silently skipped wherever
+    promtool was missing, incl. the coder's host)."""
     pt = shutil.which("promtool")
-    if not pt:
-        pytest.skip("SKIP: promtool not installed -- rule arithmetic verified "
-                    "on the operator stand only (spec 10.2)")
-    return pt
+
+    if pt:
+        def _run(*args, cwd):
+            return subprocess.run([pt, *args], capture_output=True,
+                                  text=True, timeout=120, cwd=str(cwd))
+        return _run
+
+    # docker fallback: map the working dir to /work inside the container
+    if shutil.which("docker") and subprocess.run(
+            ["docker", "info"], capture_output=True, timeout=10).returncode == 0:
+        def _run(*args, cwd):
+            mapped = [a.replace(str(cwd), "/work") for a in args]
+            return subprocess.run(
+                ["docker", "run", "--rm", "--entrypoint", "promtool",
+                 "-v", f"{cwd}:/work:ro", PROM_IMAGE, *mapped],
+                capture_output=True, text=True, timeout=180)
+        return _run
+
+    pytest.skip("SKIP: promtool not installed AND docker unavailable -- "
+                "rule arithmetic cannot run here (spec 10.2: never pretend-pass)")
 
 
 def _write(tmp_path, name, body):
@@ -168,22 +195,19 @@ def _write(tmp_path, name, body):
 def test_vllm_rules_arithmetic(promtool, tmp_path):
     shutil.copy(RULES / "vllm.yml", tmp_path / "vllm.yml")
     f = _write(tmp_path, "vllm_test.yml", VLLM_TEST)
-    r = subprocess.run([promtool, "test", "rules", str(f)],
-                       capture_output=True, text=True, timeout=120)
+    r = promtool("test", "rules", str(f), cwd=tmp_path)
     assert r.returncode == 0, f"vllm rule arithmetic failed:\n{r.stdout}\n{r.stderr}"
 
 
 def test_gpu_rules_arithmetic(promtool, tmp_path):
     shutil.copy(RULES / "gpu.yml", tmp_path / "gpu.yml")
     f = _write(tmp_path, "gpu_test.yml", GPU_TEST)
-    r = subprocess.run([promtool, "test", "rules", str(f)],
-                       capture_output=True, text=True, timeout=120)
+    r = promtool("test", "rules", str(f), cwd=tmp_path)
     assert r.returncode == 0, f"gpu rule arithmetic failed:\n{r.stdout}\n{r.stderr}"
 
 
 def test_gpu_rules_promql_syntax_only(promtool, tmp_path):
     """Cheap syntax smoke even when arithmetic expectations drift later:
     `promtool check rules` must accept the real file unmodified."""
-    r = subprocess.run([promtool, "check", "rules", str(RULES / "gpu.yml")],
-                       capture_output=True, text=True, timeout=60)
+    r = promtool("check", "rules", str(RULES / "gpu.yml"), cwd=tmp_path)
     assert r.returncode == 0, f"gpu.yml rejected by promtool:\n{r.stdout}\n{r.stderr}"
