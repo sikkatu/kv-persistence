@@ -27,6 +27,14 @@ fi
 _state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo unknown)"
 echo "stopping engine container $CONTAINER (state: $_state)"
 echo "the cache server is NOT touched — stop it separately with: bash scripts/stop-cache.sh"
+# r90 C1: if the container is NOT running ("exited"/"dead"/"restarting") it
+# did NOT stop under operator control -- collect crash evidence BEFORE the
+# rm -f below destroys it (round 90: by the time anyone looked the crashed
+# EngineCore container was recreated and every log was gone).
+if [ "$_state" != "running" ] && [ "$_state" != "unknown" ]; then
+  echo "container already stopped on its own (state: $_state) -- collecting crash evidence."
+  bash "$HERE/collect-crash-evidence.sh" "$CONTAINER" 2>&1 | sed 's/^/  /'
+fi
 # Round 80 review (reliability): a graceful docker stop (30s) lets in-flight
 # requests finish and the engine shut down cleanly before the container is
 # removed. rm -f alone killed active requests outright.

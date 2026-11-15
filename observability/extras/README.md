@@ -51,7 +51,7 @@ nginx                                            1.29.4-alpine           (fill i
 | `KVP_OBS_EXTRAS` | `1` | `0` = do not deploy ANY extras service or dashboard (base stack untouched) |
 | `KVP_OBS_GPU` | `auto` | `off` = never start a GPU exporter; `on` = force; `auto` = start if `nvidia-smi` + NVIDIA container runtime are detected |
 | `KVP_OBS_GPU_EXPORTER` | `dcgm` | `smi` = swap to the `nvidia_gpu_exporter` fallback (`gpu-smi` profile) |
-| `KVP_OBS_GPU_PROF` | `0` | `1` = enable DCGM PROFIling fields (SM active / DRAM active / PCIe RX-TX). Only under `gpu` (dcgm) exporter; switches to the dedicated `dcgm-exporter-prof` service (profile `gpu-prof`) which gets `cap_add: [SYS_ADMIN]` -- read `# Caps and profiling` below first. |
+| `KVP_OBS_GPU_PROF` | `1` | `1` = enable DCGM PROFIling fields (SM active / DRAM active / PCIe RX-TX) -- the DEFAULT since round 90 (the operator wants profiling on a normal start; `0` disables it). Only under `gpu` (dcgm) exporter; switches to the dedicated `dcgm-exporter-prof` service (profile `gpu-prof`) which gets `cap_add: [SYS_ADMIN]` -- read `# Caps and profiling` below first. |
 | `KVP_OBS_RELAY_PORT` | `30008` | relay listen port (bound to the bridge gateway address only, never 0.0.0.0) |
 
 Switching any `KVP_OBS_GPU*` value is safe on a re-run: `extras-up.sh`
@@ -88,11 +88,11 @@ in `rules.d/*.yml` is fixed and all 32 panels keep working.
 
 | panel | probable cause | how to verify |
 |---|---|---|
-| `Running` / `Waiting` / any vLLM row | engine not up yet (relay shows `up=0`), or engine port != `PORT` | `bash extras/check.sh --live` -- job `vllm`; engine log line `Starting vLLM server on http://...` |
+| `Running` / `Waiting` / any vLLM row | engine not up yet (relay shows `up=0`), engine port != `PORT`, OR the HOST FIREWALL blocks Prometheus->relay (the r90/round-90 ufw case: host curl replies 200 but `docker exec obs_prometheus wget ...` times out) | `bash extras/check.sh --live` -- job `vllm` + the r90 B1 firewall check; fix with `sudo ufw allow from <compose subnet> to 172.17.0.1 port <relay> proto tcp` (the exact command + real subnet is printed) |
 | `KV usage %` | engine under load but NO requests yet (ratio 0 = normal) | fire one request; panel must move |
 | entire GPU row | `KVP_OBS_GPU=off`, auto-detect found no NVIDIA runtime, or the exporter crashed | `KVP_OBS_GPU=on bash scripts/start-observability.sh`; `docker compose logs dcgm-exporter` |
 | GPU row numeric values all zero / wrong | DCGM does not expose the requested fields on this GPU/driver; rules have `or`-fallbacks so a missing name silently falls through | `bash extras/check.sh --live` -- metric-drift WARN lists disappeared/renamed series |
-| "SM active / DRAM active / PCIe" (profile row) | `KVP_OBS_GPU_PROF=0` (default) -- profiling counters are OFF | set `KVP_OBS_GPU_PROF=1` (see Caps below) |
+| "SM active / DRAM active / PCIe" (profile row) | `KVP_OBS_GPU_PROF=0` (profiling OFF) -- the fuzzy fallback to the plain exporter (auto, A4) may also land here | set `KVP_OBS_GPU_PROF=1` and check the A4 AUTO-FALLBACK line in the log (see Caps below) |
 | wrong units / "2.4 kHz" on clocks | NEVER -- clocks are already in Hz via `kvp:gpu_sm_clock_hertz` (fixed in r88 M3) | see json check in `check.sh --static` |
 
 ## Caps and profiling (`KVP_OBS_GPU_PROF=1`)

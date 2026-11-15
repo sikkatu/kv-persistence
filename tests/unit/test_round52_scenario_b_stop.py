@@ -54,7 +54,7 @@ def test_already_stopped_container_is_not_a_failure():
 def test_scenario_b_keeps_correct_order():
     t = _read()
     b = t[t.index("== SCENARIO B"):]
-    stop_engine = b.index('docker stop "$CONTAINER"')
+    stop_engine = b.index('docker stop -t 120 "$CONTAINER"')
     stop_cache = b.index("stop-cache.sh")
     start_cache = b.index("start-cache.sh")
     assert stop_engine < stop_cache < start_cache, (

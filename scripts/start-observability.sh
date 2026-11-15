@@ -103,5 +103,21 @@ if [ "${KVP_OBS_EXTRAS:-1}" != "0" ]; then
   # not apply).
   mkdir -p "$ROOT/live" 2>/dev/null || true
   printf '1\n' > "$ROOT/live/extras_started" 2>/dev/null || true
+  # r90 B1: verify the SCRAPE path Prometheus will use, from INSIDE the
+  # container (host curl proves nothing: round 90 host->relay = 200 / 0.03s
+  # while container->relay timed out under ufw). A blocked leg here is a
+  # HOST FIREWALL problem -- print the exact ufw command with the REAL
+  # compose subnet. Never modify the firewall from here.
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_prometheus; then
+    _RELAY_PORT="${KVP_OBS_RELAY_PORT:-30008}"
+    _GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo 172.17.0.1)"
+    if ! docker exec obs_prometheus wget -q -T 4 -O /dev/null "http://$_GW:$_RELAY_PORT/metrics" >/dev/null 2>&1 \
+       && ! docker exec obs_prometheus curl -fsS --max-time 4 -o /dev/null "http://$_GW:$_RELAY_PORT/metrics" >/dev/null 2>&1; then
+      _SUBNET="$(docker network inspect observability_default --format '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null || echo '172.16.0.0/12')"
+      echo "WARNING: the HOST FIREWALL blocks compose-subnet traffic to the relay ($_GW:$_RELAY_PORT); Prometheus cannot scrape vllm:* dashboards will stay empty for the vllm row. Fix:" >&2
+      echo "  sudo ufw allow from ${_SUBNET} to $_GW port $_RELAY_PORT proto tcp" >&2
+      echo "  (wider alternative: sudo ufw allow from 172.16.0.0/12 to $_GW port $_RELAY_PORT proto tcp) -- the exact rule shape you already used on this host." >&2
+    fi
+  fi
 fi
 # --- extras hook: END ---

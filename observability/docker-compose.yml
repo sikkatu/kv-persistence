@@ -86,6 +86,21 @@ services:
       - tempo
     restart: unless-stopped
 
+# r90 B2: the compose network (observability_default) used to be recreated
+# with a RANDOM docker subnet on every stop-all/start-all -- a firewall rule
+# "allow from <subnet> to <gateway>:<relay-port>" broke on the next run.
+# Pin the subnet: KVP_OBS_SUBNET (default: the rare 172.30.200.0/24). If it
+# collides with a pre-existing network, change the prefix (check with
+# `docker network ls; docker network inspect <name> --format
+# '{{(index .IPAM.Config 0).Subnet}}'`) and export KVP_OBS_SUBNET -- the
+# relay firewall hint in start-observability.sh / check.sh reads the REAL
+# subnet either way, so the suggested rule is always the correct one.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${KVP_OBS_SUBNET:-172.30.200.0/24}
+
 volumes:
   tempo_data:
   prometheus_data:

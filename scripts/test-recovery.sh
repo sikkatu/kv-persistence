@@ -390,9 +390,40 @@ if [ "$_b_state" = "missing" ]; then
 elif [ "$_b_state" = "exited" ] || [ "$_b_state" = "created" ]; then
   echo "  [info] engine container already stopped ($_b_state) -- skipping stop"
 else
-  if ! _b_stop_out="$(docker stop "$CONTAINER" 2>&1)"; then
-    echo "  docker stop output: $_b_stop_out" >&2
-    PA B "docker stop (B) failed -- see the docker output above"
+  # r90 D1: docker stop is now RETRIED and daemon-robust. The reviewed real
+  # run hit "tried to kill container, but did not receive an exit event" (a
+  # docker daemon failure, NOT a cache failure) and the old code reported
+  # FAIL(B) -- unfair and misleading. New behaviour: stop with -t 120 (the
+  # engine is mid-request), then wait up to 5 min for the states Exited/Dead;
+  # if the container never stops, the run ends INCONCLUSIVE (exit 5, like
+  # every other "cannot prove it either way" outcome) -- never FAIL.
+  _b_stopped=0
+  for _try in 1 2 3; do
+    if _b_stop_out="$(docker stop -t 120 "$CONTAINER" 2>&1)"; then
+      _b_stopped=1
+      break
+    fi
+    echo "  docker stop attempt $_try/3 output: $_b_stop_out" >&2
+    _b_cur="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)"
+    case "$_b_cur" in
+      exited|dead|missing) _b_stopped=1; break ;;
+    esac
+    sleep 10
+  done
+  if [ "$_b_stopped" = "0" ]; then
+    echo "  waiting up to 5 min for the container to reach exited..."
+    for _w in $(seq 1 30); do
+      _b_cur="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)"
+      case "$_b_cur" in
+        exited|dead|missing) _b_stopped=1; break ;;
+      esac
+      sleep 10
+    done
+  fi
+  if [ "$_b_stopped" = "0" ]; then
+    inconc "B: container $CONTAINER did NOT stop within 5 min (docker daemon failure -- the reviewed 'did not receive an exit event' case). This is NOT a cache failure: rerun when docker ps shows the container gone. If it repeats: dmesg | tail -30 and nvidia-smi."
+    echo "VERDICT: INCONCLUSIVE ($VI inconclusive finding(s), 0 hard failures) -- the CONTAINER STOP stage could not complete (docker daemon), so the cache verdict cannot be made at all. Wait until docker ps is clean and rerun."
+    exit 5
   fi
 fi
 bash "$HERE/stop-cache.sh" >/dev/null 2>&1 || PA B "stop-cache.sh failed"

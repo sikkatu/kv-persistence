@@ -228,6 +228,16 @@ case "$KVP_ENGINE" in
     # SAME host/port the cache service listens on (the single codec decision
     # above is already exported as LMCACHE_L2_SERDE).
     export KV_PERSIST=1
+    # r90 C1: if a previous engine container exists and is NOT running (crash
+    # leftover -- the round-90 EngineCore assert kill), snapshot its logs +
+    # state BEFORE this launch recreates it. Never blocks the launch.
+    if [ -n "${KVP_ENGINE_CONTAINER:-}" ] && command -v docker >/dev/null 2>&1; then
+      _prev_state="$(docker inspect -f '{{.State.Status}}' "$KVP_ENGINE_CONTAINER" 2>/dev/null || echo none)"
+      if [ "$_prev_state" = "exited" ] || [ "$_prev_state" = "dead" ] || [ "$_prev_state" = "restarting" ]; then
+        echo "previous engine container $KVP_ENGINE_CONTAINER was $_prev_state -- collecting crash evidence before relaunch (r90 C1)"
+        bash "$HERE/collect-crash-evidence.sh" "$KVP_ENGINE_CONTAINER" 2>&1 | sed 's/^/  /'
+      fi
+    fi
     # Round 81 (review): wire the SHARED MODEL_DIR resolver into the delegated
     # path -- the wiki promises zero-config MODEL_DIR (explicit > live/model_dir
     # > identity pin > the single model dir under ~/models) but the new engine

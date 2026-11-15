@@ -41,7 +41,7 @@ compose 网络访问 exporter，中继通过宿主机 loopback 访问引擎。
 | `KVP_OBS_EXTRAS` | `1` | `0` = 不部署任何 extras 服务或仪表盘（基础栈不变） |
 | `KVP_OBS_GPU` | `auto` | `off` = 从不启动 GPU exporter；`on` = 强制；`auto` = 检测到 nvidia-smi + NVIDIA container runtime 时启动 |
 | `KVP_OBS_GPU_EXPORTER` | `dcgm` | `smi` = 切换到 nvidia_gpu_exporter（gpu-smi profile） |
-| `KVP_OBS_GPU_PROF` | `0` | `1` = 启用 DCGM 性能剖析字段（SM active / DRAM active / PCIe RX-TX）。仅限 dcgm 导出器；切换到专用的 `dcgm-exporter-prof` 服务（profile `gpu-prof`），该服务添加 `cap_add: [SYS_ADMIN]`——请先阅读 `# 权限与性能剖析` 一节 |
+| `KVP_OBS_GPU_PROF` | `1` | `1` = 启用 DCGM 性能剖析字段（SM active / DRAM active / PCIe RX-TX）——第 90 轮起为默认（`0` 关闭）。仅限 dcgm 导出器；切换到专用的 `dcgm-exporter-prof` 服务（profile `gpu-prof`），该服务添加 `cap_add: [SYS_ADMIN]`——请先阅读 `# 权限与性能剖析` 一节 |
 | `KVP_OBS_RELAY_PORT` | `30008` | 中继监听端口（仅绑定 bridge 网关地址，绝不绑定 0.0.0.0） |
 
 切换任何 `KVP_OBS_GPU*` 变量后重新运行是安全的：`extras-up.sh` 会先停止并
@@ -75,10 +75,11 @@ Dashboards → kv-persistence。自上而下回答：
 | 面板 | 可能原因 | 如何验证 |
 |---|---|---|
 | Running / Waiting / vLLM 行 | 引擎未启动（relay 显示 `up=0`）或端口 != `PORT` | `bash extras/check.sh --live`，job vllm；引擎日志 `Starting vLLM server...` |
+| 全部 `vllm_*` 为空，`vllm` 目标 down/timeout | 主机防火墙阻断 compose 网络到 relay 的流量（宿主机 curl 通，容器内超时） | `bash extras/check.sh --live`；处ʵ命令：`sudo ufw allow from <子网> to <网关> port <端口> proto tcp`（脚本会打印带真实子网的命令） |
 | KV usage % | 尚无请求（0 是正常的） | 发一个请求，面板应有变化 |
 | 整个 GPU 行 | `KVP_OBS_GPU=off`，auto 未检测到 NVIDIA runtime，或 exporter 崩溃 | `KVP_OBS_GPU=on bash scripts/start-observability.sh`；`docker compose logs` |
 | GPU 数值全为零 / 不正确 | DCGM 在该 GPU/驱动上未暴露请求的字段；规则中 or-回退静默跳过 | `check.sh --live`，WARN「metrics DISAPPEARED/NEW」列出漂移 |
-| SM active / DRAM active / PCIe | `KVP_OBS_GPU_PROF=0`（默认） | 设置 `KVP_OBS_GPU_PROF=1` |
+| SM active / DRAM active / PCIe | `KVP_OBS_GPU_PROF=0`   剖析关闭 — A4 auto-fallback | set `KVP_OBS_GPU_PROF=1` and check AUTO-FALLBACK in the log |
 | 时钟显示 kHz | 永远不会——时钟已是 Hz（`kvp:gpu_sm_clock_hertz`，r88 M3 修复） | 见 check.sh --static |
 | per-stream tok/s 为 NaN | 零流量时正常（无令牌间隔） | 发一个请求 |
 

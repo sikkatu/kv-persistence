@@ -73,6 +73,25 @@ def _doc_vars() -> set[str]:
     return found
 
 
+def test_gpu_prof_default_is_one_everywhere():
+    """r90 A3: the operator wants profiling ON by default -- the code and ALL
+    doc locales must agree on default `1` (a `0` in either is a silent
+    turn-off / silent docs drift).
+    MUTATION caught: flipping the default back to 0 in code OR docs."""
+    code = " ".join(f.read_text() for f in CODE_FILES)
+    m = re.search(r"KVP_OBS_GPU_PROF:-([01])", code)
+    assert m, "extras-up.sh must default KVP_OBS_GPU_PROF with ${KVP_OBS_GPU_PROF:-...}"
+    assert m.group(1) == "1", f"KVP_OBS_GPU_PROF default must be 1, code says {m.group(1)}"
+    wiki = _wiki_dir()
+    if wiki is None:
+        pytest.skip("SKIP: wiki checkout not found -- doc side checked on the operator stand only")
+    for fn in ("Configuration.md", "Configuration.ru.md", "Configuration.zh.md"):
+        t = (wiki / fn).read_text()
+        m2 = re.search(r"`KVP_OBS_GPU_PROF` \| `([01])`", t)
+        assert m2, f"{fn}: KVP_OBS_GPU_PROF default column missing"
+        assert m2.group(1) == "1", f"{fn}: default must be 1, got {m2.group(1)}"
+
+
 def test_env_vars_and_wiki_stay_in_sync():
     """Code-side and docs-side KVP_OBS_* sets must match EXACTLY (spec 11.3).
     MUTATION caught: adding KVP_OBS_NEW=... to extras-up.sh without a

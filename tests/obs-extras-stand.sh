@@ -48,20 +48,33 @@ printf '#!/bin/bash\nexit 0\n' > "$S/repo/scripts/stop-engine.sh"
 cp "$S/repo/scripts/stop-engine.sh" "$S/repo/scripts/stop-cache.sh"
 cp "$REPO_SRC/observability/extras/relay/nginx.conf.template" "$S/repo/observability/extras/relay/" 2>/dev/null || true
 cp "$REPO_SRC/observability/extras/gpu/dcgm-counters.prof.csv" "$S/repo/observability/extras/gpu/" 2>/dev/null || true
+cp "$REPO_SRC/observability/extras/gpu/dcgm-counters.csv" "$S/repo/observability/extras/gpu/" 2>/dev/null || true
 cp "$REPO_SRC/observability/docker-compose.override.yml" "$S/repo/observability/" 2>/dev/null || true
 cp "$REPO_SRC/observability/docker-compose.yml" "$S/repo/observability/" 2>/dev/null || true
 
 cat > "$S/bin/docker" <<'EOF'
 #!/bin/bash
-# stub docker: answers from env (GRAFANA_UP/PROM_UP/WD/COMPOSE_RC) and logs.
+# stub docker: answers from env (GRAFANA_UP/PROM_UP/WD/COMPOSE_RC/PROF_STATE/
+# PROF_METRICS) and logs.
 echo "docker $*" >> "$LOG"
 case "$1" in
   ps)      [ "${GRAFANA_UP:-1}" = 1 ] && echo obs_grafana
            [ "${PROM_UP:-1}" = 1 ] && echo obs_prometheus
            [ "${RELAY_UP:-0}" = 1 ] && echo obs_vllm_relay
            [ "${DCGM_UP:-0}" = 1 ] && echo obs_dcgm_exporter
+           [ "${DCGM_PROF_UP:-0}" = 1 ] && echo obs_dcgm_exporter_prof
            exit 0 ;;
-  inspect) echo "${WD:-}"; exit 0 ;;
+  inspect)
+           # r90 A4: the `-f '{{.State.Status}}'` probe of the prof container
+           if [ "$2" = "-f" ] && echo "$3" | grep -q "\.State\.Status"; then
+             echo "${PROF_STATE:-running}"
+             exit 0
+           fi
+           echo "${WD:-}"; exit 0 ;;
+  exec)
+           # r90 A4: `docker exec <c> wget/curl .../metrics` probe from INSIDE
+           if [ "${PROF_METRICS:-ok}" = "ok" ]; then exit 0; else exit 1; fi ;;
+  logs)    echo "stub dcgm-prof log line 1: wrong number of fields"; exit 0 ;;
   info)    [ "${NVIDIA_RT:-1}" = 1 ] && echo "Runtimes: nvidia" || echo "Runtimes: runc"; exit 0 ;;
   network) echo "172.17.0.1"; exit 0 ;;
   kill)    exit 0 ;;
@@ -75,6 +88,9 @@ esac
 exit 0
 EOF
 chmod +x "$S/bin/docker"
+# r90 A4: the 60s health poll must not really sleep on the stand
+printf '#!/bin/bash\nexit 0\n' > "$S/bin/sleep"
+chmod +x "$S/bin/sleep"
 chmod +x "$S/repo/scripts/"*.sh
 rm -f "$S/repo/tests" 2>/dev/null || true
 mkdir -p "$S/repo/tests"
@@ -319,6 +335,46 @@ if grep -q "rm -sf" "$S/log" && grep -q "dcgm-exporter " "$S/log" && grep -q "nv
   pass "X11 gpu-prof switch: inactive exporters rm -sf'ed first" rm
 else
   fail "X11 gpu mode switch cleanup" rm "no rm -sf of inactive GPU services"
+fi
+
+# ---- X12 A4: prof exporter fails -> AUTO-FALLBACK to base dcgm-exporter ----
+# r90 A4: if the profiling container is NOT healthy (no internal /metrics 200
+# within 60s) extras-up.sh MUST fall back to the plain dcgm-exporter so the
+# GPU row keeps data: log the reason, log the failed container output, remove
+# it, rewrite targets/gpu.json to dcgm-exporter:9400.
+# MUTATION caught: dropping the A4 fallback block (GPU row silently goes
+# empty while obs_dcgm_exporter_prof crash-loops).
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" NVIDIA_RT=1 KVP_OBS_GPU=on \
+    KVP_OBS_GPU_PROF=1 PROF_STATE=restarting PROF_METRICS=fail \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+if grep -q "A4 AUTO-FALLBACK" "$S/out" \
+   && grep -qF "dcgm-exporter:9400" "$S/repo/observability/extras/targets/gpu.json" \
+   && grep -q "dcgm-prof log" "$S/out"; then
+  pass "X12 prof exporter fails -> AUTO-FALLBACK to base dcgm-exporter" fallback
+else
+  fail "X12 prof exporter fails -> AUTO-FALLBACK" fallback \
+       "target=$(cat "$S/repo/observability/extras/targets/gpu.json" 2>/dev/null | tr -d '\n')"
+fi
+
+# ---- X13 B3: container cannot reach relay -> firewall hint with subnet -----
+# r90 B1/B3: the relay answers for the host, but obs_prometheus cannot reach
+# it from inside the compose network (the ufw problem). The B1 block must
+# print the EXACT ufw command with the compose subnet.
+# MUTATION caught: dropping the container-side probe (or the hint).
+: > "$S/log"
+PRE="$(sed -n '/r90 B1: verify the SCRAPE path/,/^  fi$/p' "$REPO_SRC/scripts/start-observability.sh")"
+if [ -z "$PRE" ]; then
+  fail "X13 B1 block missing in start-observability.sh" hint firewall
+else
+  # PROF_METRICS=fail drives the docker exec stub to fail -> container leg timeout
+  ( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" PROM_UP=1 RELAY_UP=1 PROF_METRICS=fail \
+      bash -c "$PRE" > "$S/out" 2>&1 )
+  if grep -qi "ufw allow" "$S/out" && grep -qE "172\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+" "$S/out"; then
+    pass "X13 container cannot reach relay -> firewall hint (real subnet)" firewall
+  else
+    fail "X13 firewall hint missing/without subnet" firewall "$(tail -1 "$S/out" 2>/dev/null)"
+  fi
 fi
 
 echo

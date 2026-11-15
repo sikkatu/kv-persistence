@@ -43,7 +43,7 @@ compose-сеть, релей — к движку через loopback хоста.
 | `KVP_OBS_EXTRAS` | `1` | `0` = не разворачивать ничего из extras (базовый стек не трогается) |
 | `KVP_OBS_GPU` | `auto` | `off` = GPU-экспортёр никогда; `on` = принудительно; `auto` = если есть nvidia-smi + NVIDIA container runtime |
 | `KVP_OBS_GPU_EXPORTER` | `dcgm` | `smi` = экспортёр nvidia_gpu_exporter (профиль gpu-smi) |
-| `KVP_OBS_GPU_PROF` | `0` | `1` = профилирующие поля DCGM (SM/DRAM active, PCIe RX-TX). Только при dcgm-экспортёре: переключает на отдельный сервис `dcgm-exporter-prof` (профиль `gpu-prof`) с `cap_add: [SYS_ADMIN]` -- читайте раздел `# Ограничения и профилирование` |
+| `KVP_OBS_GPU_PROF` | `1` | `1` = профилирующие поля DCGM (SM/DRAM active, PCIe RX-TX) -- по умолчанию с раунда 90 (`0` отключает). Только при dcgm-экспортёре: переключает на отдельный сервис `dcgm-exporter-prof` (профиль `gpu-prof`) с `cap_add: [SYS_ADMIN]` -- читайте раздел `# Ограничения и профилирование` |
 | `KVP_OBS_RELAY_PORT` | `30008` | порт релея (только адрес шлюза bridge, никогда 0.0.0.0) |
 
 Смена любой переменной `KVP_OBS_GPU*` безопасна при повторном запуске:
@@ -80,10 +80,11 @@ Extras монтирует **новые тома в `obs_prometheus` и `obs_graf
 | панель | вероятная причина | как проверить |
 |---|---|---|
 | Running / Waiting / весь ряд vLLM | движок не запущен (relay `up=0`) или порт != `PORT` | `bash extras/check.sh --live`, job vllm; лог движка `Starting vLLM server...` |
+| все `vllm_*` пусты, цель `vllm` down с таймаутом | файрвол хоста режет трафик из сети compose к relay (curl с хоста отвечает, из контейнера -- таймаут) | `bash extras/check.sh --live`; готовая команда: `sudo ufw allow from <подсеть> to <шлюз> port <порт> proto tcp` (скрипт печатает её с реальной подсетью) |
 | KV usage % | запросов ещё нет (0 — норма) | отправить запрос, панель должна сдвинуться |
 | весь ряд GPU | `KVP_OBS_GPU=off`, auto не нашёл NVIDIA runtime, экспортёр упал | `KVP_OBS_GPU=on bash scripts/start-observability.sh`; `docker compose logs` |
 | значения GPU нулевые/неверные | DCGM не отдаёт поля на этом GPU/драйвере; в правилах or-фолбэки молча пропускают | `check.sh --live`, WARN «metrics DISAPPEARED/NEW» |
-| SM active / DRAM active / PCIe | `KVP_OBS_GPU_PROF=0` (по умолчанию) | задать `KVP_OBS_GPU_PROF=1` |
+| SM active / DRAM active / PCIe | `KVP_OBS_GPU_PROF=0` (профилирование выключено) -- сюда же попадает автооткат A4 на обычный экспортёр | задать `KVP_OBS_GPU_PROF=1` и проверить строку AUTO-FALLBACK в логе (см. раздел про ограничения) |
 | unidades часов «kHz» | НИКОГДА; частоты уже в Hz (`kvp:gpu_sm_clock_hertz`, исправлено r88 M3) | см. check.sh --static |
 | NaN на per-stream tok/s | нормально при нулевом трафике (нет межтокенных интервалов) | пошлать запрос |
 

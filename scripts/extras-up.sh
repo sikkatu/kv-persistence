@@ -84,15 +84,20 @@ esac
 if [ -n "$GPU_PROF" ] && [ "${KVP_OBS_GPU_EXPORTER:-dcgm}" = "smi" ]; then
   GPU_PROF="gpu-smi"
 fi
-# Opt-in profiling counters (H2.4): KVP_OBS_GPU_PROF=1 ACTUALLY switches to
-# the dedicated dcgm-exporter-prof service (profile `gpu-prof`: profiling
-# CSV + cap_add SYS_ADMIN -- see docker-compose.override.yml). The base
-# `gpu` profile keeps NO extra capabilities. No env file is involved: the
-# profile choice is made here and passed to compose via COMPOSE_PROFILES.
-if [ "$GPU_PROF" = "gpu" ] && [ "${KVP_OBS_GPU_PROF:-0}" = "1" ]; then
+# Profiling counters (round 90 A1/A3): KVP_OBS_GPU_PROF=1 (DEFAULT now) uses
+# the dedicated dcgm-exporter-prof service (profile `gpu-prof`, cap_add
+# SYS_ADMIN). The mounted CSV is GENERATED here: every row of
+# dcgm-counters.csv PLUS the DCGM_FI_PROF_* tail of dcgm-counters.prof.csv --
+# `-f` REPLACES the exporter's counter set, so a prof-only file would drop
+# the base fields (power / temp / memory / util / clocks) and the whole GPU
+# row went to zero in round 90. KVP_OBS_GPU_PROF=0 selects the plain
+# dcgm-exporter (no extra caps).
+if [ "$GPU_PROF" = "gpu" ] && [ "${KVP_OBS_GPU_PROF:-1}" = "1" ]; then
   GPU_PROF="gpu-prof"
-  cp "$EXTRAS/gpu/dcgm-counters.prof.csv" "$EXTRAS/gpu/dcgm-counters.live.csv" 2>/dev/null \
-    || warn "cannot install the profiling counters csv -- the prof exporter will fail its mount, check.sh reports FAIL"
+  { grep -hv '^[[:space:]]*#' "$EXTRAS/gpu/dcgm-counters.csv" | grep -v '^[[:space:]]*$'
+    grep -hv '^[[:space:]]*#' "$EXTRAS/gpu/dcgm-counters.prof.csv" | grep -v '^[[:space:]]*$'
+  } > "$EXTRAS/gpu/dcgm-counters.live.csv" 2>/dev/null \
+    || warn "cannot generate the profiling counters csv -- the prof exporter will fail its mount, check.sh reports FAIL"
 fi
 
 # file_sd target for the GPU exporter (inside the compose network).
@@ -144,6 +149,44 @@ fi
 echo "[extras] docker compose up -d (COMPOSE_PROFILES=$PROFILES) -- idempotent. NOTE (r88 M2): the FIRST run after adding extras recreates obs_prometheus/obs_grafana once (new volume mounts); their DATA volumes are preserved."
 if ! ( cd "$OBS_DIR" && COMPOSE_PROFILES="$PROFILES" docker compose up -d 2>&1 ); then
   warn "extras compose step failed -- base stack is intact, extras partially missing (see above)"
+fi
+# --------------------- 5b. A4: prof exporter health + auto-fallback -------
+# The profiling container is capability-gated (SYS_ADMIN) and CUPTI-gated: on
+# a driver/build that denies profiling it crash-loops (round 90: obs_dcgm_exporter_prof
+# in `Restarting (1)` with "wrong number of fields" -> EMPTY GPU row). NEVER
+# let the GPU row die because of profiling: if the prof exporter is not Up
+# and does not answer /metrics with 200 within 60s (probe INSIDE the
+# container -- docker exec, not from the host), the base dcgm-exporter is
+# brought up instead, targets/gpu.json is rewritten, and the reason +
+# `docker logs --tail 20` of the failed container are printed BEFORE it is
+# removed. Exit 0 whatever happens: base panels never stay empty.
+_probe_metrics_inside() {
+  # $1 = container, $2 = GET url -- probe from INSIDE (A4: docker exec).
+  docker exec "$1" wget -q -T 5 -O /dev/null "$2" >/dev/null 2>&1 && return 0
+  docker exec "$1" curl -fsS --max-time 5 -o /dev/null "$2" >/dev/null 2>&1
+}
+if [ "$GPU_PROF" = "gpu-prof" ]; then
+  _PROF_OK=0
+  for _try in $(seq 1 12); do   # 12 x 5s = 60s budget (A4)
+    if [ "$(docker inspect -f '{{.State.Status}}' obs_dcgm_exporter_prof 2>/dev/null)" = "running" ] \
+       && _probe_metrics_inside obs_dcgm_exporter_prof "http://127.0.0.1:9400/metrics"; then
+      _PROF_OK=1
+      break
+    fi
+    sleep 5
+  done
+  if [ "$_PROF_OK" = "0" ]; then
+    echo "[extras] A4 AUTO-FALLBACK: obs_dcgm_exporter_prof not healthy (no 200 on internal /metrics within 60s) -- falling back to the base dcgm-exporter so the GPU row keeps data."
+    docker logs --tail 20 obs_dcgm_exporter_prof 2>&1 | sed 's/^/    [dcgm-prof log] /' || true
+    ( cd "$OBS_DIR" && docker compose --profile '*' rm -sf dcgm-exporter-prof >/dev/null 2>&1 ) || true
+    GPU_PROF="gpu"
+    PROFILES="extras,gpu"
+    printf '[{"targets": ["dcgm-exporter:9400"]}]\n' > "$EXTRAS/targets/gpu.json" 2>/dev/null \
+      || warn "cannot rewrite extras/targets/gpu.json after fallback"
+    ( cd "$OBS_DIR" && COMPOSE_PROFILES="extras,gpu" docker compose up -d >/dev/null 2>&1 ) \
+      || warn "fallback dcgm-exporter failed to start -- GPU row missing (see above)"
+    echo "[extras] GPU target after fallback: dcgm-exporter:9400 (profiling OFF -- set KVP_OBS_GPU_PROF=0 to silence, or check the log above)"
+  fi
 fi
 
 # ------------------------- 6. prometheus reload ---------------------------

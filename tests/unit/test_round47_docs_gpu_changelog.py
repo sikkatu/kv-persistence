@@ -24,7 +24,7 @@ def _read(name: str) -> str:
 def test_recovery_gpu_check_runs_after_stop():
     t = _read("test-recovery.sh")
     b = t[t.index("== SCENARIO B"):]
-    stop_engine = b.index('docker stop "$CONTAINER"')
+    stop_engine = b.index('docker stop -t 120 "$CONTAINER"')
     stop_cache = b.index("stop-cache.sh")
     gpu_check = b.index("_kvp_gpu_preflight 2048")
     start_cache = b.index("start-cache.sh")

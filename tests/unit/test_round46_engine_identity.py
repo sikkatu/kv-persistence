@@ -75,7 +75,7 @@ def test_verify_precedence_uses_engine_identity_file():
 def test_scenario_b_stops_engine_first():
     t = _read("test-recovery.sh")
     b = t[t.index('== SCENARIO B'):]
-    stop_e = b.index('docker stop "$CONTAINER"')
+    stop_e = b.index('docker stop -t 120 "$CONTAINER"')
     stop_c = b.index('stop-cache.sh')
     start_c = b.index('start-cache.sh')
     start_e = b.index('docker start "$CONTAINER"')

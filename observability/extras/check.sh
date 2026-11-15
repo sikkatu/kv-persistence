@@ -329,6 +329,17 @@ else
   _fail "prometheus not reachable on :9091"
 fi
 
+# r90 A5: container HEALTH -- any obs_* container in `Restarting`/`Exited`
+# is a FAIL (round 90 showed a crash-looping obs_dcgm_exporter_prof while
+# everything else looked fine). Hint points at the exact docker logs line.
+for _st in $(docker ps -a --filter name=obs_ --format '{{.Names}}:{{.State}}' 2>/dev/null); do
+  _cname="${_st%%:*}"; _cstate="${_st##*:}"
+  case "$_cstate" in
+    running) : ;;   # norm
+    *) _fail "container $_cname is $_cstate -- investigate: docker logs --tail 30 $_cname" ;;
+  esac
+done
+
 # Targets health: jobs vllm + gpu
 run_py - <<'PY'
 import json, sys
@@ -362,6 +373,22 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_vllm_relay; then
     code=$(curl -s -o /dev/null -w '%{http_code}' -X "$2" "http://$GW:$RELAY_PORT$1" 2>/dev/null || echo "000")
     if [ "$code" = "$3" ]; then _ok "relay $2 $1 -> $code"; else _fail "relay $2 $1 -> $code (expected $3)"; fi
   done
+  # r90 B1: probe the SAME path Prometheus scrapes -- from INSIDE the
+  # obs_prometheus container (a host curl proves nothing: round 90 had
+  # host->relay 200 in 0.03s while container->relay timed out because ufw
+  # dropped compose-subnet traffic to the relay port). When only the
+  # container leg fails -> a HOST FIREWALL is the cause; print the exact
+  # command with the REAL subnet of the compose network (the script never
+  # touches the firewall itself).
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx obs_prometheus; then
+    _probe_inside=$(docker exec obs_prometheus wget -q -T 4 -O /dev/null "http://$GW:$RELAY_PORT/metrics" 2>/dev/null; echo $?)
+    if [ "$_probe_inside" = "0" ]; then
+      _ok "Prometheus->relay path reachable from INSIDE the compose network"
+    else
+      _SUBNET="$(docker network inspect observability_default --format '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null || echo '172.16.0.0/12')"
+      _fail "Prometheus (container) cannot reach the relay on $GW:$RELAY_PORT -- the HOST FIREWALL is blocking compose-subnet traffic (host curl above works). Allow it with: sudo ufw allow from ${_SUBNET} to $GW port $RELAY_PORT proto tcp   (or the wider: sudo ufw allow from 172.16.0.0/12 to $GW port $RELAY_PORT proto tcp)"
+    fi
+  fi
 else
   _warn "obs_vllm_relay not running -- relay probe skipped"
 fi

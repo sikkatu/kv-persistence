@@ -1,13 +1,17 @@
-# extras/gpu/dcgm-counters.prof.csv -- OPTIONAL PROFILING counters.
-# Same three-column FIELD,type,help schema as dcgm-counters.csv.
-# Opt-in ONLY (KVP_OBS_GPU_PROF=1): DCGM profiling fields touch CUPTI and
-# typically need SYS_ADMIN (elevated cap_add -- see extras/README.md).
-# Profiling also conflicts with Nsight / CUPTI-based tools (documented NVIDIA
-# constraint noted in extras/README.md -- do not run both).
-# These fields only show up on GPUs/driver combos that expose the GPM /
-# DCGM_FI_PROF_* interface -- absent series simply show "no data" on the
-# panel, never an error.
+# extras/gpu/dcgm-counters.prof.csv -- PROFILING counter TAIL (round 90 A1).
+# This file is NOT a standalone counter set: extras-up.sh APPENDS these rows
+# to every row of dcgm-counters.csv and writes the result to
+# dcgm-counters.live.csv (profile `gpu-prof`, KVP_OBS_GPU_PROF=1) -- `-f`
+# REPLACES the exporter's counter set, so a prof-only file would lose every
+# base DCGM_FI_DEV_* field (power / temp / memory / util / clocks).
+# Same three-column FIELD,type,help schema as dcgm-counters.csv. The help
+# field must NOT contain a comma (no quoting in this schema -- dcgm-exporter
+# splits rows into exactly 3 fields; a comma broke the load in round 90).
+# Profiling touches CUPTI and needs cap_add SYS_ADMIN (see extras/README.md);
+# it conflicts with Nsight / CUPTI-based tools. Fields only appear on
+# GPUs/driver combos exposing the DCGM_FI_PROF_* interface -- absent series
+# show "no data" on the panel, never an error.
 DCGM_FI_PROF_SM_ACTIVE,gauge,Ratio of time (in %) SMs are active.
 DCGM_FI_PROF_DRAM_ACTIVE,gauge,Ratio of time (in %) DRAM is active.
-DCGM_FI_PROF_PCIE_TX_BYTES,gauge,PCIe bytes transmitted per sample interval (raw counter, use rate()).
-DCGM_FI_PROF_PCIE_RX_BYTES,gauge,PCIe bytes received per sample interval (raw counter, use rate()).
+DCGM_FI_PROF_PCIE_TX_BYTES,gauge,PCIe bytes transmitted per sample interval (raw counter -- use rate()).
+DCGM_FI_PROF_PCIE_RX_BYTES,gauge,PCIe bytes received per sample interval (raw counter -- use rate()).
