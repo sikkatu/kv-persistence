@@ -134,8 +134,12 @@ for _svc in dcgm-exporter dcgm-exporter-prof nvidia-smi-exporter; do
 done
 if [ -n "$_gpu_inactive" ]; then
   # shellcheck disable=SC2086 -- intentional word splitting of the service list
-  ( cd "$OBS_DIR" && COMPOSE_PROFILES="*" docker compose rm -sf $_gpu_inactive >/dev/null 2>&1 ) \
-    || warn "could not stop inactive GPU exporter(s):$_gpu_inactive -- stop them manually (docker compose rm -sf <svc>)"
+  # r89c: use the SAME `--profile '*'` flag syntax as stop-all.sh (docs of
+  # Compose describe COMPOSE_PROFILES as a comma-separated NAME LIST -- the
+  # wildcard `*` is documented for the --profile FLAG, not for the env var;
+  # with the undocumented env form a failure was masked into the WARN below).
+  ( cd "$OBS_DIR" && docker compose --profile '*' rm -sf $_gpu_inactive >/dev/null 2>&1 ) \
+    || warn "could not stop inactive GPU exporter(s):$_gpu_inactive -- stop them manually (docker compose --profile '*' rm -sf <svc>)"
 fi
 echo "[extras] docker compose up -d (COMPOSE_PROFILES=$PROFILES) -- idempotent. NOTE (r88 M2): the FIRST run after adding extras recreates obs_prometheus/obs_grafana once (new volume mounts); their DATA volumes are preserved."
 if ! ( cd "$OBS_DIR" && COMPOSE_PROFILES="$PROFILES" docker compose up -d 2>&1 ); then

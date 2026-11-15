@@ -11,12 +11,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTRAS="$HERE"
 ROOT="$(cd "$HERE/../.." && pwd)"
 
-MODE=auto; JSON=0
+MODE=auto; JSON=0; DRIFT_FILE=""
 for a in "$@"; do
   case "$a" in
-    --static) MODE=static ;;
-    --live)   MODE=live ;;
-    --json)   JSON=1 ;;
+    --static)    MODE=static ;;
+    --live)      MODE=live ;;
+    --json)      JSON=1 ;;
+    --drift-live=*) DRIFT_FILE="${a#*=}" ;;
   esac
 done
 if [ "$MODE" = auto ]; then
@@ -47,6 +48,39 @@ run_py() {
     esac
   done <<< "$_out"
 }
+
+# ---- r89d: testable drift path (no docker) -----------------------------
+# `check.sh --drift-live=/path/to/live-names.txt` runs the SAME comparison
+# code as the live mode against a saved list of metric names (--one per line)
+# and exits. This exact import path (`from metric_drift import compare`) is
+# what the unit tests exercise through THIS script -- patching the import in
+# check.sh is caught here, not only by the direct unit tests of the module.
+if [ -n "$DRIFT_FILE" ]; then
+  [ -f "$DRIFT_FILE" ] || { echo "ERROR: $DRIFT_FILE not found" >&2; exit 1; }
+  run_py - "$EXTRAS/expected-metrics.txt" "$DRIFT_FILE" "$EXTRAS" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[3])
+from metric_drift import compare
+
+exp_text = open(sys.argv[1]).read()
+live_names = [ln.strip() for ln in open(sys.argv[2]) if ln.strip()]
+
+missing, unexpected = compare(exp_text, live_names)
+
+if not missing and not unexpected:
+    print("OK: no metric-name drift vs expected-metrics.txt")
+else:
+    for m in missing:
+        print(f"WARN: metric expected but NOT live any more (renamed/removed?): {m}")
+    for u in unexpected:
+        print(f"WARN: NEW live metric not in the fingerprint (needs rules/panel review): {u}")
+    print(f"OK: drift comparison finished ({len(missing)} missing, {len(unexpected)} new)")
+PY
+  for r in "${RESULTS[@]:-}"; do [ -n "$r" ] && echo "${r%%|*}  ${r#*|}"; done
+  if printf '%s\n' "${RESULTS[@]:-}" | grep -q '^FAIL'; then echo "check.sh: drift FAIL"; exit 1; fi
+  echo "check.sh: drift check done (from $DRIFT_FILE)"
+  exit 0
+fi
 
 # ======================== STATIC checks ==================================
 # 1) YAML syntax of scrape.d & rules.d
@@ -146,18 +180,47 @@ PY
 fi
 
 # 5) relay contract (TZ 8.4): GET /metrics proxied (200), anything else
+# r89c: the old regex `location = /metrics\s*\{[^}]*proxy_pass` was WRONG --
+# inside the location sits an `if (...) { return 405; }` block whose closing
+# } terminated the [^}]* match, so proxy_pass and return 404 "fell out" of
+# the block and a HEALTHY template reported FAIL (regression from ce9d4a0).
+# Parse the location blocks with a BRACE COUNTER instead of regex.
 run_py - "$EXTRAS/relay/nginx.conf.template" <<'PY'
 import pathlib, re, sys
 tpl = pathlib.Path(sys.argv[1]).read_text()
 code = "\n".join(l for l in tpl.splitlines() if not l.strip().startswith("#"))
 bad = []
-if "location = /metrics" not in code:
-    bad.append("relay template lacks `location = /metrics`")
-if not re.search(r"location = /metrics\s*\{[^}]*proxy_pass", code, re.S):
-    bad.append("/metrics must proxy_pass to the engine (200 path)")
-if not re.search(r"location = /metrics\s*\{[^}]*return 405", code, re.S):
-    bad.append("/metrics must return 405 for non-GET methods")
-if not re.search(r"location /\s*\{[^}]*return 404", code, re.S):
+
+def location_body(header_re):
+    """Return the body of the first `location ... { ... }` matching
+    header_re, counting NESTED braces (r89c: `if (...) { return 405; }` is a
+    nested block, a plain [^}]* regex breaks on its closing brace)."""
+    m = re.search(header_re, code, re.M)
+    if not m:
+        return None
+    i = code.index("{", m.end() - 1)
+    depth = 0
+    for j in range(i, len(code)):
+        if code[j] == "{":
+            depth += 1
+        elif code[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return code[i + 1:j]
+    return None
+
+body = location_body(r"^\s*location\s*=\s*/metrics\s*\{")
+if body is None:
+    bad.append("relay template lacks a `location = /metrics { ... }` block")
+else:
+    if "proxy_pass" not in body:
+        bad.append("/metrics must proxy_pass to the engine (200 path)")
+    if "return 405" not in body:
+        bad.append("/metrics must return 405 for non-GET methods")
+body_root = location_body(r"^\s*location\s+/\s*\{")
+if body_root is None:
+    bad.append("relay template lacks a `location / { ... }` catch-all block")
+elif "return 404" not in body_root:
     bad.append("any path other than /metrics must 404 (location / -> return 404)")
 for b in bad:
     print(f"FAIL: relay contract: {b}")

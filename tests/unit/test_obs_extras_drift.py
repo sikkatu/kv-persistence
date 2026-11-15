@@ -106,3 +106,98 @@ def test_genuine_drift_is_still_reported():
     missing, unexpected = compare(exp_text, live)
     assert missing == ("vllm:old_name_total",)
     assert unexpected == ("vllm:brand_new_total", "vllm:old_name_renamed_total")
+
+
+# ================ check.sh itself (r89d: regressions in the SCRIPT) ======
+CHECK = EXTRAS / "check.sh"
+
+
+def _run_check(args, checkout=None):
+    """Run check.sh --static. checkout: optional repo copy (for mutations) --
+    must execute THAT copy's check.sh (HERE/EXTRAS are derived from the
+    script path, so running the original script would inspect the wrong
+    template)."""
+    import subprocess
+    check = (checkout or EXTRAS.parents[1]) / "observability" / "extras" / "check.sh"
+    return subprocess.run(["bash", str(check), *args],
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_check_static_clean_on_real_repo():
+    """check.sh --static on a HEALTHY checkout must exit 0 (regression from
+    ce9d4a0: the relay-contract regex `[^}]*` broke on the nested
+    `if (...) { return 405; }` block and a healthy template reported FAIL).
+    MUTATION caught: reverting to the [^}]* regex version."""
+    r = _run_check(["--static"])
+    assert r.returncode == 0, f"static check must be clean:\n{r.stdout}{r.stderr}"
+    assert "relay contract" in r.stdout
+    assert "FAIL" not in r.stdout, f"no FAIL lines expected:\n{r.stdout}"
+
+
+def test_check_static_fails_on_broken_template(tmp_path):
+    """Template mutations must flip the static check to exit 1:
+    (a) drop the proxy_pass line in location = /metrics
+    (b) drop the `return 404` from the catch-all location /
+    MUTATION caught: a check that only greps fragments without understanding
+    the block structure, or ignores a missing directive."""
+    import shutil
+    repo = tmp_path / "repo"
+    # copy ONLY the tree check.sh inspects (observability/) -- the .git dir of
+    # the live checkout may contain unreadable object files and copytree dies
+    # on them; check.sh resolves EXTRAS/ROOT from its own path so this copy is
+    # a self-contained checkout for the static checks.
+    shutil.copytree(EXTRAS.parents[1] / "observability", repo / "observability")
+    tpl = repo / "observability" / "extras" / "relay" / "nginx.conf.template"
+    original = tpl.read_text()
+
+    # (a) remove proxy_pass
+    tpl.write_text(original.replace("proxy_pass", "# proxy_pass disabled"))
+    r = _run_check(["--static"], checkout=repo)
+    assert r.returncode == 1, (
+        f"removing proxy_pass must FAIL the static check, got rc={r.returncode}:\n{r.stdout}")
+    assert "proxy_pass" in r.stdout
+
+    # (b) remove return 404
+    tpl.write_text(original.replace("return 404;", "# return 404 removed;"))
+    r = _run_check(["--static"], checkout=repo)
+    assert r.returncode == 1, (
+        f"removing return 404 must FAIL the static check, got rc={r.returncode}:\n{r.stdout}")
+    assert "404" in r.stdout
+
+
+def _write_drift_live(tmp_path, names):
+    f = tmp_path / "live-metrics.txt"
+    f.write_text("\n".join(names) + "\n")
+    return f
+
+
+def test_check_drift_live_zero_on_prometheus_client_output(tmp_path):
+    """The drift path THROUGH check.sh must consume metric_drift.compare --
+    the same import the live mode uses -- and give zero drift on a realistic
+    prometheus_client scrape (fingerprints + _created/_bucket twins).
+    MUTATION caught: patching `from metric_drift import compare` inside
+    check.sh (its inline-code import is what live mode executes)."""
+    live = []
+    for ln in _fingerprint().splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        name = ln.split()[0]
+        live += [name, name + "_created"]
+        if "(hist)" in ln:
+            live += [name + s for s in ("_bucket", "_count", "_sum", "_created")]
+    f = _write_drift_live(tmp_path, live)
+    r = _run_check([f"--drift-live={f}"])
+    assert r.returncode == 0, f"drift check must be clean:\n{r.stdout}{r.stderr}"
+    assert "NOT live any more" not in r.stdout, "no false missing"
+    assert "NEW live metric" not in r.stdout, "no false NEW on _created twins"
+
+
+def test_check_drift_live_detects_real_drift(tmp_path):
+    """The script path must still REPORT real drift (WARN lines + rc 0, as
+    the drift comparison is informative)."""
+    f = _write_drift_live(tmp_path, ["vllm:gone_from_live_total", "vllm:brand_new_total"])
+    r = _run_check([f"--drift-live={f}"])
+    assert r.returncode == 0
+    assert "NEW live metric not in the fingerprint" in r.stdout
+    assert "NOT live any more" in r.stdout

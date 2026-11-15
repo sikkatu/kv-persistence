@@ -112,6 +112,26 @@ def test_dcgm_prof_needs_sys_admin_and_base_does_not():
     assert "./extras/gpu/dcgm-counters.live.csv:/etc/dcgm-exporter/default-counters.csv:ro" in prof, (
         "prof counters CSV must be mounted at the default-counters path")
 
+
+# ------------------------------------------------- inactive exporter cleanup
+def test_extras_up_stops_inactive_gpu_services_with_profile_flag():
+    """(r89c #3) extras-up.sh must stop the GPU exporters NOT selected this
+    run BEFORE `compose up -d`, using the documented `--profile '*'` FLAG
+    (same as stop-all.sh) -- the COMPOSE_PROFILES="*" env form is NOT
+    documented for the wildcard and a failure there was swallowed into a WARN.
+    MUTATION caught: switching to COMPOSE_PROFILES="*" ... or dropping the
+    whole cleanup (the old exporter keeps running next to the renamed one)."""
+    s = (KV / "scripts" / "extras-up.sh").read_text()
+    assert "docker compose --profile '*' rm -sf" in s, (
+        "inactive GPU exporters must be removed with `docker compose --profile '*' rm -sf`")
+    assert 'COMPOSE_PROFILES="*" docker compose rm' not in s, (
+        "the undocumented COMPOSE_PROFILES='*' env form must not be used for the wildcard")
+    # the cleanup must come BEFORE the real up call (old exporter dies first) --
+    # match the ACTION line (`COMPOSE_PROFILES="$PROFILES" docker compose up -d`),
+    # not the prose mention in the comment above.
+    assert s.index("--profile '*' rm -sf") < s.index('COMPOSE_PROFILES="$PROFILES" docker compose up -d'), (
+        "stop the inactive exporters BEFORE the compose up -d call")
+
 def test_nginx_relay_renders_and_strips_auth(tmp_path):
     """Build the rendered conf the way start-observability.sh does and run it
     against a fake upstream when a local `nginx` binary exists (SKIP else)."""

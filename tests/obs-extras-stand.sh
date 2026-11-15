@@ -23,6 +23,11 @@
 #     X9c stale marker + foreign stack -> the start-all extras block CONSUMES
 #         the marker anyway, so the NEXT run's deploy is never muted
 #     X9d marker + our stack -> extras skipped ONCE ("already deployed"), marker gone
+#     X9e manual-run marker BEFORE the start-all sequence (r89c #2): the
+#         early pre-clean block wipes it, the base stack is already up (so
+#         start-observability.sh never runs and cannot re-write the marker),
+#         and extras STILL deploy -- this is the "edit KVP_OBS_GPU_PROF, rerun
+#         start-all" scenario; the change must NOT be silently skipped.
 #  X10 targets/gpu.json content follows the selected exporter (r89 4):
 #     gpu -> dcgm-exporter:9400 | gpu-prof -> dcgm-exporter-prof:9400 |
 #     gpu-smi -> nvidia-smi-exporter:9835 | off -> []
@@ -233,6 +238,38 @@ if [ ! -f "$S/repo/live/extras_started" ] && ! grep -q "COMPOSE up" "$S/log" && 
   pass "X9d marker -> extras skipped once, marker consumed" skip
 else
   fail "X9d marker honored then consumed" skip consume
+fi
+
+# ---- X9e (r89c #2) manual marker + already-running base stack -----------
+# Sequence of a REAL start-all.sh run with the base stack already up and a
+# marker sitting in live/ from an EARLIER manual start-observability.sh:
+#   1. pre-clean block (before step 1/3) wipes the marker,
+#   2. _obs_all=1 -> start-observability.sh is NEVER called -> it cannot
+#      re-write the marker (this is exactly the gap the early wipe closes),
+#   3. the extras deploy block finds NO marker and MUST run extras-up.sh.
+# MUTATION caught: leaving the wipe in the extras block (after step 1/3) --
+# the old marker then survives into the deploy block and the "change
+# KVP_OBS_GPU_PROF, rerun start-all" scenario silently keeps the old wiring.
+: > "$S/log"
+mkdir -p "$S/repo/live"; echo 1 > "$S/repo/live/extras_started"
+PRECLEAN_BLOCK="$(sed -n '/-- extras marker pre-clean: BEGIN/,/-- extras marker pre-clean: END --/p' "$REPO_SRC/scripts/start-all.sh")"
+if [ -z "$PRECLEAN_BLOCK" ]; then
+  fail "X9e pre-clean block missing in start-all.sh" wipe deploy
+else
+  ( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" \
+      bash -c "$PRECLEAN_BLOCK" > "$S/out" 2>&1 )
+  # base stack already up -> start-observability.sh not called: nothing adds
+  # a marker between the wipe and the deploy block (assert the file is gone).
+  MARKER_GONE=0
+  [ ! -f "$S/repo/live/extras_started" ] && MARKER_GONE=1
+  ( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" HERE="$S/repo/scripts" ROOT="$S/repo" _obs_ours=1 \
+      bash -c "$EXTRAS_BLOCK" > "$S/out" 2>&1 )
+  if [ "$MARKER_GONE" = "1" ] && grep -q "COMPOSE up" "$S/log" \
+     && ! grep -qi "already deployed" "$S/out"; then
+    pass "X9e stale manual marker wiped early, extras DO run" wipe
+  else
+    fail "X9e stale marker must not mute this run's extras" wipe run
+  fi
 fi
 
 # ---- X10 targets/gpu.json follows the selected exporter (r89 4) -------------

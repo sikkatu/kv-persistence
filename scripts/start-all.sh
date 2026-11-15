@@ -39,7 +39,19 @@ _kvp_resolve_l2_serde
 EFFECTIVE_SERDE="${LMCACHE_L2_SERDE:-zstd}"
 export LMCACHE_L2_SERDE="$EFFECTIVE_SERDE"
 echo "codec: $EFFECTIVE_SERDE (resolved once, used by cache and engine)"
-
+# r89c (stale-marker fix #2): wipe any marker live/extras_started BEFORE
+# step 1/3. A marker leftover from a PREVIOUS -- possibly manual --
+# start-observability.sh run must NEVER mute the extras deploy of THIS run
+# (scenario: operator runs start-observability.sh by hand, then edits
+# KVP_OBS_GPU_PROF and reruns start-all.sh with the base stack already up;
+# start-observability.sh is skipped entirely, and a marker found below would
+# wrongly signal "already deployed in this run").
+# The marker written later, by start-observability.sh in step 1/3, is the
+# ONLY marker that may silence this run's extras block -- it is created
+# strictly after this wipe.
+# -- extras marker pre-clean: BEGIN (tests extract and EXECUTE this block) --
+rm -f "$ROOT/live/extras_started" 2>/dev/null || true
+# -- extras marker pre-clean: END --
 echo "== 1/3 observability (Grafana on :3000) =="
 # Round 81 (review): the check used to look at obs_grafana only -- a running
 # Grafana with a dead Prometheus/OTel silently skipped the whole stack. Now
