@@ -154,11 +154,16 @@ def test_missing_pid_is_inconclusive_not_fail(sandbox):
 
 def test_recovery_source_has_inconclusive_verdict():
     """Static half: test-recovery.sh must contain the INCONCLUSIVE verdict
-    (exit 5) and the documented hint for the missing-pid case.
+    (exit 5) with a systemd/ps hint for the missing-pid case.
     MUTATION caught: dropping the verdict / hint from the script."""
     src = SCRIPT.read_text()
     assert 'inconc "B: lmcache-server.pid not present' in src
     assert "rerun once the pid file exists" in src or "rerun once the pid file" in src
+    # the review demands a documented next step (systemd / ps), not just
+    # "rerun" -- the operator must know WHERE to look first.
+    assert "systemctl" in src, "the INCONCLUSIVE hint must mention systemd (systemctl)"
+    assert "ps aux" in src or "ps aux | grep" in src, (
+        "the INCONCLUSIVE hint must mention how to find the process (ps aux)")
     assert 'exit 5' in src
     # the retry loop must exist (not the old one-shot cat|kill)
     assert '_pid_try' in src
