@@ -161,18 +161,38 @@ fi
 # `docker logs --tail 20` of the failed container are printed BEFORE it is
 # removed. Exit 0 whatever happens: base panels never stay empty.
 _probe_metrics_inside() {
-  # $1 = container, $2 = GET url -- probe from INSIDE (A4: docker exec).
-  docker exec "$1" wget -q -T 5 -O /dev/null "$2" >/dev/null 2>&1 && return 0
-  docker exec "$1" curl -fsS --max-time 5 -o /dev/null "$2" >/dev/null 2>&1
+  # $1 = prometheus URL (bridge GW). r90b fix: probe FROM THE COMPOSE NETWORK
+  # via obs_prometheus (it has wget -- the exact scrape path, no dependence on
+  # tooling inside the exporter image: dcgm-exporter 4.5.2 ships NO wget/curl
+  # per its Dockerfile, so the old probe always failed and every start fell
+  # back). Fallback: bash /dev/tcp from the host (no external tools).
+  if docker exec obs_prometheus wget -q -T 5 -O /dev/null "$1" >/dev/null 2>&1 \
+     || docker exec obs_prometheus curl -fsS --max-time 5 -o /dev/null "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+  # fallback: TCP-connect via bash /dev/tcp (no external tools needed).
+  # Only proves the port is open -- weaker than the wget probe above, but
+  # far better than the old "always fail" behaviour.
+  local _hostport="${1#http://}"
+  _hostport="${_hostport%%/*}"
+  local _h="${_hostport%%:*}" _t="${_hostport##*:}"
+  (exec 3<>"/dev/tcp/${_h}/${_t}" >/dev/null 2>&1) && exec 3>&- && return 0
+  return 1
 }
 if [ "$GPU_PROF" = "gpu-prof" ]; then
   _PROF_OK=0
-  for _try in $(seq 1 12); do   # 12 x 5s = 60s budget (A4)
-    if [ "$(docker inspect -f '{{.State.Status}}' obs_dcgm_exporter_prof 2>/dev/null)" = "running" ] \
-       && _probe_metrics_inside obs_dcgm_exporter_prof "http://127.0.0.1:9400/metrics"; then
+  # r90b: probe over the COMPOSE network toward the service URL -- same host-
+  # port Prometheus scrapes (dcgm-exporter-prof:9400). No wget/curl in the
+  # exporter image, so the probe runs from obs_prometheus (same subnet) with
+  # a short 3x5s budget: a healthy exporter answers at once; a crash-looping
+  # one (the round-90 case) costs 15s MAX, then the fallback fires.
+  for _try in 1 2 3; do
+    if _probe_metrics_inside "http://dcgm-exporter-prof:9400/metrics"; then
       _PROF_OK=1
       break
     fi
+    _st="$(docker inspect -f '{{.State.Status}}' obs_dcgm_exporter_prof 2>/dev/null || echo missing)"
+    [ "$_st" = "running" ] || break     # container down -> fail fast, no full wait
     sleep 5
   done
   if [ "$_PROF_OK" = "0" ]; then

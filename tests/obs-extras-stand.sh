@@ -72,8 +72,18 @@ case "$1" in
            fi
            echo "${WD:-}"; exit 0 ;;
   exec)
-           # r90 A4: `docker exec <c> wget/curl .../metrics` probe from INSIDE
-           if [ "${PROF_METRICS:-ok}" = "ok" ]; then exit 0; else exit 1; fi ;;
+           # r90b: the probe runs THROUGH obs_prometheus (compose network,
+           # the real scrape path) -- the dcgm-exporter image has NO wget/curl
+           # (Dockerfile ships only DCGM + libcap2-bin), so probing INSIDE
+           # obs_dcgm_exporter_prof always "fails" and would false-fallback.
+           case "$2" in
+             obs_prometheus)
+               [ "${PROF_METRICS:-ok}" = "ok" ] && exit 0 || exit 1 ;;
+             obs_dcgm_exporter_prof|obs_dcgm_exporter|obs_nvidia_smi_exporter)
+               # the exporter image really has no tools -- 127 like a real one
+               echo "wget: not found" >&2; exit 127 ;;
+             *) exit 0 ;;
+           esac ;;
   logs)    echo "stub dcgm-prof log line 1: wrong number of fields"; exit 0 ;;
   info)    [ "${NVIDIA_RT:-1}" = 1 ] && echo "Runtimes: nvidia" || echo "Runtimes: runc"; exit 0 ;;
   network) echo "172.17.0.1"; exit 0 ;;
@@ -354,6 +364,26 @@ if grep -q "A4 AUTO-FALLBACK" "$S/out" \
   pass "X12 prof exporter fails -> AUTO-FALLBACK to base dcgm-exporter" fallback
 else
   fail "X12 prof exporter fails -> AUTO-FALLBACK" fallback \
+       "target=$(cat "$S/repo/observability/extras/targets/gpu.json" 2>/dev/null | tr -d '\n')"
+fi
+
+# ---- X12b (r90b review): exporter image WITHOUT wget/curl is NOT unhealthy
+# The dcgm-exporter image ships no http client at all; health must be judged
+# from OUTSIDE it -- through obs_prometheus (compose network, real scrape
+# path) or bash /dev/tcp. When that probe answers 200 the run must KEEP the
+# prof exporter (no A4 fallback, target stays dcgm-exporter-prof) even though
+# `docker exec` inside the exporter returns 127 ("wget: not found").
+# MUTATION caught: reverting the probe to docker-exec-inside-exporter (the
+# r90 bug -- every start waited 60s and fell back, profiling never worked).
+: > "$S/log"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" NVIDIA_RT=1 KVP_OBS_GPU=on \
+    KVP_OBS_GPU_PROF=1 PROF_STATE=running PROF_METRICS=ok \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+if ! grep -q "A4 AUTO-FALLBACK" "$S/out" \
+   && grep -qF "dcgm-exporter-prof:9400" "$S/repo/observability/extras/targets/gpu.json"; then
+  pass "X12b exporter without wget/curl stays healthy (no fallback)" keep
+else
+  fail "X12b image-without-tools must NOT be judged unhealthy" keep \
        "target=$(cat "$S/repo/observability/extras/targets/gpu.json" 2>/dev/null | tr -d '\n')"
 fi
 
