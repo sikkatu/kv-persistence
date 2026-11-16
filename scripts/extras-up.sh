@@ -161,32 +161,25 @@ fi
 # `docker logs --tail 20` of the failed container are printed BEFORE it is
 # removed. Exit 0 whatever happens: base panels never stay empty.
 _probe_metrics_inside() {
-  # $1 = prometheus URL (bridge GW). r90b fix: probe FROM THE COMPOSE NETWORK
-  # via obs_prometheus (it has wget -- the exact scrape path, no dependence on
-  # tooling inside the exporter image: dcgm-exporter 4.5.2 ships NO wget/curl
-  # per its Dockerfile, so the old probe always failed and every start fell
-  # back). Fallback: bash /dev/tcp from the host (no external tools).
-  if docker exec obs_prometheus wget -q -T 5 -O /dev/null "$1" >/dev/null 2>&1 \
-     || docker exec obs_prometheus curl -fsS --max-time 5 -o /dev/null "$1" >/dev/null 2>&1; then
-    return 0
-  fi
-  # fallback: TCP-connect via bash /dev/tcp (no external tools needed).
-  # Only proves the port is open -- weaker than the wget probe above, but
-  # far better than the old "always fail" behaviour.
-  local _hostport="${1#http://}"
-  _hostport="${_hostport%%/*}"
-  local _h="${_hostport%%:*}" _t="${_hostport##*:}"
-  (exec 3<>"/dev/tcp/${_h}/${_t}" >/dev/null 2>&1) && exec 3>&- && return 0
-  return 1
+  # $1 = metrics URL inside the compose network. r90b fix: probe FROM THE
+  # COMPOSE NETWORK via obs_prometheus (it has wget -- the exact scrape path,
+  # no dependence on tooling inside the exporter image: dcgm-exporter 4.5.2
+  # ships NO wget/curl per its Dockerfile, so probing inside it always failed
+  # and every start fell back). r90c: no host-side /dev/tcp fallback -- the
+  # host cannot resolve compose service names like dcgm-exporter-prof, so
+  # that path was dead weight (a probe that can never succeed).
+  docker exec obs_prometheus wget -q -T 5 -O /dev/null "$1" >/dev/null 2>&1 \
+    || docker exec obs_prometheus curl -fsS --max-time 5 -o /dev/null "$1" >/dev/null 2>&1
 }
 if [ "$GPU_PROF" = "gpu-prof" ]; then
   _PROF_OK=0
-  # r90b: probe over the COMPOSE network toward the service URL -- same host-
-  # port Prometheus scrapes (dcgm-exporter-prof:9400). No wget/curl in the
+  # r90c P1-1: probe over the COMPOSE network toward the service URL -- same
+  # URL Prometheus scrapes (dcgm-exporter-prof:9400). No wget/curl in the
   # exporter image, so the probe runs from obs_prometheus (same subnet) with
-  # a short 3x5s budget: a healthy exporter answers at once; a crash-looping
-  # one (the round-90 case) costs 15s MAX, then the fallback fires.
-  for _try in 1 2 3; do
+  # a 12x5s budget (60s): a healthy profiling exporter on 4 Blackwell cards
+  # may need more than a few seconds to start; the early exit below (container
+  # not running -> break) keeps a crash-looping one at seconds, not minutes.
+  for _try in $(seq 1 12); do
     if _probe_metrics_inside "http://dcgm-exporter-prof:9400/metrics"; then
       _PROF_OK=1
       break
@@ -196,7 +189,7 @@ if [ "$GPU_PROF" = "gpu-prof" ]; then
     sleep 5
   done
   if [ "$_PROF_OK" = "0" ]; then
-    echo "[extras] A4 AUTO-FALLBACK: obs_dcgm_exporter_prof not healthy (no 200 on internal /metrics within 60s) -- falling back to the base dcgm-exporter so the GPU row keeps data."
+    echo "[extras] A4 AUTO-FALLBACK: obs_dcgm_exporter_prof not healthy (no 200 on /metrics via obs_prometheus within 60s) -- falling back to the base dcgm-exporter so the GPU row keeps data."
     docker logs --tail 20 obs_dcgm_exporter_prof 2>&1 | sed 's/^/    [dcgm-prof log] /' || true
     ( cd "$OBS_DIR" && docker compose --profile '*' rm -sf dcgm-exporter-prof >/dev/null 2>&1 ) || true
     GPU_PROF="gpu"

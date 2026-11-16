@@ -78,6 +78,15 @@ case "$1" in
            # obs_dcgm_exporter_prof always "fails" and would false-fallback.
            case "$2" in
              obs_prometheus)
+               # r90c X12c: with PROF_PROBE_FROM=N the probe succeeds only
+               # from attempt N -- models a SLOW-BUT-HEALTHY prof exporter.
+               if [ -n "${PROF_PROBE_FROM:-}" ]; then
+                 _cntf="$LOG.probecnt"
+                 _c=$(cat "$_cntf" 2>/dev/null || echo 0)
+                 _c=$((_c+1)); echo "$_c" > "$_cntf"
+                 if [ "$_c" -ge "${PROF_PROBE_FROM}" ]; then exit 0; fi
+                 exit 1
+               fi
                [ "${PROF_METRICS:-ok}" = "ok" ] && exit 0 || exit 1 ;;
              obs_dcgm_exporter_prof|obs_dcgm_exporter|obs_nvidia_smi_exporter)
                # the exporter image really has no tools -- 127 like a real one
@@ -384,6 +393,26 @@ if ! grep -q "A4 AUTO-FALLBACK" "$S/out" \
   pass "X12b exporter without wget/curl stays healthy (no fallback)" keep
 else
   fail "X12b image-without-tools must NOT be judged unhealthy" keep \
+       "target=$(cat "$S/repo/observability/extras/targets/gpu.json" 2>/dev/null | tr -d '\n')"
+fi
+
+# ---- X12c (r90c P1-1): slow-but-healthy prof exporter -> NO fallback ----------
+# The profiling exporter on 4 Blackwell cards may take longer than 15s to
+# start; the probe budget is 12x5s now. Simulate: the metrics probe answers
+# only from the 7th attempt (35s of real starts in a healthy system) -- the
+# run must KEEP dcgm-exporter-prof and never fire A4 AUTO-FALLBACK.
+# MUTATION caught: shrinking the budget back to 3x5s -> the 7th attempt is
+# never reached -> X12c FAILS.
+: > "$S/log"
+rm -f "$S/log.probecnt"
+( cd "$S/repo" && env PATH="$S/bin:$PATH" LOG="$S/log" NVIDIA_RT=1 KVP_OBS_GPU=on \
+    KVP_OBS_GPU_PROF=1 PROF_STATE=running PROF_PROBE_FROM=7 \
+    bash scripts/extras-up.sh > "$S/out" 2>&1 )
+if ! grep -q "A4 AUTO-FALLBACK" "$S/out" \
+   && grep -qF "dcgm-exporter-prof:9400" "$S/repo/observability/extras/targets/gpu.json"; then
+  pass "X12c slow prof exporter (probe OK from 7th try) -> NO fallback" slow-start
+else
+  fail "X12c slow prof exporter must NOT trigger the fallback" slow-start \
        "target=$(cat "$S/repo/observability/extras/targets/gpu.json" 2>/dev/null | tr -d '\n')"
 fi
 

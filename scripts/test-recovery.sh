@@ -436,8 +436,39 @@ if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ]; then
   _kvp_gpu_preflight 2048 || PA B "GPU memory still held AFTER stop-engine + stop-cache -- leaked processes block the restart (see PIDs above)"
 fi
 bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA B "start-cache.sh failed (cache service did not restart)"
-LIVE_PID="$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null || echo 0)"
-kill -0 "$LIVE_PID" 2>/dev/null || PA B "cache service is dead right after start-cache.sh (readiness not reached)"
+# r90d: the cache server SHIPS its pid file asynchronously (start-cache.sh
+# writes it right after the daemon start, but a graceful shutdown inside the
+# server deletes it later -- so right after stop-cache.sh + start-cache.sh the
+# pid file can still be missing for a moment and the old cat | kill -0 FAILED
+# ("cache service is dead...") although the service was alive and READY).
+# Retry the pid+alive probe for up to 30s; only give up when the process
+# really is not there.
+LIVE_PID=""
+for _pid_try in $(seq 1 15); do
+  LIVE_PID="$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null || echo "")"
+  LIVE_PID="$(printf '%s' "$LIVE_PID" | tr -d '[:space:]')"
+  case "$LIVE_PID" in
+    ''|*[!0-9]*) : ;;                     # not yet written -- wait
+    *)
+      if kill -0 "$LIVE_PID" 2>/dev/null; then
+        break                             # pid written + process alive -> OK
+      fi
+      : ;;                                # stale pid -- keep retrying
+  esac
+  sleep 2
+done
+case "$LIVE_PID" in
+  ''|*[!0-9]*)
+    inconc "B: lmcache-server.pid not present 30s after start-cache.sh -- the service may still be starting or was started outside this script (check: systemctl status lmcache-server / ps aux | grep lmcache). NOT a cache failure: rerun once the pid file exists."
+    echo "VERDICT: INCONCLUSIVE ($VI inconclusive finding(s), 0 hard failures) -- the cache-service pid file never appeared; rerun when ready."
+    exit 5
+    ;;
+esac
+if ! kill -0 "$LIVE_PID" 2>/dev/null; then
+  inconc "B: pid $LIVE_PID from lmcache-server.pid is not running 30s after start-cache.sh (stale pid left after a graceful shutdown inside the server? see lmcache-server.log). NOT a cache failure: rerun once the pid file is fresh."
+  echo "VERDICT: INCONCLUSIVE ($VI inconclusive finding(s), 0 hard failures) -- cache-service pid file is stale; rerun once the pid file is fresh."
+  exit 5
+fi
 # Round 79 (review): IPC pre-flight BEFORE docker start -- scenario B died
 # exactly at register_kv_cache (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle).
 # Catch it here (same shared pre-flight both launchers run) instead of after a
