@@ -1,30 +1,61 @@
-# requirements-lmcache.txt -- runtime source of truth for the LMCache service.
+# requirements-lmcache.txt -- pinned runtime for the lmcache cache service.
 #
-# Since the custom LMCache integration (see docs/lmcache-build.md), the PRODUCTION
-# cache server runs INSIDE the custom derivative image (KVP_LAUNCH_MODE=docker in
-# scripts/start-cache.sh). The image already carries the exact custom LMCache
-# build (base 0.5.7.dev428 / commit 03ee5b82418b6bd44e424cdd46932d9346f43eb2
-# plus downstream patches for upstream PR #4136 and #5972), compiled against the
-# pinned PyTorch/CUDA/Python of the pinned vLLM runtime. The MP server and every
-# model worker MUST run this same image build -- startup fails on any identity
-# mismatch.
+# Two copies of LMCache exist per deployment and BOTH must carry the same
+# build identity (docs/lmcache-build.md):
+#   1. the PRODUCTION copy: the custom LMCache wheel (base 0.5.7.dev428 =
+#      commit 03ee5b82418b6bd44e424cdd46932d9346f43eb2 + downstream patches
+#      4136-mp-retrieve-abort / 5972-incomplete-kv-objects, see
+#      vendor/patches/lmcache/SOURCES.md) baked into the custom derivative
+#      image by scripts/build-image.sh;
+#   2. a DIAGNOSTIC host copy for kv probes (kvpersist.mp_ping, ipc-test);
+#      install the SAME custom wheel from live/lmcache-build/wheels/, not a
+#      PyPI build -- a PyPI lmcache will not carry the two downstream patches.
 #
-# The host-venv install (pip install -r requirements-lmcache.txt) remains only
-# for diagnostics and development probes (kv mp_ping / ipc-test). It must match
-# the SAME LMCache version as the image or the MP protocol breaks silently
-# (historical incident: host 0.5.3 vs image 0.5.6 -> register_kv_caches
-# timeouts). To install the identical build on the host:
-#
-#   pip install --no-deps /path/to/lmcache-<version>-*.whl
-#
-# where the wheel comes from live/lmcache-build/wheels/ produced by
-# scripts/build-lmcache.sh. Do NOT install a PyPI lmcache here: it will not
-# carry the two downstream patches.
-#
-# Runtime dependencies for such probes (versions are informational; the pinned
-# image is authoritative in production):
-#   lmcache  == the custom wheel built by scripts/build-lmcache.sh
-#   openai   >= 1.0            (probe client)
-#   zstandard>= 0.22           (lossless codec used in L2, KVP_L2_SERDE=zstd)
-#   lz4      >= 4.3            (alternative lossless codec)
-#   pyzmq    >= 25.0           (MP RPC channel to the cache server)
+# Historical incident (round 42): a mixed minor pair (host 0.5.3 vs image
+# 0.5.6) silently broke the MP protocol (register_kv_caches timeouts), and a
+# mismatched torch minor (2.13 vs host 2.15) failed to load the binary
+# cuda_ops extension, silently falling back to the slow Python copy path.
+# Never mix: same wheel, same torch, same CUDA on both sides.
+
+# The custom LMCache wheel itself is NOT pinned here (it is not on PyPI):
+#   pip install --no-deps live/lmcache-build/wheels/lmcache-0.5.7.dev428-*.whl
+# Its source identity lives in live/lmcache-build/provenance.json and is baked
+# into the image as /etc/kvp-lmcache-identity.json (P1-2 identity contract).
+
+# -- runtime dependencies of the LMCache build (exact pins; DO NOT widen
+# without replaying the suites noted below) -------------------------------
+
+# The nixl_store_dynamic L2 adapter imports the top-level `nixl` module at
+# runtime (lmcache/v1/distributed/l2_adapters/nixl_store_dynamic_l2_adapter.py).
+# Without nixl at import time the server refuses to start with
+# `ModuleNotFoundError: No module named 'nixl'` (real incident).
+# PINNED to the exact version the integration tests ran against (1.5.2) for a
+# reproducible deploy: `nixl` ships its own C/transport backends whose ABI has
+# changed between minors. Verified-compatible range observed so far: 1.3.x
+# (adapter's minimum) through 1.5.2 (tested). Do NOT widen without replaying
+# tests/integration/test_l2_persistence.py on the target host.
+nixl==1.5.2
+
+# Lossless L2 compression codecs, used ONLY when the operator selects
+# LMCACHE_L2_SERDE=zstd|lz4 (or USE_LOSSLESS_SERDE=1). With the default
+# LMCACHE_L2_SERDE=none NEITHER package is needed -- the cache starts and runs
+# without them (a startup check requires exactly the SELECTED codec, never an
+# unused one). zstandard is the preferred codec (better ratio); lz4 is the
+# faster alternative. Both are pure additions -- removing them only disables
+# the corresponding codec, it never breaks the default path.
+#   LMCACHE_L2_SERDE=zstd -> needs zstandard only
+#   LMCACHE_L2_SERDE=lz4  -> needs lz4 only
+zstandard>=0.22,<1
+lz4>=4.3,<5
+
+# The `lmcache` CLI/`lmcache server` mid-import chain needs `openai`, so even
+# `lmcache server` dies with `ModuleNotFoundError: No module named 'openai'`
+# without it (real deployment report). It is a CLI-wide dependency of the
+# LMCache build, not just of the benchmark. Install this file into the SAME
+# venv that provides the `lmcache` command.
+# Range pin (not a single version): `openai` is a pure client library with a
+# stable 1.x surface; the CLI only needs the `OpenAI` class to exist.
+openai>=1.40,<2
+
+# MP RPC channel of the cache server (kvpersist.mp_ping / ipc-test probes).
+pyzmq>=25.0

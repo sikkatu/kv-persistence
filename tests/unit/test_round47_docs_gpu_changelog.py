@@ -60,10 +60,22 @@ def test_no_stale_053_mentions_in_docs():
     assert not bad, "stale 0.5.3 mentions remain: %s" % bad
 
 
-def test_requirements_pin_is_056():
+def test_requirements_pins_runtime_deps():
+    """The host-diagnostic requirements must pin every runtime dependency of
+    the LMCache build with its tested version range (r2 P1-1): the earlier
+    rewrite dropped nixl/openai/zstandard/lz4 and the server would not start
+    (ModuleNotFoundError: nixl) and the CLI would not run (openai). The lmcache
+    package itself is provided by the custom wheel (not on PyPI), so it is
+    documented in the header, never pinned as a bare "lmcache==x.y"."""
     req = (ROOT / "requirements-lmcache.txt").read_text()
-    assert "lmcache==0.5.6" in req
-    assert "lmcache==0.5.3" not in req
+    for dep in ("nixl==", "openai>=", "zstandard>=", "lz4>=", "pyzmq>="):
+        assert req.count(dep) == 1, (
+            f"{dep} must be pinned exactly once, found {req.count(dep)}"
+        )
+    assert "lmcache==" not in req, (
+        "lmcache is delivered as the custom wheel (P1-2 identity contract), "
+        "not pinned from PyPI"
+    )
 
 
 # ---------------------------------------------------------------- CHANGELOG
