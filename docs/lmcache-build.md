@@ -123,8 +123,41 @@ the NVMe mount itself.
 * Backend failure: L2 write failures are reported as failures — the engine
   never silently reports them as persisted.
 * `KVP_LOAD_FAILURE_POLICY` remains EXPERIMENTAL (`fail` is the default). The
-  old C2 guard pairing warning is obsolete: the retrieve/abort race is fixed
-  inside the custom build (PR #4136), so no local guard exists to conflict.
+  old C2 guard pairing warning is obsolete: the retrieve/abort race is handled
+  inside the custom build (downstream port of PR #4136), so no local guard
+  exists to conflict. **Status (honest): implemented, unit-tested; hardware
+  validation pending.** The race fix, the custom build and the native cuda_ops
+  extension are unit-tested in this repo but NOT yet validated on real hardware
+  (4x RTX PRO 6000 + NVMe) -- see section 5b "Implementation stages" for the
+  pending operator-stand validation plan (build-lmcache.sh -> build-image.sh ->
+  verify-image-custom.sh -> engine + cache-server startup -> parallel load with
+  aborts).
+
+## 5b. Implementation stages (hardware validation plan)
+
+Per the honesty rule of the fix series: everything above is **implemented and
+unit-tested in this repo** but the following chain still needs to run on the
+real operator stand (4x RTX PRO 6000, NVMe L2, pinned vLLM image) before any
+"verified"/"works" claim is honest:
+
+1. `bash scripts/build-lmcache.sh` -- smoke the custom wheel build with real
+   nvcc + CUDA dev headers; assert `cuda_ops*.so` present in the wheel.
+2. `bash scripts/build-image.sh` -- build the derivative from the pinned vLLM
+   digest; assert `import lmcache.cuda_ops` inside the container on real GPUs
+   (the `--gpus all` smoke checks all 4 GPUs hit `get_gpu_pci_bus_id`).
+3. `bash scripts/verify-image-custom.sh <IMAGE> <kvp-root>` -- deep check
+   (identity.json + `find_spec('lmcache.cuda_ops')`).
+4. Start the MP cache server and at least one model worker on the same custom
+   image; assert both report the SAME LMCache identity via the startup gate.
+5. Cold-cache STORE to L2; full restart (cache server + workers); verify
+   RETRIEVE shows L2 read events + non-zero `cached_tokens`.
+6. Parallel N>=2 load with aborts (retrieve/abort stress): engine must survive
+   the retrieve/abort cycle and never emit contradictory completion
+   notifications per PR #4136's contract; #5972's incomplete-object rejection
+   must be visible in server logs before persistence.
+
+After this chain passes, reword the status note above to "validated on
+hardware" -- until then, do not claim more than implemented and unit-tested.
 
 ## 6. Future upstream migration (when #4136 and #5972 merge upstream)
 

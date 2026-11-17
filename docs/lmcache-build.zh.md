@@ -104,8 +104,13 @@ KVP_RESET_CONFIRM=FULL-RESET bash scripts/reset-persistent-cache.sh
   拒绝了保留几何中含空块的对象；这些对象此后永远不会表现为缓存命中。
 * 后端故障：L2 写入失败始终报告为失败——引擎绝不悄悄报告为已持久化。
 * `KVP_LOAD_FAILURE_POLICY` 仍为实验性（默认 `fail`）。旧的 C2 保护配对
-  警告已过时：retrieve/abort 竞态已在自定义构建内修复（PR #4136），不存在
-  可能冲突的本地保护。
+  警告已过时：retrieve/abort 竞态已在自定义构建内处理（PR #4136 的下游移植），
+  不存在可能冲突的本地保护。**状态（诚实）：implemented, unit-tested;
+  hardware validation pending.** 竞态修复、自定义构建和 cuda_ops 原生
+  扩展已在本仓库通过单元测试（implemented, unit-tested），但尚未在真实
+  硬件（4× RTX PRO 6000 + NVMe）上验证（hardware validation pending）——
+  参见 5b 节「实施阶段」的工位验证计划（build-lmcache.sh → build-image.sh →
+  verify-image-custom.sh → 启动引擎和缓存服务器 → 含中止的并行负载）。
 
 ## 6. 未来上游迁移（#4136 与 #5972 合并后）
 

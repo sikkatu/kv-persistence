@@ -13,6 +13,15 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 3 轮审阅修复（P0/P1，一项一提交；行为测试先行）
+* **P0-1** `5f45986`：build-image.sh **第一次运行**就失败——Dockerfile heredoc 在计算 `$PR4136_SHA`/`$PR5972_SHA`/`$WHEEL_SHA_ID` **之前**就引用了它们（`set -u` 下的 unbound variable）。已修复：三个 sha256 变量立即在 `cp $WHEEL` 之后计算，删除下方重复块。行为测试（tests/unit/test_build_image_runs.py）用 stub docker + tmp 固定装饰真实跑脚本（KVP_PATCH_DIR/KVP_BUILD_DIR/KVP_IDENTITY_OUT —— 不写入仓库的 live/）；变异检测器恢复有缺陷的顺序并断言确切崩溃。
+* **P0-2** `b1afd2e`：git dubious-ownership + wheel 版本固定。容器以 root 运行挂载 host-uid 的 /usr/src/lmcache；git 拒绝读取仓库，且 setuptools_scm 未设 fallback_version → wheel 变成 0.0.0 / 0.1.dev。已修复：`pip wheel` 前 `git config --global --add safe.directory /usr/src/lmcache`；`SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE=0.5.7.dev428+kvp.<PATCHED_STATE 前 12 hex>`；`kvpersist/lmc_identity.py` 新增 `compare_wheel_version()`（单一事实来源：裸 upstream nightly 字符串即使精确匹配也被拒）。provenance + 烙入的 identity 文件记录 wheel_version。dubious-ownership 行为测试在该沙箱 SKIP（chown 在 tmpfs 上静默 no-op）；在操作员站将真实运行并证伪该 bug。
+* **P0-3** `390b6a7`：构建容器安装 CUDA dev 头文件。vLLM 运行时镜像含有 nvcc + cuda-cudart，但**不含** cuda-cudart-dev / libcusparse-dev / libcusolver-dev / libcublas-dev（vLLM 自己的 Dockerfile 在其 LMCache 源码构建阶段安装后 purge）。按 `torch.version.cuda`（13.0 → 13-0）派生后缀的 `apt-get install -y --no-install-recommends` 四个包；缺失包 **指名** 后中止构建（无 `|| true` —— 这正是产出无 cuda_ops wheel 的根源）。`export CUDA_HOME=/usr/local/cuda`。派生镜像 Dockerfile 保持无 dev 包（测试断言无 apt-get/-dev 字符串）。
+* **P1-1** `d7275a5`：捕获 pytest 退出码（不再 `|| true`），跳过数取自 pytest 摘要行（绝非比对 SKIPPED 明细行）。
+* **P1-2** `12ccd8e`：重置路径策略 —— 显式 `KVP_CACHE_ROOT` 胜过 `/mnt`/`/home` 一刀切禁令（真实 NVMe 常挂载于 /mnt），前缀比较严格 `/` 边界（根 `…/l2` 不再吞掉同级 `…/l2-old`），`KVP_LIVE_DIR` 供测试暂存（绝不写入仓库 live/）。
+* **P1-3** `a2deeaf`：LABEL 之外的深度镜像验证（LABEL 一行即可伪造）：通过 `docker run --entrypoint cat` 读取烙入的 `/etc/kvp-lmcache-identity.json` 并与 `vendor/patches/lmcache` 交叉验证补丁 sha，再经 `docker run --entrypoint python3` 探测 `find_spec('lmcache.cuda_ops')` —— 任何不符在启动前中止。CLI 标志 `--deep`，由 `verify-image-custom.sh` 串联。
+* **P1-4** `docs`：诚实措辞「implemented, unit-tested; hardware validation pending」替代关于竞态修复/自定义构建/原生扩展的未验证「verified/works」陈述（EN + RU + ZH）；新增 5b 节「Implementation stages」记录 6 步硬件验证链 —— 仅在真正跑过后才改为「validated on hardware」。
+
 ### 第 2 轮审阅修复（P0/P1，一项一提交）
 * **P1-1** `87b1083`：恢复 r1 重写时丢失的 `nixl==1.5.2`/`openai`/
   `zstandard`/`lz4` 固定（缺 nixl 时 L2 适配器拒启、缺 openai 时 CLI 挂掉）；

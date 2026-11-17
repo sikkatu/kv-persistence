@@ -13,6 +13,53 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 3 review fixes (P0/P1, one commit per item -- behavioral tests first)
+* **P0-1** `5f45986`: build-image.sh aborted on FIRST run -- the Dockerfile
+  heredoc used `$PR4136_SHA`/`$PR5972_SHA`/`$WHEEL_SHA_ID` before computing
+  them (`unbound variable` under `set -u`). Fixed: compute all three sha256
+  vars first, drop the later duplicate. Behavioral test
+  (tests/unit/test_build_image_runs.py) runs the real script with stub docker
+  and tmp fixtures (KVP_PATCH_DIR/KVP_BUILD_DIR/KVP_IDENTITY_OUT -- no writes
+  into repo live/); mutation detector restores the buggy order and asserts the
+  exact crash.
+* **P0-2** `b1afd2e`: git dubious-ownership + wheel version pin. Container
+  runs as root over a host-uid mounted /usr/src/lmcache; git refused to
+  read the repo ("detected dubious ownership") and setuptools_scm had no
+  fallback_version -> the wheel came out 0.0.0 / 0.1.dev. Fixed:
+  `git config --global --add safe.directory /usr/src/lmcache` before
+  `pip wheel`; `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE=0.5.7.dev428+kvp.<12
+  hex of PATCHED_STATE>`; `compare_wheel_version()` added to
+  kvpersist/lmc_identity.py (single source; a *bare* upstream nightly string
+  is refused even if it matches). Provenance + baked identity record
+  wheel_version. Behaviorally-verified dubious-ownership test SKIPS in this
+  sandbox (chown is a silent no-op on tmpfs) -- the test runs and proves the
+  bug on the operator stand.
+* **P0-3** `390b6a7`: CUDA dev-header install in the build container. The
+  vLLM runtime image ships nvcc + cuda-cudart but NOT cuda-cudart-dev /
+  libcusparse-dev / libcusolver-dev / libcublas-dev (vLLM's own Dockerfile
+  purges them after its source-build stage). `apt-get install -y
+  --no-install-recommends` of the 4 packages, suffix derived from
+  `torch.version.cuda` (13.0 -> 13-0); missing package aborts the build
+  NAMING the package (no `|| true`). `export CUDA_HOME=/usr/local/cuda`. The
+  derivative Dockerfile stays free of dev packages (test: build-image.sh's
+  Dockerfile carries zero apt-get/-dev strings).
+* **P1-1** `d7275a5`: pytest exit code captured (no more `|| true`), skip
+  counts from the pytest SUMMARY line (never `grep '^SKIPPED'` rows).
+* **P1-2** `12ccd8e`: reset path policy -- explicit KVP_CACHE_ROOT wins over
+  /mnt /home blanket refusals (deep NVMe mounts), strict '/' prefix boundary
+  (root .../l2 no longer swallows sibling .../l2-old), KVP_LIVE_DIR env for
+  test-run staging (never the repo live/).
+* **P1-3** `a2deeaf`: deep image verification beyond LABELs (LABELs are
+  forgeable): reads baked /etc/kvp-lmcache-identity.json via
+  `docker run --entrypoint cat`, cross-checks patch shas
+  vs vendor/patches/lmcache, and probes find_spec('lmcache.cuda_ops') via
+  `docker run --entrypoint python3` -- any mismatch aborts launch. CLI flag
+  `--deep`, wiring via verify-image-custom.sh.
+* **P1-4** `docs`: honest wording "implemented, unit-tested; hardware
+  validation pending" replaces unchecked "verified/works" claims about the
+  race fix, the custom build and the native extension (EN + RU + ZH); new
+  section 5b "Implementation stages" records the 6-step hardware validation
+  chain, to be reworded "validated on hardware" only after it runs.
 
 ### Round 2 review fixes (P0/P1, one commit per item)
 * **P1-1** `87b1083`: restored `nixl==1.5.2`/`openai`/`zstandard`/`lz4` pins
