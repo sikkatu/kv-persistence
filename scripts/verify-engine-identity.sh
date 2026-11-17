@@ -568,3 +568,35 @@ else:
     print("WAS STARTED WITH (docker inspect .Config.Cmd) and the served model's config.json,")
     print("not runtime state. Cache reuse allowed within that scope.")
 PYEOF
+# ---------------------------------------------------------------------------
+# r2 P1-2: verify the CUSTOM LMCache build identity baked into the running
+# container. The wheel version alone (0.5.7.dev428) cannot distinguish our
+# patched build from the upstream nightly, so build-image.sh writes
+# /etc/kvp-lmcache-identity.json (base commit + patch SHA-256 + wheel SHA-256).
+# The MP cache server and EVERY worker must carry the SAME file, and it must
+# match the patches in THIS repo's vendor/patches/lmcache/. Any mismatch is a
+# hard MISMATCH (exit 4): the deployment must not split caches across builds.
+# ---------------------------------------------------------------------------
+if [ "$CHECK_CONFIG_ONLY" = 0 ]; then
+  _ident_file="/etc/kvp-lmcache-identity.json"
+  _ident_json="$(docker exec "$CONTAINER" cat "$_ident_file" 2>/dev/null || true)"
+  if [ -z "$_ident_json" ]; then
+    echo "" >&2
+    echo "MISMATCH: container '$CONTAINER' has no $_ident_file." >&2
+    echo "  It must run the CUSTOM derivative image built by scripts/build-image.sh" >&2
+    echo "  -- a stock vllm-openai image silently runs upstream LMCache WITHOUT the" >&2
+    echo "  #4136 retrieve/abort fix and the #5972 incomplete-object fix." >&2
+    exit 4
+  fi
+  # Single source of truth for the comparison logic: kvpersist.lmc_identity
+  # (unit-tested); the expected base comes from the recorded build provenance.
+  _exp_base="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("lmcache_source_commit",""))' "$ROOT/live/lmcache-build/provenance.json" 2>/dev/null || true)"
+  if ! printf '%s' "$_ident_json" | PYTHONPATH="$ROOT/implementation" python3 \
+    -m kvpersist.lmc_identity - "$ROOT/vendor/patches/lmcache" ${_exp_base:+--expected-base "$_exp_base"}; then
+    echo "" >&2
+    echo "The running container does NOT carry the expected custom LMCache build." >&2
+    echo "Rebuild/redeploy both parts with scripts/build-lmcache.sh && scripts/build-image.sh" >&2
+    echo "and make the MP server AND every worker use that one image." >&2
+    exit 4
+  fi
+fi

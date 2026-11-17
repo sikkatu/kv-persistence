@@ -112,9 +112,12 @@ apply_patch() {
 apply_patch "$PATCH_4136" "4136-mp-retrieve-abort"
 apply_patch "$PATCH_5972" "5972-incomplete-kv-objects"
 
-# The tree is now dirty on purpose (base + 2 downstream patches).
-PATCHED_STATE="$(git -C "$SRC" status --porcelain | sha256sum | awk '{print $1}')"
-note "patched tree fingerprint: $PATCHED_STATE"
+# The tree is now dirty on purpose (base + 2 downstream patches). Hash the
+# DIFF CONTENT, not the porcelain status list (r2 P1-2: the file-list hash did
+# not change when patch content changed). git diff of the worktree covers all
+# modified+added files that were staged, exactly the applied patch content.
+PATCHED_STATE="$(git -C "$SRC" add -A && git -C "$SRC" diff --cached | sha256sum | awk '{print $1}')"
+note "patched tree fingerprint (diff sha256): $PATCHED_STATE"
 
 # ---------------------------------------------------------------------------
 # 8 + 9. Regression tests and package build, inside the pinned image.
@@ -167,15 +170,26 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
   pip install --no-cache-dir -q -r /usr/src/lmcache/requirements/test.txt
   echo "[in-container] running migration-regression suites for #4136 and #5972"
   cd /usr/src/lmcache
-  python3 -m pytest -q \
+  # r2 P1-2: -rs so skipped tests are LISTED, and a skip in the required
+  # suites is a FAILURE, never a green run (Skipped != Passed).
+  python3 -m pytest -q -rs \
     tests/v1/test_lmcache_mp_connector.py \
     tests/v1/test_vllm_mp_adapter.py \
     tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py \
     tests/v1/multiprocess/test_native_state_lookup.py \
     tests/v1/multiprocess/test_l1_owner_completion.py \
     tests/v1/multiprocess/test_cache_server.py \
-    || { echo "REGRESSION FAILURE -- aborting build"; exit 1; }
-  echo "[in-container] focused regression tests PASSED"
+    > /kvp-work/pytest-report.txt 2>&1 || true
+  cat /kvp-work/pytest-report.txt
+  _skipped="$(grep -cE '^SKIPPED' /kvp-work/pytest-report.txt || true)"
+  if grep -qE '^FAILED|error' /kvp-work/pytest-report.txt; then
+    echo "REGRESSION FAILURE -- aborting build"; exit 1
+  fi
+  if [ "$_skipped" != "0" ]; then
+    echo "REGRESSION FAILURE: $_skipped required test(s) SKIPPED (skipped != passed) -- aborting build"
+    exit 1
+  fi
+  echo "[in-container] focused regression tests PASSED (0 failed, 0 skipped)"
 else
   echo "[in-container] KVP_BUILD_SKIP_TESTS=1 -- tests skipped (not production-acceptable)"
 fi

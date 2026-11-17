@@ -39,19 +39,28 @@ PyTorch и записывает `live/lmcache-build/provenance.json` с полн
 
 ## 2. Развёртывание
 
-`scripts/build-image.sh` собирает **производный образ** от digest закреплённого
-vLLM-образа (`vllm/vllm-openai:nightly-8e2beaa3...@sha256:167ccd86...`,
-CUDA 13.0.2, PyTorch 2.14.0+cu130, Python 3.12) и устанавливает ровно один
-дополнительный пакет — кастомный wheel LMCache. vLLM, PyTorch, CUDA и Python
-сохраняются. Идентичность итогового образа пишется в
-`live/image-identity.env`; этот образ обязаны использовать:
+`scripts/build-image.sh` записывает идентичность результирующего образа в
+`live/image-identity.env` и запекает её в образ как
+`/etc/kvp-lmcache-identity.json` (базовый коммит, SHA-256 патчей, SHA-256
+wheel) — по одной только версии wheel (`0.5.7.dev428`) нашу сборку от
+апстримного nightly не отличить (`no-local-version`).
+
+**Статус развёртывания (честно):** пока интеграция r2 P0-1 не внедрена,
+кэш-сервер по умолчанию работает в режиме `KVP_LAUNCH_MODE=host`, который НЕ
+содержит фиксов #4136/#5972. Чтобы запустить исправленную сборку, задайте
+`KVP_LAUNCH_MODE=docker` и направьте `IMAGE` на кастомный образ, затем
+запустите `verify-engine-identity.sh` — гейт теперь отказывает любому
+контейнеру без совпадающего `/etc/kvp-lmcache-identity.json` (MISMATCH,
+код 4).
+
+Этот образ обязаны использовать:
 
 * общий MP-сервер кэша (`scripts/start-cache.sh`),
 * каждый vLLM-воркер модели (лаунчеры рецептов).
 
 Запуск обязан завершаться ошибкой, если воркер и MP-сервер расходятся в
-идентичности сборки LMCache. Pre-flight identity-гейты (`verify-engine-identity.sh`,
-`_kvp_pre_flights`) выполняются до загрузки модели.
+идентичности сборки LMCache. Pre-flight identity-гейты
+(`verify-engine-identity.sh`, `_kvp_pre_flights`) выполняются до загрузки модели.
 
 Выбор коннектора: используемая версия vLLM требует ЯВНОГО выбора внешнего
 `LMCacheMPConnector` через `--kv-transfer-config` (не рассчитывайте на

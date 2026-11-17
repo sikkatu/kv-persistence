@@ -28,12 +28,14 @@ ROOT="$(cd "$HERE/.." && pwd)"
 
 BUILD_INFO="$ROOT/live/lmcache-build/provenance.json"
 WHEEL_DIR="$ROOT/live/lmcache-build/wheels"
+PATCH_DIR="${KVP_PATCH_DIR:-$ROOT/vendor/patches/lmcache}"
+[ -d "$PATCH_DIR" ] || die "patch dir not found: $PATCH_DIR"
 [ -f "$BUILD_INFO" ] || die "provenance.json not found -- run scripts/build-lmcache.sh first"
 WHEEL="$(find "$WHEEL_DIR" -name '*.whl' | head -1)"
 [ -n "$WHEEL" ] || die "no wheel in $WHEEL_DIR -- run scripts/build-lmcache.sh first"
 
-BASE_IMAGE="${IMAGE:-$KVP_LMC_IMAGE}"
-[ -n "$BASE_IMAGE" ] || die "IMAGE (pinned vLLM image) is not set"
+BASE_IMAGE="${IMAGE:-${KVP_LMC_IMAGE:-}}"
+[ -n "$BASE_IMAGE" ] || die "IMAGE (pinned vLLM image) is not set -- export IMAGE=<pinned vLLM image>@sha256:... before building"
 
 OUT_IMAGE="${KVP_OUT_IMAGE:-kvp-lmcache:latest}"
 IDENTITY="$ROOT/live/image-identity.env"
@@ -54,10 +56,37 @@ cat > "$TMPD/Dockerfile" <<EOF
 # Adds ONLY the custom LMCache wheel (built in-image by build-lmcache.sh).
 # Everything else -- vLLM, PyTorch, CUDA, Python -- is preserved bit-for-bit.
 FROM $BASE_IMAGE
+LABEL org.kvp.lmc-base="$BASE_IMAGE" \
+      org.kvp.lmc-patch-4136="$PR4136_SHA" \
+      org.kvp.lmc-patch-5972="$PR5972_SHA"
 COPY $(basename "$WHEEL") /tmp/kvp-lmcache.whl
+COPY kvp-lmcache-identity.json /etc/kvp-lmcache-identity.json
 RUN python3 -m pip install --no-cache-dir --no-deps /tmp/kvp-lmcache.whl \\
  && rm /tmp/kvp-lmcache.whl \\
  && python3 -c "import lmcache, lmcache.integration.vllm.lmcache_mp_connector; print('LMCache', lmcache.__version__ if hasattr(lmcache,'__version__') else 'installed')"
+EOF
+
+# r2 P1-2: bake the build identity INTO the image (local scheme = no local
+# version, so wheel version alone cannot tell our build from upstream nightly).
+# verify-engine-identity.sh consults this file for server AND every worker.
+PR4136_SHA="$(sha256sum "$PATCH_DIR/4136-mp-retrieve-abort.patch" | awk '{print $1}')"
+PR5972_SHA="$(sha256sum "$PATCH_DIR/5972-incomplete-kv-objects.patch" | awk '{print $1}')"
+WHEEL_SHA_ID="$(sha256sum "$WHEEL" | awk '{print $1}')"
+cat > "$TMPD/kvp-lmcache-identity.json" <<EOF
+{
+  "module": "kvp-custom-lmcache-identity",
+  "built_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "lmcache_source_commit": "${LMCACHE_SOURCE_COMMIT:-03ee5b82418b6bd44e424cdd46932d9346f43eb2}",
+  "pr6551_merge_commit": "${PR6551_MERGE:-61faa902a81462177d40d74f8c64bb9df02163c4}",
+  "pr6551_status": "in-base",
+  "pr4136_source_revision": "b10588bd46288192e01ab06da3c3fa923ad0401a",
+  "pr4136_patch_sha256": "$PR4136_SHA",
+  "pr5972_source_revision": "1ccd6f698794cc45d189c14223d339623abe6ec2",
+  "pr5972_patch_sha256": "$PR5972_SHA",
+  "wheel": "$(basename "$WHEEL")",
+  "wheel_sha256": "$WHEEL_SHA_ID",
+  "base_image": "$BASE_IMAGE"
+}
 EOF
 
 note "building derivative image ..."
@@ -74,9 +103,19 @@ print("KVP_CUDA_AVAILABLE=" + str(torch.cuda.is_available()))
 print("KVP_GPU_COUNT=" + str(torch.cuda.device_count()))
 import lmcache.integration.vllm.lmcache_mp_connector as c
 import lmcache.v1.multiprocess.modules.lmcache_driven_transfer as t
-print("KVP_NATIVE_IMPORTS=OK")
+print("KVP_PY_IMPORTS=OK")
 print("KVP_CONN_MODULE=" + str(c.__file__))
 print("KVP_TRANSFER_MODULE=" + str(t.__file__))
+import json, hashlib, pathlib
+ident_path = "/etc/kvp-lmcache-identity.json"
+ident = json.loads(pathlib.Path(ident_path).read_text())
+print("KVP_IDENTITY_FILE=OK")
+print("KVP_IDENTITY_BASE=" + ident["lmcache_source_commit"])
+print("KVP_IDENTITY_P4136=" + ident["pr4136_patch_sha256"])
+print("KVP_IDENTITY_P5972=" + ident["pr5972_patch_sha256"])
+whl = pathlib.Path("/usr/local/lib/python3.12/dist-packages")
+cand = sorted(whl.glob("cuda_ops*.so")) or sorted(pathlib.Path("/usr/local/lib").rglob("cuda_ops*.so"))
+print("KVP_CUDA_OPS_SO=" + ("found:" + cand[0].name if cand else "MISSING"))
 PY
 
 IMAGE_ID="$(docker inspect --format='{{.Id}}' "$OUT_IMAGE" | sed 's/sha256://')"

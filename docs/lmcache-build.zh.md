@@ -34,11 +34,18 @@ wheel，并将完整源码身份与 wheel SHA-256 写入
 
 ## 2. 部署
 
-`scripts/build-image.sh` 从固定 vLLM 镜像 digest
-（`vllm/vllm-openai:nightly-8e2beaa3...@sha256:167ccd86...`，CUDA 13.0.2，
-PyTorch 2.14.0+cu130，Python 3.12）构建**派生镜像**，且只安装一个额外包：
-自定义 LMCache wheel。vLLM、PyTorch、CUDA 与 Python 保持不变。最终镜像身份
-写入 `live/image-identity.env`，以下组件必须使用它：
+`scripts/build-image.sh` 将最终镜像身份写入 `live/image-identity.env`，并把
+它烙入镜像 `/etc/kvp-lmcache-identity.json`（基线提交、补丁 SHA-256、
+wheel SHA-256）——仅凭 wheel 版本号（`0.5.7.dev428`）无法区分我们的构建与
+上游 nightly（`no-local-version`）。
+
+**部署状态（诚实）：** 在 r2 P0-1 集成落地之前，缓存服务器默认仍为
+`KVP_LAUNCH_MODE=host`，此模式**不含** #4136/#5972 修复。要运行修复后的
+构建，请设置 `KVP_LAUNCH_MODE=docker` 并将 `IMAGE` 指向自定义镜像，然后运行
+`verify-engine-identity.sh` —— 该门禁现在会拒绝任何没有匹配
+`/etc/kvp-lmcache-identity.json` 的容器（MISMATCH，退出码 4）。
+
+此镜像必须被以下组件使用：
 
 * 共享 MP 缓存服务器（`scripts/start-cache.sh`）；
 * 每个 vLLM 模型 worker（recipes 启动器）。

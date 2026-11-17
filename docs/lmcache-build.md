@@ -43,14 +43,27 @@ vLLM image digest (`vllm/vllm-openai:nightly-8e2beaa3...@sha256:167ccd86...`,
 CUDA 13.0.2, PyTorch 2.14.0+cu130, Python 3.12) and installs exactly one
 extra package: the custom LMCache wheel. vLLM, PyTorch, CUDA and Python are
 preserved. The resulting image identity is written to
-`live/image-identity.env` and must be used by:
+`live/image-identity.env` AND baked into the image as
+`/etc/kvp-lmcache-identity.json` (base commit, patch SHA-256s, wheel SHA-256)
+-- the wheel version alone (`0.5.7.dev428`) cannot tell our build from the
+upstream nightly (`no-local-version`).
+
+**Deployment status (honest):** until the r2 P0-1 integration lands, the
+cache server still defaults to `KVP_LAUNCH_MODE=host`, which does NOT carry
+the #4136/#5972 fixes. To run the fixed build, set `KVP_LAUNCH_MODE=docker`
+and point `IMAGE` at the custom image, then run `verify-engine-identity.sh`
+-- the gate now refuses any container without a matching
+`/etc/kvp-lmcache-identity.json` (MISMATCH, exit 4).
+
+This image must be used by:
 
 * the shared MP cache server (`scripts/start-cache.sh`),
 * every vLLM model worker (recipes launchers).
 
 Startup must fail if a worker and the MP server disagree on the LMCache build
-identity. The pre-flight identity gates (`verify-engine-identity.sh`,
-`_kvp_pre_flights`) run before any model load.
+identity (`kvpersist.lmc_identity` compares the baked identity file against
+`vendor/patches/lmcache/` per component). The pre-flight identity gates
+(`verify-engine-identity.sh`, `_kvp_pre_flights`) run before any model load.
 
 Connector selection: the deployed vLLM version requires the external
 `LMCacheMPConnector` to be selected explicitly via `--kv-transfer-config`
