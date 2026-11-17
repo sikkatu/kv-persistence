@@ -50,6 +50,7 @@ def make_fixture(tmp_path: pathlib.Path):
     whl.write_bytes(b"PK\x05\x06fake-wheel-content")
     (build_dir / "provenance.json").write_text(json.dumps({
         "lmcache_source_commit": "03ee5b82418b6bd44e424cdd46932d9346f43eb2",
+        "wheel_version": "0.5.7.dev428+kvp.0123456789ab",
     }))
 
     out_dir = tmp_path / "out"

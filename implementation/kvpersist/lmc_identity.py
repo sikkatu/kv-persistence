@@ -43,6 +43,44 @@ def sha256_file(path: pathlib.Path) -> str:
     return h.hexdigest()
 
 
+def compare_wheel_version(
+    ident: dict, runtime_version: str | None
+) -> tuple[bool, str]:
+    """Compare the built wheel's recorded version against a runtime-reported
+    one (r3 P0-2).
+
+    The upstream nightly's own version (0.5.7.dev428) is identical to what a
+    bare source checkout reports -- only our ``+kvp.<12 hex>`` local part
+    (see build-lmcache.sh ``KVP_WHEEL_VERSION``) disambiguates our build from
+    the upstream nightly. A bare upstream version therefore must NOT satisfy
+    this check: run the derived image's ``md.version('lmcache')`` and compare
+    it against the ``wheel_version`` recorded in the baked identity file.
+
+    Args:
+        ident: the ``/etc/kvp-lmcache-identity.json`` document (or provenance).
+        runtime_version: the version reported by the installed package.
+
+    Returns:
+        ``(ok, message)``.
+    """
+    expected = (ident or {}).get("wheel_version", "")
+    if not expected:
+        return False, "wheel_version missing from the identity document"
+    if not runtime_version:
+        return False, "runtime wheel_version could not be read"
+    if runtime_version != expected:
+        return False, (
+            f"wheel_version mismatch: runtime={runtime_version!r} != "
+            f"expected={expected!r}"
+        )
+    if "+kvp." not in expected:
+        return False, (
+            f"wheel_version {expected!r} lacks the '+kvp.<hash>' local part -- "
+            "indistinguishable from the upstream nightly"
+        )
+    return True, ""
+
+
 def verify_identity(
     ident: dict,
     patch_dir: pathlib.Path,

@@ -92,6 +92,7 @@ cat > "$TMPD/kvp-lmcache-identity.json" <<EOF
   "pr5972_patch_sha256": "$PR5972_SHA",
   "wheel": "$(basename "$WHEEL")",
   "wheel_sha256": "$WHEEL_SHA_ID",
+  "wheel_version": "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("wheel_version","unknown"))' "$BUILD_INFO" 2>/dev/null || echo unknown)",
   "base_image": "$BASE_IMAGE"
 }
 EOF

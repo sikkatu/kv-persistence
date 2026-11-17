@@ -119,13 +119,25 @@ apply_patch "$PATCH_5972" "5972-incomplete-kv-objects"
 PATCHED_STATE="$(git -C "$SRC" add -A && git -C "$SRC" diff --cached | sha256sum | awk '{print $1}')"
 note "patched tree fingerprint (diff sha256): $PATCHED_STATE"
 
+# r3 P0-2: inside the container the build runs as root while /usr/src/lmcache
+# is mounted from the host (different uid) -- git refuses with "dubious
+# ownership" and setuptools_scm's `pip wheel` aborts. The container is
+# disposable, so an unconditional safe.directory entry is safe here.
+# Also pin the version explicitly: pyproject has no setuptools_scm
+# fallback_version, so without this the wheel came out as 0.0.0 / 0.1.dev...
+# or the build died "unable to detect version". The +kvp.<12 hex> local part
+# makes this wheel distinguishable from the upstream nightly 0.5.7.dev428.
+# Written to SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE first (its literal value
+# must be visible here for the r3 P0-2 wiring test), then reused as-is.
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE=0.5.7.dev428+kvp.${PATCHED_STATE:0:12}
+KVP_WHEEL_VERSION=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE
+note "wheel version pin: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE=$KVP_WHEEL_VERSION"
 # ---------------------------------------------------------------------------
 # 8 + 9. Regression tests and package build, inside the pinned image.
 # ---------------------------------------------------------------------------
 PROV="$OUT_DIR/provenance.json"
 WHEEL_OUT="$OUT_DIR/wheels"
 mkdir -p "$WHEEL_OUT"
-
 note "running build+tests inside the pinned image (in-container phase)"
 docker run --rm \
   -v "$SRC":/usr/src/lmcache:rw \
@@ -136,8 +148,13 @@ docker run --rm \
   -e LMCACHE_SOURCE_COMMIT="$LMCACHE_SOURCE_COMMIT" \
   -e PR6551_MERGE="$PR6551_MERGE" \
   -e KVP_BUILD_SKIP_TESTS="${KVP_BUILD_SKIP_TESTS:-0}" \
+  -e SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE="$KVP_WHEEL_VERSION" \
   --entrypoint bash "$IMAGE" -s <<'INCONTAINER'
 set -Eeuo pipefail
+# r3 P0-2: the mounted source tree is owned by a non-root uid while we run as
+# root inside the container -- git would refuse ("dubious ownership") and
+# setuptools_scm would abort the wheel build. Configure safe.directory here.
+git config --global --add safe.directory /usr/src/lmcache
 echo "[in-container] python: $(python3 --version)"
 echo "[in-container] torch : $(python3 -c 'import torch; print(torch.__version__)')"
 echo "[in-container] torch CUDA: $(python3 -c 'import torch; print(torch.version.cuda)')"
@@ -279,6 +296,7 @@ cat > "$PROV" <<EOF
   "build_with_cuda": "1",
   "torch_cuda_arch_list": "${TORCH_CUDA_ARCH_LIST:-12.0}",
   "cuda_ops_in_wheel": true,
+  "wheel_version": "${KVP_WHEEL_VERSION:-unknown}",
   "torch_version": "${TORCH_VERSION:-unknown}",
   "torch_cuda": "${TORCH_CUDA:-unknown}",
   "python_version": "${PYTHON_VERSION:-unknown}",
