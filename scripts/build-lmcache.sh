@@ -144,6 +144,25 @@ echo "[in-container] torch CUDA: $(python3 -c 'import torch; print(torch.version
 echo "[in-container] cuda available: $(python3 -c 'import torch; print(torch.cuda.is_available())')"
 echo "[in-container] GPU count: $(python3 -c 'import torch; print(torch.cuda.device_count())')"
 
+# r2 P0-2: REFUSE to build without the CUDA compiler. The upstream build
+# silently degrades to a pure-Python wheel when nvcc is absent ("building
+# without extensions") and that wheel silently runs the slow Python copy
+# fallback (the cudaMemcpy error 1 incident). A production wheel must carry
+# lmcache/cuda_ops*.so.
+if ! command -v nvcc >/dev/null 2>&1; then
+  echo "BUILD REFUSED: no nvcc in the image -- cannot compile the CUDA extensions." >&2
+  echo "  This runtime image is a runtime image; build the wheel in a CUDA toolkit" >&2
+  echo "  stage (nvcc matching torch CUDA 13.0.x) or pass an image with nvcc." >&2
+  exit 1
+fi
+NVCC_VERSION="$(nvcc --version | tail -1)"
+echo "[in-container] nvcc: $NVCC_VERSION"
+# Force the CUDA extension build and target SM 120 (RTX PRO 6000 Blackwell).
+export BUILD_WITH_CUDA=1
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
+echo "[in-container] BUILD_WITH_CUDA=1 TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
+echo "$NVCC_VERSION" > /kvp-work/nvcc-version.txt
+
 echo "[in-container] checking vLLM ABI / identity matches ..."
 python3 - <<'PY'
 import importlib.metadata as md, torch, sys
@@ -228,7 +247,15 @@ INCONTAINER
 # ---------------------------------------------------------------------------
 WHEEL_NAME="$(find "$WHEEL_OUT" -name '*.whl' -printf '%f\n' | head -1 || true)"
 [ -n "$WHEEL_NAME" ] || die "no wheel produced -- see output above"
+
+# r2 P0-2: the wheel MUST contain the compiled cuda_ops extension. A wheel
+# without it was built without nvcc and silently degrades to the slow Python
+# copy path at runtime (cudaMemcpy error 1 incident).
+PYTHONPATH="$ROOT/implementation" python3 -m kvpersist.check_wheel_native "$WHEEL_OUT/$WHEEL_NAME" \
+  || die "wheel $WHEEL_NAME lacks lmcache/cuda_ops*.so -- refusing to record a pure-Python wheel"
+
 WHEEL_SHA="$(sha256sum "$WHEEL_OUT/$WHEEL_NAME" | awk '{print $1}')"
+NVCC_VERSION_REC="$(cat "$WORK_DIR/nvcc-version.txt" 2>/dev/null || echo unknown)"
 
 # shellcheck disable=SC1090
 [ -f "$WORK_DIR/identity.env" ] && . "$WORK_DIR/identity.env" || true
@@ -248,6 +275,10 @@ cat > "$PROV" <<EOF
   "pr5972_patch_sha256": "$(sha256sum "$PATCH_5972" | awk '{print $1}')",
   "patched_tree_fingerprint": "$PATCHED_STATE",
   "build_image": "$IMAGE",
+  "nvcc_version": "$NVCC_VERSION_REC",
+  "build_with_cuda": "1",
+  "torch_cuda_arch_list": "${TORCH_CUDA_ARCH_LIST:-12.0}",
+  "cuda_ops_in_wheel": true,
   "torch_version": "${TORCH_VERSION:-unknown}",
   "torch_cuda": "${TORCH_CUDA:-unknown}",
   "python_version": "${PYTHON_VERSION:-unknown}",

@@ -331,3 +331,16 @@ else
   echo "  [kvp] patch status not found in the server log yet -- if the"
   echo "        service behaves oddly, check: grep '\[kvp\]' $LOG"
 fi
+# r2 P0-2: a server running WITHOUT the compiled cuda_ops extension silently
+# falls back to the slow Python copy path (the cudaMemcpy error 1 incident).
+# A production start must not hide that. Warn loudly when the fallback line
+# appears; never treat the server as healthy on that line.
+if printf '%s' "$_kvp_log_tail" | grep -Eiq 'lmcache\.cuda_ops compiled extension not found|cuda_ops.*not found.*fallback'; then
+  echo "" >&2
+  echo "WARNING: the LMCache server is running WITHOUT the compiled cuda_ops" >&2
+  echo "  extension -- all transfers use the slow Python fallback." >&2
+  echo "  Rebuild the custom wheel with nvcc in PATH (scripts/build-lmcache.sh)" >&2
+  echo "  and redeploy BOTH the MP server and the workers from that wheel." >&2
+  echo "  (grep 'cuda_ops' $LOG for the exact line)" >&2
+  CUDA_OPS_FALLBACK=1
+fi
