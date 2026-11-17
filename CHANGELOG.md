@@ -13,6 +13,44 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 4 review fixes (P0/P1, one commit per item -- behavioral tests first)
+* **P0-1** `0d20ce6`: CUDA dev-package suffix computed wrong (`%.*` answered
+  `13` for torch CUDA `13.0` -> nonexistent `cuda-cudart-dev-13`, build
+  always "BUILD REFUSED"); no `apt-get update` (the vLLM image purges apt
+  lists); apt failures hidden behind `>/dev/null 2>&1`. Fixed:
+  `scripts/_cuda_dev_suffix.sh` (single source, `major-minor`:
+  13.0->13-0 / 13.0.2->13-0 / 12.8->12-8), `apt-get update -y` before the
+  install loop, last 20 lines of apt output printed on any refusal. Also P1:
+  empty pytest summary now fails explicitly with "pytest summary not found".
+  Behavioral tests (test_build_lmcache_cuda_dev.py) extract the real
+  in-container apt block and run it with a stubbed apt-get; suffix verified
+  by direct helper invocation; mutation of `%.*` red.
+* **P0-2** `2493925`: reset security regression -- r3 P1-2 dropped the
+  protection together with the /mnt//home blocks, so an explicit
+  `KVP_CACHE_ROOT=$HOME` (cache.env typo) wiped the home directory. Fixed:
+  an explicit cache root must prove itself -- `.kvp-cache-root-marker`
+  (created by start-cache.sh at cache init) or EVERY top-level entry from the
+  known LMCache/kvpersist set (lmcache-server.log/.pid,
+  l2-adapter.rendered.json, engine-identity.env, index.db, crash-*,
+  objects/, kvp-*, *.bin, *.bin.tmp.<uuid>, .kvp-active-writes). ALWAYS
+  refused: $HOME (current and any /home/<user> / /root), any ancestor of the
+  checkout, any dir with .git at nesting depth <= 2. Refusal lists the
+  unknown entries + hint to inspect and mark the dir manually. `/mnt/<x>/<dir>`
+  marked or known-set stays accepted. Behavioral tests (6 cases in
+  test_reset_explicit_root_policy.py) -- red first, mutation of the known-set
+  check red.
+* **P0-3** `58a1866`: --deep existed in check_image_identity.py, but
+  verify-image-custom.sh and _kvp_require_custom_image invoked the module
+  WITHOUT --deep, so every real launch stayed LABEL-only. Fixed: both entry
+  points run the deep path BY DEFAULT; KVP_VERIFY_SHALLOW=1 is the sole
+  explicit test-stand opt-out (same category as KVP_SKIP_IMAGE_CHECK). Deep
+  now cross-checks the REAL installed version
+  (importlib.metadata.version('lmcache') == identity's wheel_version),
+  refuses any identity without the `+kvp.` local part and refuses when the
+  metadata cannot be read. Behavioral tests (test_deep_default_wiring.py)
+  run the real verify-image-custom.sh against a docker stub (labels OK,
+  identity cat fails -> rc != 0); mutation of `--deep` red.
+* **Housekeeping** `7ae5464`: exec bit on `_cuda_dev_suffix.sh` (100755).
 ### Round 3 review fixes (P0/P1, one commit per item -- behavioral tests first)
 * **P0-1** `5f45986`: build-image.sh aborted on FIRST run -- the Dockerfile
   heredoc used `$PR4136_SHA`/`$PR5972_SHA`/`$WHEEL_SHA_ID` before computing
