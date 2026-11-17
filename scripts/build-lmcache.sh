@@ -155,6 +155,29 @@ set -Eeuo pipefail
 # root inside the container -- git would refuse ("dubious ownership") and
 # setuptools_scm would abort the wheel build. Configure safe.directory here.
 git config --global --add safe.directory /usr/src/lmcache
+# r3 P0-3: the vLLM runtime image ships nvcc + CUDA runtime but NOT the dev
+# headers cuda_ops compiles against (cuda-cudart-dev, libcusparse-dev,
+# libcusolver-dev -- vLLM's own Dockerfile installs them just for its LMCache
+# source-build stage and purges them after). Install them here in the
+# disposable build container; the derivative image never sees these (it only
+# receives the wheel). Any missing package must abort loudly by name.
+CUDA_TORCH="$(python3 -c 'import torch; print(torch.version.cuda)')"
+DEV_SUFFIX="${CUDA_TORCH%.*}"
+DEV_SUFFIX="${DEV_SUFFIX//./-}"    # 13.0 -> 13-0 (nvidia package suffix convention)
+echo "[in-container] CUDA dev suffix (from torch.version.cuda=$CUDA_TORCH): $DEV_SUFFIX"
+export CUDA_HOME=/usr/local/cuda
+for pkg in cuda-cudart-dev-$DEV_SUFFIX libcusparse-dev-$DEV_SUFFIX \
+           libcusolver-dev-$DEV_SUFFIX libcublas-dev-$DEV_SUFFIX; do
+  if ! apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+    echo "BUILD REFUSED: CUDA dev package '$pkg' is unavailable in this image." >&2
+    echo "  The wheel cannot compile cuda_ops without it (missing headers)." >&2
+    echo "  Check the image's apt sources provide $pkg for CUDA $CUDA_TORCH," >&2
+    echo "  or run the build in an image that carries the CUDA dev stack." >&2
+    exit 1
+  fi
+  echo "[in-container] installed $pkg"
+done
+echo "[in-container] CUDA_HOME=$CUDA_HOME"
 echo "[in-container] python: $(python3 --version)"
 echo "[in-container] torch : $(python3 -c 'import torch; print(torch.__version__)')"
 echo "[in-container] torch CUDA: $(python3 -c 'import torch; print(torch.version.cuda)')"
