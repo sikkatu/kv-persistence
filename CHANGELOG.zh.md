@@ -7,7 +7,38 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 
 ## 未发布
 
-运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **LMCache 0.5.6**（`requirements-lmcache.txt`）。
+运行时：固定 vLLM 镜像（`@sha256:167ccd86…`）+ **自定义 LMCache 构建**
+（基线 `0.5.7.dev428` = `03ee5b82418b6bd44e424cdd46932d9346f43eb2`，
+针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
+原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
+`requirements-lmcache.txt` 现在指向派生镜像。
+
+### LMCache 集成：两个必需的上游修复 + 缓存重置
+* 创建 `vendor/patches/lmcache/`：`4136-mp-retrieve-abort.patch`（retrieve/
+  abort 竞态：显式 `LOADING` 生命周期、调度器确认的中止传播到 worker、
+  无效 store 完成抑制、中止 ID 去重）、`5972-incomplete-kv-objects.patch`
+  （窗口下采样后块可用性检查；含 `null_block_id` 的不完整对象在持久化前
+  被拒绝，独立完整的组仍被存储），以及 `SOURCES.md`（固定基线提交 +
+  各 PR 源码修订 + SHA-256 校验和）。已确认 #6551 已合并入基线
+  （通过 `git merge-base --is-ancestor` 验证，无本地重复实现）。
+* `scripts/build-lmcache.sh`（新增）：在固定 vLLM 镜像内可重现地构建自定义
+  LMCache；验证基线修订与 #6551 祖先关系；确定性地应用两个补丁（无法应用
+  或已被意外应用时响亮失败）；运行 #4136 与 #5972 的聚焦上游回归测试；用
+  `--no-build-isolation` 针对固定 PyTorch 构建 wheel；将完整源码身份 +
+  wheel SHA-256 记录到 `live/lmcache-build/provenance.json`。
+* `scripts/build-image.sh`（新增）：从固定 vLLM digest 构建派生镜像，仅安装
+  自定义 LMCache wheel；逐位保留 vLLM/PyTorch/CUDA/Python；将最终 digest
+  与运行时身份写入 `live/image-identity.env`；此单一镜像同时服务共享 MP
+  缓存服务器与所有模型 worker。
+* `scripts/reset-persistent-cache.sh`（新增）：唯一的破坏性操作（一次性
+  迁移）。要求 `KVP_RESET_CONFIRM=FULL-RESET`；拒绝不安全路径（`/`、
+  home、模型、仓库、越界符号链接）；强制/验证先停止服务；写入
+  `live/cache-reset-report-<UTC>.txt`。绝不被 start/stop/restart 调用。
+* `docs/lmcache-build.{md,ru.md,zh.md}`（新增）：LMCache 构建身份、自定义
+  镜像部署、L1/L2 + 缓存身份 + STORE/RETRIEVE 诊断（「STORE_END 不是持久
+  写入的证据」）、安全缓存重置流程、缓存未命中诊断，以及在上游合并
+  PR #4136/#5972 后移除两个下游补丁的明确未来迁移流程。
+
 ### 第 80 轮审阅修复（诚实指标、状态漂移、生命周期）
 * `ask()` 指标由 `ttft_s` 更名为 `request_latency_s`（非流式探针测量的是完整
   请求延迟，而非首 token 时间——诚实命名）；

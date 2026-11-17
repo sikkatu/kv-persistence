@@ -1,0 +1,461 @@
+diff --git a/lmcache/integration/vllm/lmcache_mp_connector.py b/lmcache/integration/vllm/lmcache_mp_connector.py
+index d8fe2913..36bcd834 100644
+--- a/lmcache/integration/vllm/lmcache_mp_connector.py
++++ b/lmcache/integration/vllm/lmcache_mp_connector.py
+@@ -856,6 +856,7 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+                 if mamba_cache_mode == "align" and spec_config is not None
+                 else 0
+             )
++            self._aborted_retrieve_req_ids: set[str] = set()
+ 
+             # GPU block pool reference
+             self._gpu_block_pool: "BlockPool | None" = None
+@@ -1092,6 +1093,10 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+         metadata = self._get_connector_metadata()
+         assert isinstance(metadata, LMCacheMPConnectorMetadata)
+         self._delay_free_req_ids.update(metadata.delay_free_req_ids)
++        if not self.lazy_offload:
++            self.worker_adapter.mark_aborted_retrieves(
++                metadata.aborted_retrieve_req_ids
++            )
+ 
+         request_ids = []
+         ops = []
+@@ -1707,6 +1712,8 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+         metadata.need_flush_before_forward = _has_preemption_reqs(scheduler_output)
+         metadata.delay_free_req_ids = self._delay_free_req_ids
+         self._delay_free_req_ids = set()
++        metadata.aborted_retrieve_req_ids = self._aborted_retrieve_req_ids
++        self._aborted_retrieve_req_ids = set()
+ 
+         self._process_retrieve_requests(metadata)
+         self._process_new_requests(scheduler_output, metadata)
+@@ -1738,6 +1745,10 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+         # A request's stores are done once its workers report it sent.
+         for request_id in connector_output.finished_sending or ():
+             self._release_boundary_state_blocks(request_id)
++        for request_id in connector_output.finished_recving or ():
++            tracker = self.request_trackers.get(request_id)
++            if tracker is not None and tracker.state == LMCacheMPRequestState.LOADING:
++                tracker.state = LMCacheMPRequestState.READY
+ 
+         if not self.lazy_offload:
+             return
+@@ -1771,6 +1782,13 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+             returned by the engine.
+         """
+ 
++        tracker = self.request_trackers.get(request.request_id)
++        load_in_flight = (
++            tracker is not None and tracker.state == LMCacheMPRequestState.LOADING
++        )
++        if load_in_flight and not self.lazy_offload:
++            self._aborted_retrieve_req_ids.add(request.request_id)
++
+         params: dict[str, Any] | None = getattr(request, "kv_transfer_params", None)
+         return_params: dict[str, Any] | None = {} if params is not None else None
+ 
+@@ -1779,9 +1797,9 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+             and return_params is not None
+             and "cached_token_stats" in params
+         ):
+-            request_tracker = self._get_request_tracker(request.request_id)
+-            num_vllm = request_tracker.num_vllm_hit_tokens
+-            num_lmcache = request_tracker.num_lmcache_hit_tokens
++            assert tracker is not None
++            num_vllm = tracker.num_vllm_hit_tokens
++            num_lmcache = tracker.num_lmcache_hit_tokens
+             return_params["cached_token_stats"] = {
+                 "num_vllm_cached_tokens": num_vllm,
+                 "num_lmcache_cached_tokens": num_lmcache,
+@@ -1819,6 +1837,12 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+ 
+         # Notify LMCache to end the session for this request
+         self.scheduler_adapter.end_session(request.request_id)
++        if load_in_flight:
++            # The retrieve was still LOADING when the request finished
++            # (i.e. it was aborted, upstream PR #4136). The abort is reported
++            # via aborted_retrieve_req_ids and no store completion may ever be
++            # valid for this request, so never delay the free here.
++            return False, (return_params or None)
+         if delay_free:
+             self._delay_free_req_ids.add(request.request_id)
+         return delay_free, (return_params or None)
+@@ -1984,7 +2008,9 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+             )
+             if r_metadata is not None:
+                 metadata.add_request_metadata(r_metadata)
+-            request_tracker.state = LMCacheMPRequestState.READY
++                request_tracker.state = LMCacheMPRequestState.LOADING
++            else:
++                request_tracker.state = LMCacheMPRequestState.READY
+ 
+     def _process_new_requests(
+         self,
+@@ -2005,6 +2031,8 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+             if not self._can_store:
+                 continue
+ 
++            if request_tracker.state == LMCacheMPRequestState.LOADING:
++                continue
+             r_meta = LMCacheMPRequestMetadata.GetStoreMetadata(
+                 request_tracker,
+                 lmcache_tokens_per_chunk,
+@@ -2054,6 +2082,8 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
+             if not self._can_store:
+                 continue
+ 
++            if request_tracker.state == LMCacheMPRequestState.LOADING:
++                continue
+             r_meta = LMCacheMPRequestMetadata.GetStoreMetadata(
+                 request_tracker,
+                 lmcache_tokens_per_chunk,
+diff --git a/lmcache/integration/vllm/lmcache_mp_metadata.py b/lmcache/integration/vllm/lmcache_mp_metadata.py
+index 04d71963..b019effa 100644
+--- a/lmcache/integration/vllm/lmcache_mp_metadata.py
++++ b/lmcache/integration/vllm/lmcache_mp_metadata.py
+@@ -38,13 +38,15 @@ class LMCacheMPRequestState(enum.Enum):
+     """
+     State machine:
+     PREFETCHING -- update_state_after_alloc --> WAITING_FOR_LOAD
+-    WAITING_FOR_LOAD -- process_loading_requests --> READY
++    WAITING_FOR_LOAD -- process_loading_requests --> LOADING
++    LOADING -- finished_recving --> READY
+     READY -- failed async load --> BYPASS_LMCACHE
+     BYPASS_LMCACHE -- update_state_after_alloc --> READY
+     """
+ 
+     PREFETCHING = enum.auto()
+     WAITING_FOR_LOAD = enum.auto()
++    LOADING = enum.auto()
+     READY = enum.auto()
+     BYPASS_LMCACHE = enum.auto()
+ 
+@@ -646,6 +648,8 @@ class LMCacheMPConnectorMetadata(KVConnectorMetadata):
+         self.need_flush_before_forward: bool = False
+         # Requests whose request_finished returned True since the last step.
+         self.delay_free_req_ids: set[str] = set()
++        # Scheduler-confirmed aborted retrieve req ids, propagated to workers.
++        self.aborted_retrieve_req_ids: set[str] = set()
+ 
+     def add_request_metadata(self, request_metadata: LMCacheMPRequestMetadata):
+         self.requests.append(request_metadata)
+diff --git a/lmcache/integration/vllm/vllm_multi_process_adapter.py b/lmcache/integration/vllm/vllm_multi_process_adapter.py
+index 750ec207..ae74a006 100644
+--- a/lmcache/integration/vllm/vllm_multi_process_adapter.py
++++ b/lmcache/integration/vllm/vllm_multi_process_adapter.py
+@@ -1371,6 +1371,11 @@ class LMCacheMPWorkerAdapter:
+         # submit_retrieve_request. get_finished must still report each id
+         # exactly once, or async loads hang in WAITING_FOR_REMOTE_KVS.
+         self._dropped_retrieves: set[str] = set()
++        # Scheduler-confirmed aborts that occurred while a retrieve was in
++        # flight. This marker survives the window where a worker has already
++        # reported finished_recving and removed the retrieve future, but sees
++        # the engine-finished request ID in a later step.
++        self._aborted_retrieves: set[str] = set()
+ 
+         # The store requests that have finished execution in LMCache
+         self.finished_stores: set[str] = set()
+@@ -2056,6 +2061,21 @@ class LMCacheMPWorkerAdapter:
+         self._returned_finished.update(ret_stores)
+         return ret_stores
+ 
++    def mark_aborted_retrieves(self, request_ids: set[str]) -> None:
++        """Record scheduler-confirmed aborts of in-flight retrieves.
++
++        Args:
++            request_ids: Request IDs aborted while their retrieve was active.
++
++        Returns:
++            None.
++
++        Notes:
++            Markers persist across ``get_finished()`` calls until the matching
++            engine-finished notification is observed.
++        """
++        self._aborted_retrieves.update(request_ids)
++
+     @_lmcache_nvtx_annotate
+     def get_finished(
+         self, finished_req_ids_from_engine: set[str]
+@@ -2111,7 +2131,8 @@ class LMCacheMPWorkerAdapter:
+             finished_retrieves.update(dropped)
+ 
+             ret_stores = self._process_finished_stores(
+-                finished_stores, finished_req_ids_from_engine
++                finished_stores,
++                finished_req_ids_from_engine - self._aborted_retrieves,
+             )
+             # A request may have a pending retrieve AND appear in
+             # finished_req_ids_from_engine (it ran without loading KV after
+@@ -2119,6 +2140,9 @@ class LMCacheMPWorkerAdapter:
+             # first and deletes the request, so we must not also report it
+             # in finished_sending.
+             ret_stores -= finished_retrieves
++            handled_aborts = finished_req_ids_from_engine & self._aborted_retrieves
++            self._returned_finished.update(handled_aborts)
++            self._aborted_retrieves.difference_update(handled_aborts)
+             return ret_stores, finished_retrieves
+ 
+         finished_stores = set()
+@@ -2169,10 +2193,20 @@ class LMCacheMPWorkerAdapter:
+         self._dropped_retrieves = set()
+         finished_retrieves.update(dropped)
+ 
++        # An engine-finished request can still have a retrieve in flight after
++        # an abort. It has no store completion for the scheduler to wait on;
++        # reporting both directions would let recv free the request before
++        # the scheduler processes send.
++        retrieving_req_ids = set(self.retrieve_futures) | finished_retrieves
++
+         # Update the internal states
+         ret_stores = self._process_finished_stores(
+-            finished_stores, finished_req_ids_from_engine
++            finished_stores,
++            finished_req_ids_from_engine - retrieving_req_ids - self._aborted_retrieves,
+         )
++        handled_aborts = finished_req_ids_from_engine & self._aborted_retrieves
++        self._returned_finished.update(handled_aborts)
++        self._aborted_retrieves.difference_update(handled_aborts)
+ 
+         # the invocation of `get_finished` means that
+         # these requests' KV caches are already fully stored.
+diff --git a/tests/v1/test_lmcache_mp_connector.py b/tests/v1/test_lmcache_mp_connector.py
+new file mode 100644
+index 00000000..d729e202
+--- /dev/null
++++ b/tests/v1/test_lmcache_mp_connector.py
+@@ -0,0 +1,152 @@
++# SPDX-License-Identifier: Apache-2.0
++
++# Standard
++from types import SimpleNamespace
++from typing import cast
++from unittest.mock import MagicMock, patch
++
++# Third Party
++import pytest
++
++pytest.importorskip("vllm", reason="MP connector imports vLLM at module top")
++
++# Third Party
++from vllm.v1.outputs import KVConnectorOutput  # noqa: E402
++
++# First Party
++from lmcache.integration.vllm.lmcache_mp_connector import (  # noqa: E402
++    LMCacheMPConnector,
++)
++from lmcache.integration.vllm.lmcache_mp_metadata import (  # noqa: E402
++    LMCacheMPConnectorMetadata,
++    LMCacheMPRequestMetadata,
++    LMCacheMPRequestState,
++)
++
++
++def _make_scheduler_connector(
++    state: LMCacheMPRequestState,
++) -> tuple[LMCacheMPConnector, MagicMock]:
++    connector = LMCacheMPConnector.__new__(LMCacheMPConnector)
++    tracker = MagicMock()
++    tracker.state = state
++    connector.request_trackers = {"req": tracker}
++    connector._aborted_retrieve_req_ids = set()
++    connector.scheduler_adapter = MagicMock()
++    connector.scheduler_adapter.lmcache_tokens_per_chunk = 256
++    connector._group_tokens_per_block = [16]
++    connector.lazy_offload = False
++    return connector, tracker
++
++
++def test_retrieve_metadata_keeps_request_loading_until_completion() -> None:
++    connector, tracker = _make_scheduler_connector(
++        LMCacheMPRequestState.WAITING_FOR_LOAD
++    )
++    metadata = LMCacheMPConnectorMetadata()
++
++    with patch.object(
++        LMCacheMPRequestMetadata,
++        "GetRetrieveMetadata",
++        return_value=MagicMock(),
++    ):
++        connector._process_retrieve_requests(metadata)
++
++    assert tracker.state == LMCacheMPRequestState.LOADING
++
++    connector.update_connector_output(KVConnectorOutput(finished_recving={"req"}))
++
++    assert tracker.state == LMCacheMPRequestState.READY
++
++
++def test_loading_request_does_not_enqueue_store() -> None:
++    connector, tracker = _make_scheduler_connector(LMCacheMPRequestState.LOADING)
++    metadata = LMCacheMPConnectorMetadata()
++    scheduler_output = SimpleNamespace(
++        scheduled_new_reqs=[SimpleNamespace(req_id="req")],
++        num_scheduled_tokens={"req": 32},
++        total_num_scheduled_tokens=0,
++    )
++
++    connector._process_new_requests(scheduler_output, metadata)
++
++    tracker.increase_num_scheduled_tokens.assert_called_once_with(32)
++    assert len(metadata) == 0
++
++
++def test_loading_cached_request_does_not_enqueue_store() -> None:
++    connector, tracker = _make_scheduler_connector(LMCacheMPRequestState.LOADING)
++    metadata = LMCacheMPConnectorMetadata()
++    scheduler_output = SimpleNamespace(
++        scheduled_cached_reqs=SimpleNamespace(
++            req_ids=["req"],
++            new_block_ids=[[]],
++            resumed_req_ids=set(),
++        ),
++        num_scheduled_tokens={"req": 32},
++        total_num_scheduled_tokens=0,
++    )
++
++    connector._process_cached_requests(scheduler_output, metadata)
++
++    tracker.increase_num_scheduled_tokens.assert_called_once_with(32)
++    assert len(metadata) == 0
++
++
++def test_request_finished_during_load_does_not_wait_for_store() -> None:
++    connector, _tracker = _make_scheduler_connector(LMCacheMPRequestState.LOADING)
++    request = SimpleNamespace(request_id="req", kv_transfer_params=None)
++
++    delay_free, return_params = connector.request_finished(request, [])
++
++    assert delay_free is False
++    assert return_params is None
++    assert "req" not in connector.request_trackers
++    assert connector._aborted_retrieve_req_ids == {"req"}
++    cast(MagicMock, connector.scheduler_adapter).end_session.assert_called_once_with(
++        "req"
++    )
++
++
++def test_lazy_offload_abort_does_not_finish_nonexistent_store() -> None:
++    connector, _tracker = _make_scheduler_connector(LMCacheMPRequestState.LOADING)
++    connector.lazy_offload = True
++    connector._pending_store = MagicMock()
++    request = SimpleNamespace(request_id="req", kv_transfer_params=None)
++
++    delay_free, return_params = connector.request_finished(request, [])
++
++    assert delay_free is False
++    assert return_params is None
++    assert connector._aborted_retrieve_req_ids == set()
++    connector._pending_store.mark_req_finished.assert_not_called()
++
++
++def test_aborted_retrieve_marker_is_sent_once_in_metadata() -> None:
++    connector, _tracker = _make_scheduler_connector(LMCacheMPRequestState.LOADING)
++    connector._aborted_retrieve_req_ids.add("req")
++
++    with (
++        patch.object(connector, "_process_retrieve_requests"),
++        patch.object(connector, "_process_new_requests"),
++        patch.object(connector, "_process_cached_requests"),
++        patch.object(connector, "_report_block_allocation_deltas"),
++    ):
++        metadata = connector.build_connector_meta(SimpleNamespace())
++
++    assert metadata.aborted_retrieve_req_ids == {"req"}
++    assert connector._aborted_retrieve_req_ids == set()
++
++
++def test_worker_consumes_abort_marker_without_new_retrieve() -> None:
++    connector = LMCacheMPConnector.__new__(LMCacheMPConnector)
++    metadata = LMCacheMPConnectorMetadata()
++    metadata.aborted_retrieve_req_ids = {"req"}
++    connector._connector_metadata = metadata
++    connector.worker_adapter = MagicMock()
++    connector.lazy_offload = False
++
++    connector.start_load_kv(SimpleNamespace())
++
++    connector.worker_adapter.mark_aborted_retrieves.assert_called_once_with({"req"})
++    connector.worker_adapter.batched_submit_retrieve_requests.assert_not_called()
+diff --git a/tests/v1/test_vllm_mp_adapter.py b/tests/v1/test_vllm_mp_adapter.py
+index 1e0380c9..52571e66 100644
+--- a/tests/v1/test_vllm_mp_adapter.py
++++ b/tests/v1/test_vllm_mp_adapter.py
+@@ -1362,6 +1362,76 @@ def test_failed_full_retrieve_is_recomputed_instead_of_retried_remotely() -> Non
+     blocks.get_block_ids.return_value = ([7],)
+     connector.update_state_after_alloc(request, blocks, num_external_tokens=0)
+     assert tracker.state == LMCacheMPRequestState.READY
++def test_abort_during_pending_retrieve_does_not_report_store(fake_adapter) -> None:
++    adapter, _send_mock, _future = fake_adapter
++    retrieve_future = MagicMock(name="retrieve_future")
++    retrieve_future.query.return_value = False
++    adapter.retrieve_futures["req-1"] = (retrieve_future, [7])
++
++    finished_stores, finished_retrieves = adapter.get_finished({"req-1"})
++
++    assert finished_stores == set()
++    assert finished_retrieves == set()
++
++    finished_stores, finished_retrieves = adapter.get_finished({"req-1"})
++
++    assert finished_stores == set()
++    assert finished_retrieves == set()
++
++
++def test_abort_when_retrieve_finishes_reports_only_retrieve(fake_adapter) -> None:
++    adapter, _send_mock, _future = fake_adapter
++    retrieve_future = MagicMock(name="retrieve_future")
++    retrieve_future.query.return_value = True
++    retrieve_future.result.return_value = True
++    adapter.retrieve_futures["req-1"] = (retrieve_future, [7])
++
++    finished_stores, finished_retrieves = adapter.get_finished({"req-1"})
++
++    assert finished_stores == set()
++    assert finished_retrieves == {"req-1"}
++
++
++def test_abort_after_retrieve_completion_does_not_report_store(fake_adapter) -> None:
++    adapter, _send_mock, _future = fake_adapter
++    retrieve_future = MagicMock(name="retrieve_future")
++    retrieve_future.query.return_value = True
++    retrieve_future.result.return_value = True
++    adapter.retrieve_futures["req-1"] = (retrieve_future, [7])
++
++    finished_stores, finished_retrieves = adapter.get_finished(set())
++    assert finished_stores == set()
++    assert finished_retrieves == {"req-1"}
++
++    adapter.mark_aborted_retrieves({"req-1"})
++    finished_stores, finished_retrieves = adapter.get_finished({"req-1"})
++
++    assert finished_stores == set()
++    assert finished_retrieves == set()
++
++    finished_stores, finished_retrieves = adapter.get_finished({"req-1"})
++
++    assert finished_stores == set()
++    assert finished_retrieves == set()
++
++
++def test_unhealthy_worker_preserves_aborted_retrieve_suppression(
++    fake_adapter,
++) -> None:
++    adapter, _send_mock, _future = fake_adapter
++    adapter.mark_aborted_retrieves({"req-1"})
++    adapter._health_event.clear()
++
++    finished_stores, finished_retrieves = adapter.get_finished({"req-1"})
++
++    assert finished_stores == set()
++    assert finished_retrieves == set()
++
++    adapter._health_event.set()
++    finished_stores, finished_retrieves = adapter.get_finished({"req-1"})
++
++    assert finished_stores == set()
++    assert finished_retrieves == set()
+ 
+ 
+ def test_instance_id_is_uuid_derived_63_bit_int(fake_adapter) -> None:

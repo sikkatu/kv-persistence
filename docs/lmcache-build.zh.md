@@ -1,0 +1,118 @@
+# 自定义 LMCache 构建：补丁、构建、身份、重置、未来迁移
+
+本文档覆盖支撑共享 MP 缓存服务器与每个 vLLM 模型 worker 的自定义 LMCache
+部署。英文版见 `lmcache-build.md`；俄文版见 `lmcache-build.ru.md`。
+
+## 1. LMCache 构建身份
+
+| 项目 | 值 |
+| --- | --- |
+| 上游项目 | https://github.com/LMCache/LMCache |
+| 固定源码提交（基线） | `03ee5b82418b6bd44e424cdd46932d9346f43eb2` |
+| 基线发布标识 | `0.5.7.dev428`（2026-11-16 nightly） |
+| PR #6551 合并提交（已在基线内） | `61faa902a81462177d40d74f8c64bb9df02163c4` |
+| PR #4136 源码修订（补丁） | `b10588bd46288192e01ab06da3c3fa923ad0401a` |
+| PR #5972 源码修订（补丁） | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
+| 补丁目录 | `vendor/patches/lmcache/` |
+| 补丁细节与校验和 | `vendor/patches/lmcache/SOURCES.md` |
+
+可变的 `nightly` 标签从不用于生产；每次构建都检出精确基线提交。
+`scripts/build-lmcache.sh` 验证基线修订及 #6551 为其祖先，确定性地应用两个
+补丁（补丁无法应用或已被意外应用时响亮失败），运行 #4136 与 #5972 的聚焦
+上游回归测试，用 `--no-build-isolation` 针对镜像内已安装的 PyTorch 构建
+wheel，并将完整源码身份与 wheel SHA-256 写入
+`live/lmcache-build/provenance.json`。
+
+两个补丁都小、不共享任何文件、可独立移除：
+
+* `4136-mp-retrieve-abort.patch` — 仅 vLLM MP 集成层
+  （显式 `LOADING` retrieve 生命周期、调度器确认的中止传播、无效 store
+  完成抑制、中止 ID 去重）；
+* `5972-incomplete-kv-objects.patch` — 仅 MP 缓存引擎层
+  （窗口下采样后检查块可用性；保留几何中仍含 `null_block_id` 的不完整对象
+  在持久化前被拒绝；独立完整的组仍被存储）。
+
+## 2. 部署
+
+`scripts/build-image.sh` 从固定 vLLM 镜像 digest
+（`vllm/vllm-openai:nightly-8e2beaa3...@sha256:167ccd86...`，CUDA 13.0.2，
+PyTorch 2.14.0+cu130，Python 3.12）构建**派生镜像**，且只安装一个额外包：
+自定义 LMCache wheel。vLLM、PyTorch、CUDA 与 Python 保持不变。最终镜像身份
+写入 `live/image-identity.env`，以下组件必须使用它：
+
+* 共享 MP 缓存服务器（`scripts/start-cache.sh`）；
+* 每个 vLLM 模型 worker（recipes 启动器）。
+
+若 worker 与 MP 服务器的 LMCache 构建身份不一致，启动必须失败。
+预检身份门禁（`verify-engine-identity.sh`、`_kvp_pre_flights`）在任何模型
+加载前执行。
+
+连接器选择：部署的 vLLM 版本要求通过 `--kv-transfer-config` **显式**选择
+外部 `LMCacheMPConnector`（不要依赖自动检测）。
+
+## 3. 持久缓存：L1/L2、身份、诊断
+
+* L1 = 主机 DRAM（`LMCACHE_L1_SIZE_GB=64`；请在 `lmcache-server.log` 中
+  核实服务器的实际选项——不要假设环境变量被消费）。
+* L2 = NVMe 持久层（默认 `KVP_CACHE_ROOT=/var/lib/kv-persistence/l2`；
+  必须是本地 NVMe 路径）。
+* 编解码器仅限无损：`zstd`（默认）、`lz4`、`none`。
+* 缓存身份（namespace、模型标识、KV dtype `bfloat16`、缓存格式、
+  object-group 配置、后端标识）在每个 worker 的预检中核验；任何不一致都
+  会终止启动。
+
+**`STORE_END` 事件不是持久写入的证据。** STORE/RETRIEVE 诊断区分：
+store 已请求 → worker/适配器完成 → 对象被 L2 接受 → L2 写入成功/失败 →
+持久化的对象/字节数；retrieve 已请求 → 完成 / 中止 / 从 L2 预取 / 无效对象
+被拒绝。实际持久化证据是 `lmcache-server.log` 中的
+「L2 store completed」/「L2 prefetch load completed」行。
+
+## 4. 安全的全缓存重置（一次性迁移）
+
+`scripts/reset-persistent-cache.sh` 是**唯一**的破坏性操作，绝不被
+start/stop/restart 调用：
+
+```
+KVP_RESET_CONFIRM=FULL-RESET bash scripts/reset-persistent-cache.sh
+```
+
+要求：显式确认字符串；先停止服务（或 `KVP_RESET_FORCE_STOP=1`）；每个目标
+都解析到已配置的缓存根内；拒绝 `/`、home 目录、模型目录、仓库、构建产物
+和越界符号链接。重置报告（清除路径及字节数、无关数据保全确认）写入
+`live/cache-reset-report-<UTC>.txt`。
+
+绝不删除：模型权重、模型配置、应用数据、recipes、源代码、LMCache 构建
+产物、诊断日志、NVMe 上的无关文件或 NVMe 挂载点本身。
+
+## 5. 缓存未命中 / 故障诊断
+
+* 持久 round-trip 检查：`scripts/test-recovery.sh`——冷基线写入 L2，仅重启
+  引擎从 L1 恢复，完整重启（引擎 + 缓存服务器）必须显示 L2 读取事件和非零
+  `cached_tokens`。成功生成不是缓存命中的证据；请核对 cached tokens 与
+  L2 事件。
+* 不完整对象拒绝：日志中带「invalid object」的 STORE 跳过意味着 #5972
+  拒绝了保留几何中含空块的对象；这些对象此后永远不会表现为缓存命中。
+* 后端故障：L2 写入失败始终报告为失败——引擎绝不悄悄报告为已持久化。
+* `KVP_LOAD_FAILURE_POLICY` 仍为实验性（默认 `fail`）。旧的 C2 保护配对
+  警告已过时：retrieve/abort 竞态已在自定义构建内修复（PR #4136），不存在
+  可能冲突的本地保护。
+
+## 6. 未来上游迁移（#4136 与 #5972 合并后）
+
+计划中的后续操作，不属于当前部署。当两个 PR 都已合并入上游：
+
+1. 检查上游合并提交；选择包含 #6551、#4136 与 #5972 的新固定 LMCache
+   源码提交或官方发布（在 Git 历史和源码中验证——新发布不自动包含它们）。
+2. 删除 `vendor/patches/lmcache/4136-mp-retrieve-abort.patch`。
+3. 删除 `vendor/patches/lmcache/5972-incomplete-kv-objects.patch`。
+4. 从 `scripts/build-lmcache.sh` 移除其应用条目，从 `SOURCES.md` /
+   `provenance.json` 移除其源码修订行。
+5. 删除已被上游复制的临时下游补丁专属测试；保留项目级集成测试。
+6. 更新本文档与三个 README，不再把 #4136/#5972 描述为下游补丁。
+7. 针对同一固定 vLLM 运行时构建新 LMCache；验证 MP 服务器与每个 worker
+   报告同一新构建身份。
+8. 运行完整回归套件并重复硬件验证（完整重启后的持久 STORE/RETRIEVE、
+   取消压力测试、L1 压力下的 LRU 行为），然后才退役当前构建。
+
+在替换构建通过此验证之前，不得删除当前自定义构建或其补丁。迁移完成后，
+项目仓库中不得残留任何手动复制的 #4136/#5972 实现。

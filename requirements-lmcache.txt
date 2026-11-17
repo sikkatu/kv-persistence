@@ -1,59 +1,30 @@
-# requirements-lmcache.txt -- pinned runtime for the lmcache cache service.
+# requirements-lmcache.txt -- runtime source of truth for the LMCache service.
 #
-# Why pinned: the project depends on the MP-connector protocol and on the
-# nixl_store_dynamic L2 adapter's persist/recover behaviour. An unpinned
-# `pip install lmcache` may resolve to a release that changed either one --
-# the review explicitly demanded reproducible installs with a documented
-# compatible combination.
+# Since the custom LMCache integration (see docs/lmcache-build.md), the PRODUCTION
+# cache server runs INSIDE the custom derivative image (KVP_LAUNCH_MODE=docker in
+# scripts/start-cache.sh). The image already carries the exact custom LMCache
+# build (base 0.5.7.dev428 / commit 03ee5b82418b6bd44e424cdd46932d9346f43eb2
+# plus downstream patches for upstream PR #4136 and #5972), compiled against the
+# pinned PyTorch/CUDA/Python of the pinned vLLM runtime. The MP server and every
+# model worker MUST run this same image build -- startup fails on any identity
+# mismatch.
 #
-# Verified combination (update ONLY with a hardware-tested run):
-#   vLLM image: vllm/vllm-openai:nightly-8e2beaa3bff...@sha256:167ccd86...
-#               commit 8e2beaa3bff595577a069d49d96bde9074294ec2 (2026-10-21)
-#   lmcache:    0.5.6   (pin below -- matches the vLLM image)
-#   python:     3.12+ (host venv verified on 3.13.15; the production
-#               image itself ships 3.12 -- the venv just needs 3.12+)
+# The host-venv install (pip install -r requirements-lmcache.txt) remains only
+# for diagnostics and development probes (kv mp_ping / ipc-test). It must match
+# the SAME LMCache version as the image or the MP protocol breaks silently
+# (historical incident: host 0.5.3 vs image 0.5.6 -> register_kv_caches
+# timeouts). To install the identical build on the host:
 #
-# The exact wheel variant must match the image's PyTorch/CUDA ABI.
-# If imports fail (undefined symbols), do not upgrade blindly: the fallback is
-# to run `lmcache server` from the production image itself (see
-# docs/troubleshooting.md). Status of the pin until the hardware acceptance run
-# completes: NEEDS TESTING -- labelled honestly in docs/final-report.md.
-
-lmcache==0.5.6
-
-# The lmcache CLI imports `openai` while REGISTERING its bench subcommands
-# (lmcache/cli/commands/bench/engine_bench/config.py -> `from openai import
-# OpenAI`) -- this happens at CLI startup, so even `lmcache server` dies with
-# `ModuleNotFoundError: No module named 'openai'` without it (real deployment
-# report). It is a CLI-wide dependency of lmcache 0.5.6, not just of the
-# benchmark, so it is pinned here. Install this file into the SAME venv that
-# provides the `lmcache` command.
-# Range pin (not a single version): `openai` is a pure client library with a
-# stable 1.x surface; the CLI only needs the `OpenAI` class to exist.
-openai>=1.40,<2
-
-# The nixl_store_dynamic L2 adapter imports the top-level `nixl` module at
-# runtime (lmcache/v1/distributed/l2_adapters/nixl_store_dynamic_l2_adapter.py).
-# Note: the pip extra `lmcache[nixl]` exists upstream and would satisfy this
-# dependency; installing nixl explicitly here keeps the pin visible and
-# reproducible regardless of how lmcache was installed. Without nixl at import
-# time the server refuses to start with `ModuleNotFoundError: No module named
-# 'nixl'`, so it is pinned here too.
-# PINNED to the exact version the integration tests ran against (1.5.2) for a
-# reproducible deploy: `nixl` ships its own C/transport backends whose ABI has
-# changed between minors. Verified-compatible range observed so far: 1.3.x
-# (adapter's minimum) through 1.5.2 (tested). Do NOT widen without replaying
-# tests/integration/test_l2_persistence.py on the target host.
-nixl==1.5.2
-
-# Lossless L2 compression codecs, used ONLY when the operator selects
-# LMCACHE_L2_SERDE=zstd|lz4 (or USE_LOSSLESS_SERDE=1). With the default
-# LMCACHE_L2_SERDE=none NEITHER package is needed -- the cache starts and runs
-# without them (a startup check requires exactly the SELECTED codec, never an
-# unused one). zstandard is the preferred codec (better ratio); lz4 is the
-# faster alternative. Both are pure additions -- removing them only disables
-# the corresponding codec, it never breaks the default path.
-#   LMCACHE_L2_SERDE=zstd -> needs zstandard only
-#   LMCACHE_L2_SERDE=lz4  -> needs lz4 only
-zstandard>=0.22,<1
-lz4>=4.3,<5
+#   pip install --no-deps /path/to/lmcache-<version>-*.whl
+#
+# where the wheel comes from live/lmcache-build/wheels/ produced by
+# scripts/build-lmcache.sh. Do NOT install a PyPI lmcache here: it will not
+# carry the two downstream patches.
+#
+# Runtime dependencies for such probes (versions are informational; the pinned
+# image is authoritative in production):
+#   lmcache  == the custom wheel built by scripts/build-lmcache.sh
+#   openai   >= 1.0            (probe client)
+#   zstandard>= 0.22           (lossless codec used in L2, KVP_L2_SERDE=zstd)
+#   lz4      >= 4.3            (alternative lossless codec)
+#   pyzmq    >= 25.0           (MP RPC channel to the cache server)

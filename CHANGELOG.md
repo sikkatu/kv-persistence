@@ -8,7 +8,45 @@ Language versions: **English** | [Русский](CHANGELOG.ru.md) | [中文](CH
 
 ## Unreleased
 
-Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **LMCache 0.5.6** (`requirements-lmcache.txt`).
+Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
+(base `0.5.7.dev428` = `03ee5b82418b6bd44e424cdd46932d9346f43eb2`,
+downstream patches for upstream PRs #4136 and #5972, see
+`docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
+custom build. `requirements-lmcache.txt` now points at the derived image.
+
+### LMCache integration: two required upstream fixes + cache reset
+* `vendor/patches/lmcache/` created: `4136-mp-retrieve-abort.patch` (retrieve/
+  abort race: explicit `LOADING` lifecycle, scheduler-confirmed abort
+  propagation to workers, invalid store-completion suppression, abort
+  dedup), `5972-incomplete-kv-objects.patch` (post-downsampling block
+  availability check; incomplete objects with a `null_block_id` are rejected
+  before persistence, independently complete groups still stored), and
+  `SOURCES.md` with pinned base commit + per-PR source revisions and SHA-256
+  checksums. PR #6551 confirmed already merged in the base (verified by
+  `git merge-base --is-ancestor`, no local duplicate).
+* `scripts/build-lmcache.sh` (new): reproducible custom LMCache build inside
+  the pinned vLLM image; verifies base revision and #6551 ancestry; applies
+  both patches deterministically (fails loudly if a patch does not apply or is
+  already applied); runs focused upstream regression suites for #4136 and
+  #5972; builds the wheel with `--no-build-isolation` against the pinned
+  PyTorch; records full source identity + wheel SHA-256 in
+  `live/lmcache-build/provenance.json`.
+* `scripts/build-image.sh` (new): builds the custom derivative image from the
+  pinned vLLM digest, installing exactly the custom LMCache wheel; preserves
+  vLLM/PyTorch/CUDA/Python bit-for-bit; writes `live/image-identity.env` with
+  the resulting digest + runtime identity; this single image serves the shared
+  MP cache server AND every model worker.
+* `scripts/reset-persistent-cache.sh` (new): the ONLY destructive operation
+  (one-time migration). Requires `KVP_RESET_CONFIRM=FULL-RESET`; refuses
+  unsafe paths (`/`, homes, models, repos, escaping symlinks); forces/verifies
+  services stopped first; writes `live/cache-reset-report-<UTC>.txt`. Never
+  called by start/stop/restart.
+* `docs/lmcache-build.{md,ru.md,zh.md}` (new): LMCache build identity, custom
+  image deployment, L1/L2 + cache identity + STORE/RETRIEVE diagnostics
+  ("STORE_END is not proof of a persistent write"), safe cache-reset
+  procedure, cache-miss diagnosis, and the explicit future migration procedure
+  to remove the two downstream patches when PR #4136/#5972 merge upstream.
+
 ### Round 80 review fixes (honest metrics, state drift, lifecycle)
 * `ask()` metric renamed `ttft_s` -> `request_latency_s` (the non-stream probe
   measures the FULL request latency, not Time-To-First-Token -- honest name);
