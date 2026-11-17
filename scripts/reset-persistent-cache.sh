@@ -68,7 +68,11 @@ _add_candidate() { # _add_candidate <path> <source>
 _add_candidate "${KVP_CACHE_ROOT:-}" "KVP_CACHE_ROOT (cache.env / env)"
 _add_candidate "${LMCACHE_L2_PATH:-}" "LMCACHE_L2_PATH (lmcache-server.env)"
 _add_candidate "${LMCACHE_ROOT:-}" "LMCACHE_ROOT (env)"
-for f in "$ROOT/live/cache_root" "$ROOT/live/l2_path"; do
+# live/markers and kv-persist launcher record the effective cache dir (r3 P1-2
+# point 4: honors KVP_LIVE_DIR so test runs stage records in tmp, never the
+# repo's live/).
+_LIVE_RECORDS="${KVP_LIVE_DIR:-$ROOT/live}"
+for f in "$_LIVE_RECORDS/cache_root" "$_LIVE_RECORDS/l2_path"; do
   [ -f "$f" ] && _add_candidate "$(head -n1 "$f" | tr -d '[:space:]')" "record $(basename "$f")"
 done
 TARGETS=()
@@ -94,26 +98,25 @@ safe_target() { # safe_target <path> -> 0 accepted / 1 refused
   [ -n "$p" ] || return 1
   real="$(readlink -f "$p" 2>/dev/null)" || return 1
   [ -n "$real" ] || return 1
-  case "$real" in
-    /|/home|/home/*|/root|/root/*|/mnt|/mnt/*|/usr|/etc|/opt|/tmp|/proc|/sys|/dev) return 1 ;;
-    /var) return 1 ;;
-    /home/*/*|/root/*/*) case "$real" in
-        */models|*/models/*|*/recipes|*/recipes/*|*/sikkatu-recipes|*/kv-persistence|*/kv-persistence/*|*/sikkatu/*) return 1 ;;
-        *) : ;;
-      esac ;;
-  esac
-  [ -e "$real/.git" ] && return 1
-  case "$real" in */models|*/models/*) return 1 ;; esac
-  # The candidate must live under a CONFIRMED cache root. NOTE (r2 P0-3):
-  # KVP_CACHE_ROOT may itself be a SYMLINK (legacy deployments pointed at the
-  # NVMe dir through a link) -- compare RESOLVED paths, never raw strings.
+
+  # r3 P1-2 point 1: judge the EXPLICITLY-CONFIGURED cache root BEFORE blanket
+  # subtree refusals. A real NVMe commonly mounts as /mnt/<device>/<dir> and a
+  # user's cache may live under $HOME/<dir> -- as long as the path IS the
+  # operator-pinned KVP_CACHE_ROOT (or a marked cache root's subdir), it is a
+  # CONFIRMED cache root by definition and must NOT be lumped in with bare
+  # /mnt or bare /home (which stay refused below).
   root=""
   for _cfg_root in "${KVP_CACHE_ROOT:-}" "${LMCACHE_L2_PATH:-}" "${LMCACHE_ROOT:-}"; do
     [ -n "$_cfg_root" ] || continue
     local _cfg_resolved
     _cfg_resolved="$(readlink -f "$_cfg_root" 2>/dev/null || echo "$_cfg_root")"
+    # r3 P1-2 point 2: strict '/' boundary so root .../l2 does NOT also swallow
+    # sibling .../l2-old.
+    if [ "$real" = "$_cfg_resolved" ] || [ "$real" = "$_cfg_root" ]; then
+      root="$_cfg_root"; break
+    fi
     case "$real" in
-      "$_cfg_resolved"*|"$_cfg_root"*) root="$_cfg_root"; break ;;
+      "$_cfg_resolved"/*|"$_cfg_root"/*) root="$_cfg_root"; break ;;
     esac
   done
   if [ -z "$root" ] && [ -e "$real/.kvp-cache-root-marker" ]; then root="$real"; fi
@@ -122,14 +125,44 @@ safe_target() { # safe_target <path> -> 0 accepted / 1 refused
     up="$(dirname "$real")"
     [ -e "$up/.kvp-cache-root-marker" ] && root="$up"
   fi
+
+  # Rule out genuinely dangerous exact paths outright -- these stay refused even
+  # when explicitly configured as the cache root (bare /mnt, bare /home, ...).
+  # KVP_TEST_DANGER_ROOTS extra colon-separated list (simulation aid; tests stage
+  # .mount-like tmp dirs and assert "bare root" refusals against them).
+  case "$real" in
+    /|/home|/root|/mnt|/usr|/etc|/opt|/tmp|/proc|/sys|/dev|/var) return 1 ;;
+  esac
+  if [ -n "${KVP_TEST_DANGER_ROOTS:-}" ]; then
+    IFS=':' read -r -a _danger_arr <<< "$KVP_TEST_DANGER_ROOTS"
+    for _d in "${_danger_arr[@]}"; do
+      [ -n "$_d" ] || continue
+      local _d_resolved
+      _d_resolved="$(readlink -f "$_d" 2>/dev/null || echo "$_d")"
+      if [ "$real" = "$_d_resolved" ] || [ "$real" = "$_d" ]; then
+        return 1   # treat exactly this dangerous env-listed root as refused
+      fi
+    done
+  fi
+  # Repos (source trees) and model dirs are NEVER cache artifacts.
+  [ -e "$real/.git" ] && return 1
+  case "$real" in */models|*/models/*|*/models/*/*) return 1 ;; esac
+
   [ -n "$root" ] || return 1
-  # symlink escape: every broken-out prefix must stay inside root's resolved path
+
+  # symlink escape: every broken-out prefix must stay inside root's resolved
+  # path, again with a strict '/' boundary (r3 P1-2 point 2).
   rroot="$(readlink -f "$root")"
   probe="$p"
   while [ -n "$probe" ] && [ "$probe" != "/" ]; do
     if [ -L "$probe" ]; then
       abs="$(readlink -f "$probe")" || return 1
-      case "$abs" in "$rroot"*|"$root"*) : ;; *) return 1 ;; esac
+      if [ "$abs" != "$rroot" ] && [ "$abs" != "$root" ]; then
+        case "$abs" in
+          "$rroot"/*|"$root"/*) : ;;
+          *) return 1 ;;
+        esac
+      fi
     fi
     probe="$(dirname "$probe")"
   done
@@ -164,7 +197,9 @@ done
 [ "${#FINAL[@]}" -gt 0 ] || die "no safe cache target to clear"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-LIVE="$ROOT/live"
+# r3 P1-2 point 4: LIVE is overridable (KVP_LIVE_DIR) so test runs stage
+# reports/cache-archives in tmp instead of littering the repo's live/.
+LIVE="${KVP_LIVE_DIR:-$ROOT/live}"
 mkdir -p "$LIVE"
 REPORT="$LIVE/cache-reset-report-$STAMP.txt"
 
