@@ -121,6 +121,10 @@ def test_gate_script_contains_identity_check():
 
 
 def test_build_image_bakes_identity_file():
+    """STATIC (supplementary) check -- sitting next to the behavioural
+    test_build_image_runs.py, which actually RUNS build-image.sh. A grep of the
+    script text alone does not prove the script works (r3 P0-1 point 4:
+    reorder/typo bugs only show up at run time)."""
     src = (ROOT / "scripts" / "build-image.sh").read_text()
     assert "kvp-lmcache-identity.json" in src, (
         "build-image.sh must bake the identity file into the image"

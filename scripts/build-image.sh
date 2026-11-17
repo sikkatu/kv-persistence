@@ -26,19 +26,21 @@ note() { echo "[build-image] $*"; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
-BUILD_INFO="$ROOT/live/lmcache-build/provenance.json"
-WHEEL_DIR="$ROOT/live/lmcache-build/wheels"
+# r3: KVP_BUILD_DIR/KVP_IDENTITY_OUT let tests stage artifacts in a tmp dir
+# (no writing into the repo's live/ from unit tests); production defaults keep
+# the documented live/lmcache-build locations.
+BUILD_DIR="${KVP_BUILD_DIR:-$ROOT/live/lmcache-build}"
+BUILD_INFO="$BUILD_DIR/provenance.json"
+WHEEL_DIR="$BUILD_DIR/wheels"
 PATCH_DIR="${KVP_PATCH_DIR:-$ROOT/vendor/patches/lmcache}"
 [ -d "$PATCH_DIR" ] || die "patch dir not found: $PATCH_DIR"
-[ -f "$BUILD_INFO" ] || die "provenance.json not found -- run scripts/build-lmcache.sh first"
+[ -f "$BUILD_INFO" ] || die "provenance.json not found ($BUILD_INFO) -- run scripts/build-lmcache.sh first"
 WHEEL="$(find "$WHEEL_DIR" -name '*.whl' | head -1)"
 [ -n "$WHEEL" ] || die "no wheel in $WHEEL_DIR -- run scripts/build-lmcache.sh first"
-
 BASE_IMAGE="${IMAGE:-${KVP_LMC_IMAGE:-}}"
 [ -n "$BASE_IMAGE" ] || die "IMAGE (pinned vLLM image) is not set -- export IMAGE=<pinned vLLM image>@sha256:... before building"
-
 OUT_IMAGE="${KVP_OUT_IMAGE:-kvp-lmcache:latest}"
-IDENTITY="$ROOT/live/image-identity.env"
+IDENTITY="${KVP_IDENTITY_OUT:-$ROOT/live/image-identity.env}"
 
 note "base image : $BASE_IMAGE"
 note "wheel      : $WHEEL"
@@ -50,6 +52,14 @@ TMPD="$(mktemp -d /tmp/kvp-image.XXXXXX)"
 trap 'rm -rf "$TMPD"' EXIT
 
 cp "$WHEEL" "$TMPD/"
+
+# r3 P0-1 fix: compute these BEFORE the Dockerfile/identity heredocs expand
+# $PR4136_SHA/$PR5972_SHA/$WHEEL_SHA_ID -- under `set -u` a heredoc referencing
+# an unassigned var aborts the whole script with 'unbound variable' on first
+# run. Must stay above every use of these three names.
+PR4136_SHA="$(sha256sum "$PATCH_DIR/4136-mp-retrieve-abort.patch" | awk '{print $1}')"
+PR5972_SHA="$(sha256sum "$PATCH_DIR/5972-incomplete-kv-objects.patch" | awk '{print $1}')"
+WHEEL_SHA_ID="$(sha256sum "$WHEEL" | awk '{print $1}')"
 
 cat > "$TMPD/Dockerfile" <<EOF
 # Custom derivative of the pinned vLLM runtime.
@@ -69,9 +79,6 @@ EOF
 # r2 P1-2: bake the build identity INTO the image (local scheme = no local
 # version, so wheel version alone cannot tell our build from upstream nightly).
 # verify-engine-identity.sh consults this file for server AND every worker.
-PR4136_SHA="$(sha256sum "$PATCH_DIR/4136-mp-retrieve-abort.patch" | awk '{print $1}')"
-PR5972_SHA="$(sha256sum "$PATCH_DIR/5972-incomplete-kv-objects.patch" | awk '{print $1}')"
-WHEEL_SHA_ID="$(sha256sum "$WHEEL" | awk '{print $1}')"
 cat > "$TMPD/kvp-lmcache-identity.json" <<EOF
 {
   "module": "kvp-custom-lmcache-identity",
