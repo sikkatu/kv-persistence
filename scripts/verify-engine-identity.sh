@@ -576,8 +576,12 @@ PYEOF
 # The MP cache server and EVERY worker must carry the SAME file, and it must
 # match the patches in THIS repo's vendor/patches/lmcache/. Any mismatch is a
 # hard MISMATCH (exit 4): the deployment must not split caches across builds.
+# Test-harness opt-out (r2): KVP_SKIP_LMC_IDENTITY=1 skips this one check (the
+# identity-gate unit tests run a stubbed container with no real image), exactly
+# like KVP_SKIP_IMAGE_CHECK=1 skips the launch-time image check. Production
+# runs must NOT set either.
 # ---------------------------------------------------------------------------
-if [ "$CHECK_CONFIG_ONLY" = 0 ]; then
+if [ "$CHECK_CONFIG_ONLY" = 0 ] && [ "${KVP_SKIP_LMC_IDENTITY:-0}" != "1" ]; then
   _ident_file="/etc/kvp-lmcache-identity.json"
   _ident_json="$(docker exec "$CONTAINER" cat "$_ident_file" 2>/dev/null || true)"
   if [ -z "$_ident_json" ]; then

@@ -8,15 +8,17 @@ If `promtool` is not on PATH the tests skip loudly with a reason (per spec
 documented example for the operator stand.
 """
 from __future__ import annotations
-
 import shutil
 import subprocess
 from pathlib import Path
-
 import pytest
-
 KV = Path(__file__).resolve().parents[2]
 RULES = KV / "observability" / "extras" / "rules.d"
+# r2 fix (pre-existing r89d defect): the docker fallback referenced an
+# undefined PROM_IMAGE name (NameError at fixture use). Pin the exact image
+# used on the operator stand -- floating tags are banned by the project rules.
+PROM_TOOL_IMAGE = "prom/prometheus:v3.15.1"
+
 
 # Synthetic series + expected results (hand-computed).
 # Power: two DCGM series (30 + 100 W) -> max over the single `gpu` label group
@@ -178,7 +180,7 @@ def promtool():
             mapped = [a.replace(str(cwd), "/work") for a in args]
             return subprocess.run(
                 ["docker", "run", "--rm", "--entrypoint", "promtool",
-                 "-v", f"{cwd}:/work:ro", PROM_IMAGE, *mapped],
+                 "-v", f"{cwd}:/work:ro", PROM_TOOL_IMAGE, *mapped],
                 capture_output=True, text=True, timeout=180)
         return _run
 

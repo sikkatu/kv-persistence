@@ -94,6 +94,10 @@ def test_bare_gate_keeps_identity_pins(tmp_path):
             # Round 48: explicit raw mode (matches the "{}" raw adapter)
             USE_LOSSLESS_SERDE="0",
             MODEL_DIR=str(model_dir),
+            # r2 P1-2: stub container has no /etc/kvp-lmcache-identity.json and
+            # no real image -- skip the r2 add-on gate (covered by
+            # tests/unit/test_lmc_identity.py). Production runs never set this.
+            KVP_SKIP_LMC_IDENTITY="1",
         )
         for k in ("KVP_TP_SIZE", "TP_SIZE", "KVP_KV_CACHE_DTYPE", "KV_CACHE_DTYPE",
                   "KVP_MAX_MODEL_LEN", "MAX_MODEL_LEN", "KVP_SERVED_MODEL_NAME",

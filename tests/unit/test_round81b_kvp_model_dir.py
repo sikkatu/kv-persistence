@@ -100,6 +100,11 @@ def _fixture(tmp_path):
     env["KVP_SKIP_GPU_CHECK"] = "1"
     env["KVP_SKIP_IPC_TEST"] = "1"
     env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
+    # r2 P0-1: fake checkout has no verify-image-custom.sh, stub image has no
+    # custom labels -- the r2 image/identity checks are asserted in their own
+    # tests (test_check_image_identity.py / test_lmc_identity.py).
+    env["KVP_SKIP_IMAGE_CHECK"] = "1"
+    env["KVP_SKIP_LMC_IDENTITY"] = "1"
     env["WAIT_TRIES"] = "1"
     env["WAIT_SLEEP"] = "0"
     env["LMCACHE_HOST"] = "127.0.0.1"

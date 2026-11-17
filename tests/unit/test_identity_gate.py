@@ -181,6 +181,12 @@ def _stub_env(tmp_path):
     (cache_root / "l2-adapter.rendered.json").write_text("{}")
     env["KVP_CACHE_ROOT"] = str(cache_root)
     env["USE_LOSSLESS_SERDE"] = "0"
+    # r2: stub containers have no custom-LMCache identity file / no real image,
+    # so opt out of the two r2 add-on checks (they are asserted independently in
+    # tests/unit/test_lmc_identity.py + test_check_image_identity.py). Production
+    # runs must NOT set either.
+    env["KVP_SKIP_LMC_IDENTITY"] = "1"
+    env["KVP_SKIP_IMAGE_CHECK"] = "1"
     return env
 
 
