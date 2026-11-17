@@ -36,6 +36,16 @@ REQUIRED_LABELS = (LABEL_BASE, LABEL_4136, LABEL_5972)
 
 ID_RE = re.compile(r"^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$")
 
+# r3 P1-3: deep verification runs normal sub-processes inside the image read
+# only (no GPU, no model load) -- reading the baked identity file and probing
+# the compiled cuda_ops extension. LABELs alone are forgeable with one line.
+IDENT_JSON_PATH = "/etc/kvp-lmcache-identity.json"
+CUDA_OPS_PROBE = (
+    "import importlib.util as u, sys; "
+    "spec = u.find_spec('lmcache.cuda_ops'); "
+    "sys.exit(0 if spec else 1)"
+)
+
 
 def is_pinned_image_spec(image: str) -> tuple[bool, str]:
     """Validate the IMAGE pin format.
@@ -71,14 +81,48 @@ def read_image_labels(image: str) -> dict | None:
         return None
 
 
+def read_identity_json(image: str) -> dict | None:
+    """Dump /etc/kvp-lmcache-identity.json from inside the image (read-only,
+    no GPU, no model). Returns parsed dict, or None if unreadable/invalid."""
+    try:
+        out = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "cat", image, IDENT_JSON_PATH],
+            capture_output=True, text=True, timeout=30,
+        )
+        if out.returncode != 0:
+            return None
+        obj = json.loads(out.stdout.strip() or "null")
+        return obj if isinstance(obj, dict) else None
+    except (OSError, json.JSONDecodeError, subprocess.TimeoutExpired):
+        return None
+
+
+def probe_cuda_ops(image: str) -> bool | None:
+    """Probe find_spec('lmcache.cuda_ops') inside the image. True/False on a
+    completed run, None when the probe itself could not run."""
+    try:
+        out = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "python3", image, "-c",
+             CUDA_OPS_PROBE],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.returncode == 0
+
+
 def verify_custom_image(image: str, patch_dir: pathlib.Path,
-                        expect_base: str | None = None) -> tuple[bool, list[str]]:
+                        expect_base: str | None = None,
+                        deep: bool = False) -> tuple[bool, list[str]]:
     """Check <image> carries the custom LMCache identity labels matching the repo.
 
     Args:
         image: the IMAGE spec that is about to be launched.
         patch_dir: repo directory holding the two downstream patch files.
         expect_base: optional base image string the label must match.
+        deep: run the additional no-GPU checks inside the image (r3 P1-3) --
+            read the baked /etc/kvp-lmcache-identity.json and probe
+            find_spec('lmcache.cuda_ops'). A LABEL alone is forgeable.
 
     Returns:
         (ok, messages). ok==False means the image must NOT be launched.
@@ -129,7 +173,48 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
         )
         ok = False
 
-    return ok, msgs
+    if not ok:
+        return ok, msgs
+
+    # ---- r3 P1-3 deep: prove the wheel is really baked in, not just labeled.
+    if not deep:
+        return True, msgs
+
+    ident = read_identity_json(image)
+    if ident is None:
+        return False, [
+            f"image '{image}': cannot read {IDENT_JSON_PATH} from inside -- the "
+            "identity file is missing or unreadable. The LABELs alone do NOT prove "
+            "our wheel is baked in (any derivative can forge a LABEL). Build with "
+            "scripts/build-image.sh."
+        ]
+    for key in ("pr4136_patch_sha256", "pr5972_patch_sha256", "wheel_sha256"):
+        if not ident.get(key):
+            return False, [f"{IDENT_JSON_PATH} is missing key {key}"]
+    for key, fname in (("pr4136_patch_sha256", "4136-mp-retrieve-abort.patch"),
+                       ("pr5972_patch_sha256", "5972-incomplete-kv-objects.patch")):
+        fpath = patch_dir / fname
+        if fpath.is_file():
+            expected = sha256_file(fpath)
+            if ident[key] != expected:
+                return False, [
+                    f"{IDENT_JSON_PATH}: {key}={ident[key]} != repo patch sha {expected}"
+                ]
+
+    res = probe_cuda_ops(image)
+    if res is None:
+        return False, [
+            f"image '{image}': probe of 'lmcache.cuda_ops' failed to run -- cannot "
+            "confirm the compiled extension is present"
+        ]
+    if not res:
+        return False, [
+            f"image '{image}': importlib.util.find_spec('lmcache.cuda_ops') is empty -- "
+            "the wheel lacks the compiled CUDA extension (silent pure-Python fallback). "
+            "Rebuild with scripts/build-lmcache.sh (nvcc + CUDA dev packages required)."
+        ]
+
+    return True, msgs
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -137,10 +222,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("image", help="IMAGE spec about to launch")
     ap.add_argument("patch_dir", help="repo dir with the downstream patches")
     ap.add_argument("--expected-base", default=None)
+    ap.add_argument("--deep", action="store_true",
+                    help="r3 P1-3: additionally verify the baked identity json "
+                         "and find_spec('lmcache.cuda_ops') inside the image")
     args = ap.parse_args(argv)
 
     ok, msgs = verify_custom_image(args.image, pathlib.Path(args.patch_dir),
-                                   args.expected_base)
+                                   args.expected_base, deep=args.deep)
     if ok:
         print(f"custom LMCache image verified: {args.image}")
         return 0
