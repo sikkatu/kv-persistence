@@ -97,6 +97,23 @@ def read_identity_json(image: str) -> dict | None:
         return None
 
 
+def probe_lmcache_version(image: str) -> str | None:
+    """Return `importlib.metadata.version('lmcache')` from inside the image
+    (r4 P0-3: verify the REAL installation against wheel_version in the baked
+    identity -- a LABEL and even a JSON file can claim anything)."""
+    try:
+        out = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "python3", image, "-c",
+             "import importlib.metadata as m; print(m.version('lmcache'))"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
 def probe_cuda_ops(image: str) -> bool | None:
     """Probe find_spec('lmcache.cuda_ops') inside the image. True/False on a
     completed run, None when the probe itself could not run."""
@@ -212,6 +229,30 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
             f"image '{image}': importlib.util.find_spec('lmcache.cuda_ops') is empty -- "
             "the wheel lacks the compiled CUDA extension (silent pure-Python fallback). "
             "Rebuild with scripts/build-lmcache.sh (nvcc + CUDA dev packages required)."
+        ]
+
+    # r4 P0-3: the identity JSON can CLAIM any wheel_version. Cross-check the
+    # REAL installed metadata (importlib.metadata.version('lmcache')) against
+    # the identity's wheel_version -- a custom build always carries the
+    # `+kvp.<hash>` local part (build-lmcache.sh SETUPTOOLS_SCM_PRETEND_VERSION
+    # pin), so a pure upstream nightly fails both this and the +kvp check.
+    wheel_version = ident.get("wheel_version") or ""
+    if "+kvp." not in wheel_version:
+        return False, [
+            f"{IDENT_JSON_PATH}: wheel_version '{wheel_version}' lacks the '+kvp.' "
+            "local part -- this identity was NOT produced by scripts/build-lmcache.sh"
+        ]
+    actual_version = probe_lmcache_version(image)
+    if actual_version is None:
+        return False, [
+            f"image '{image}': cannot read importlib.metadata.version('lmcache') -- "
+            "the wheel is not installed (or metadata is missing); refusing"
+        ]
+    if actual_version != wheel_version:
+        return False, [
+            f"image '{image}': installed lmcache version '{actual_version}' != "
+            f"identity wheel_version '{wheel_version}' -- the baked identity "
+            "describes a different build than the one actually installed"
         ]
 
     return True, msgs

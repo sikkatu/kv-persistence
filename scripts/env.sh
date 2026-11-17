@@ -715,7 +715,12 @@ _kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root
   local img="$1" root="$2" rc=0
   [ -n "$img" ] || { echo "ERROR(_kvp_require_custom_image): no IMAGE given" >&2; return 4; }
   [ -n "$root" ] || { echo "ERROR(_kvp_require_custom_image): no repo root given" >&2; return 4; }
+  # r4 P0-3: deep verification runs BY DEFAULT (LABELs alone are forgeable).
+  # KVP_VERIFY_SHALLOW=1 is the explicit test-stand escape hatch, never set in
+  # production (same category as KVP_SKIP_IMAGE_CHECK).
+  local _verify_args=()
+  [ "${KVP_VERIFY_SHALLOW:-0}" = "1" ] || _verify_args+=(--deep)
   PYTHONPATH="$root/implementation${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m kvpersist.check_image_identity "$img" "$root/vendor/patches/lmcache" || rc=$?
+    python3 -m kvpersist.check_image_identity "$img" "$root/vendor/patches/lmcache" "${_verify_args[@]}" || rc=$?
   return "$rc"
 }
