@@ -39,11 +39,14 @@ wheel，并将完整源码身份与 wheel SHA-256 写入
 wheel SHA-256）——仅凭 wheel 版本号（`0.5.7.dev428`）无法区分我们的构建与
 上游 nightly（`no-local-version`）。
 
-**部署状态（诚实）：** 在 r2 P0-1 集成落地之前，缓存服务器默认仍为
-`KVP_LAUNCH_MODE=host`，此模式**不含** #4136/#5972 修复。要运行修复后的
-构建，请设置 `KVP_LAUNCH_MODE=docker` 并将 `IMAGE` 指向自定义镜像，然后运行
-`verify-engine-identity.sh` —— 该门禁现在会拒绝任何没有匹配
-`/etc/kvp-lmcache-identity.json` 的容器（MISMATCH，退出码 4）。
+**部署状态（r2 P0-1 — 已上线）：** 缓存服务器现在默认为
+`KVP_LAUNCH_MODE=docker`，且两个 recipe 启动器在镜像缺少自定义 LMCache
+身份时拒**绝启动**（`verify-image-custom.sh` /
+`kvpersist.check_image_identity` 在加载模型前比对 `org.kvp.lmc-*` 标签与
+`vendor/patches/lmcache/*.patch` 的 SHA-256）。原生 vllm-openai 仅在显式
+`KVP_LAUNCH_MODE=host` + `KVP_SKIP_IMAGE_CHECK=1`（测试跳过标志）下启动，
+后果由操作者自负。`verify-engine-identity.sh` 还会比对运行中容器的
+`/etc/kvp-lmcache-identity.json`（MISMATCH，退出码 4）。
 
 此镜像必须被以下组件使用：
 

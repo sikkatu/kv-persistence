@@ -13,6 +13,28 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 2 轮审阅修复（P0/P1，一项一提交）
+* **P1-1** `87b1083`：恢复 r1 重写时丢失的 `nixl==1.5.2`/`openai`/
+  `zstandard`/`lz4` 固定（缺 nixl 时 L2 适配器拒启、缺 openai 时 CLI 挂掉）；
+  pin 测试改到新契约。
+* **P1-2** `95fa1a8`：构建身份烙入镜像（`/etc/kvp-lmcache-identity.json`，
+  基线 + 补丁 SHA-256 + wheel SHA-256）并由门禁校验（MISMATCH → 退出 4）；
+  `PATCHED_STATE` 哈希 diff 内容；`pytest -rs` 且 skip==失败；三语文档如实。
+* **P0-2** `03fe204`：缺 `cuda_ops*.so` 的 wheel 被拒（无 nvcc 的静默
+  fallback 正是 cudaMemcpy error 1 的根源）：nvcc 预检、
+  `BUILD_WITH_CUDA=1 TORCH_CUDA_ARCH_LIST=12.0`、wheel 内 .so 检查、
+  每卡真实 GPU 冒烟（`--gpus all`）、服务器日志 fallback 警告。
+* **P0-3** `4fdff85`/`1678964`：reset-persistent-cache.sh 重写 —— 诊断
+  log/pid/rendered-json/crash-* 保留（归档到 live/），符号链接缓存根真正
+  清空（resolved-path 遍历 + 余留复查），专用缓存目录确认
+  （resolved-path 比较，符号链接 KVP_CACHE_ROOT 可用），拒绝网络文件系统，
+  侦测活的 host-MP（死 pid 忽略），完整 7.4 报告。9 测试。
+* **P0-1** `a259929`：启动时的自定义镜像强制 —— 原生 vLLM 镜像被
+  start-cache.sh（默认 `KVP_LAUNCH_MODE=docker`）和两个 recipe 启动器在
+  KV_PERSIST=1 时拒绝（镜像标签 vs 补丁 SHA-256，模型加载前执行，
+  `verify-image-custom.sh`）；接受本地构建镜像的裸 image-ID
+  （`sha256:<64hex>`）细粒度 pin。13 测试。
+
 ### LMCache 集成：两个必需的上游修复 + 缓存重置
 * 创建 `vendor/patches/lmcache/`：`4136-mp-retrieve-abort.patch`（retrieve/
   abort 竞态：显式 `LOADING` 生命周期、调度器确认的中止传播到 worker、

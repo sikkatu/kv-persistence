@@ -48,11 +48,14 @@ preserved. The resulting image identity is written to
 -- the wheel version alone (`0.5.7.dev428`) cannot tell our build from the
 upstream nightly (`no-local-version`).
 
-**Deployment status (honest):** until the r2 P0-1 integration lands, the
-cache server still defaults to `KVP_LAUNCH_MODE=host`, which does NOT carry
-the #4136/#5972 fixes. To run the fixed build, set `KVP_LAUNCH_MODE=docker`
-and point `IMAGE` at the custom image, then run `verify-engine-identity.sh`
--- the gate now refuses any container without a matching
+**Deployment status (r2 P0-1 — live):** the cache server now defaults to
+`KVP_LAUNCH_MODE=docker` AND both recipe launchers refuse to start whenever
+the image does not carry the custom LMCache identity (`verify-image-custom.sh`
+/ `kvpersist.check_image_identity` compare `org.kvp.lmc-*` labels against
+`vendor/patches/lmcache/*.patch` SHA-256 before any model load). A stock
+vllm-openai image launches only with explicit `KVP_LAUNCH_MODE=host` +
+`KVP_SKIP_IMAGE_CHECK=1` (test-harness opt-out) and at the operator's own
+risk. `verify-engine-identity.sh` additionally checks the running container's
 `/etc/kvp-lmcache-identity.json` (MISMATCH, exit 4).
 
 This image must be used by:

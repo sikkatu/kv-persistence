@@ -45,13 +45,15 @@ PyTorch и записывает `live/lmcache-build/provenance.json` с полн
 wheel) — по одной только версии wheel (`0.5.7.dev428`) нашу сборку от
 апстримного nightly не отличить (`no-local-version`).
 
-**Статус развёртывания (честно):** пока интеграция r2 P0-1 не внедрена,
-кэш-сервер по умолчанию работает в режиме `KVP_LAUNCH_MODE=host`, который НЕ
-содержит фиксов #4136/#5972. Чтобы запустить исправленную сборку, задайте
-`KVP_LAUNCH_MODE=docker` и направьте `IMAGE` на кастомный образ, затем
-запустите `verify-engine-identity.sh` — гейт теперь отказывает любому
-контейнеру без совпадающего `/etc/kvp-lmcache-identity.json` (MISMATCH,
-код 4).
+**Статус развёртывания (r2 P0-1 — активно):** кэш-сервер теперь по умолчанию в
+режиме `KVP_LAUNCH_MODE=docker`, а оба рецептурных лаунчера отказываются
+запускаться, если образ не несёт custom-идентичность LMCache
+(`verify-image-custom.sh` / `kvpersist.check_image_identity` сверяют метки
+`org.kvp.lmc-*` с SHA-256 файлов из `vendor/patches/lmcache/*.patch` до
+загрузки модели). Стоковый vllm-openai стартует только с явным
+`KVP_LAUNCH_MODE=host` + `KVP_SKIP_IMAGE_CHECK=1` (opt-out тестовых харнесов) и
+на страх и риск оператора. `verify-engine-identity.sh` дополнительно сверяет
+`/etc/kvp-lmcache-identity.json` работающего контейнера (MISMATCH, код 4).
 
 Этот образ обязаны использовать:
 

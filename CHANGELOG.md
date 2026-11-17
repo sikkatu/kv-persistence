@@ -14,6 +14,31 @@ downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
 
+### Round 2 review fixes (P0/P1, one commit per item)
+* **P1-1** `87b1083`: restored `nixl==1.5.2`/`openai`/`zstandard`/`lz4` pins
+  dropped by the r1 rewrite (the L2 adapter refused to start without nixl, the
+  CLI died without openai); pin test retargeted to the new contract.
+* **P1-2** `95fa1a8`: build identity baked into the image
+  (`/etc/kvp-lmcache-identity.json`, base + patch SHA-256 + wheel SHA-256) and
+  verified in the gate (MISMATCH -> exit 4); `PATCHED_STATE` hashes diff
+  content; `pytest -rs` with skipped==failure; honest docs x3.
+* **P0-2** `03fe204`: wheels without `cuda_ops*.so` are REFUSED (the silent
+  no-nvcc fallback caused the cudaMemcpy error 1 incident): nvcc preflight,
+  `BUILD_WITH_CUDA=1 TORCH_CUDA_ARCH_LIST=12.0`, in-wheel .so check, honest
+  GPU smoke of the native kernel on every GPU (`--gpus all`), server-log
+  fallback warning.
+* **P0-3** `4fdff85`/`1678964`: reset-persistent-cache.sh rewritten --
+  diagnostic log/pid/rendered-json/crash-* preserved (archived to live/),
+  symlinked cache roots really cleared (resolved-path walk + leftover
+  post-check), dedicated-cache confirmation (resolved-path compare so a
+  symlinked KVP_CACHE_ROOT works), network-FS refusal, live host-MP detection
+  (stale pids ignored), full spec 7.4 report. 9 tests.
+* **P0-1** `a259929`: custom-LMCache-image mandate at launch -- stock vLLM
+  images refused by start-cache.sh (default `KVP_LAUNCH_MODE=docker`) and by
+  both recipe launchers under KV_PERSIST=1 (image LABELS vs patch SHA-256
+  before model load, `verify-image-custom.sh`); bare image-ID pin
+  (`sha256:<64hex>`) accepted for locally built derives. 13 tests.
+
 ### LMCache integration: two required upstream fixes + cache reset
 * `vendor/patches/lmcache/` created: `4136-mp-retrieve-abort.patch` (retrieve/
   abort race: explicit `LOADING` lifecycle, scheduler-confirmed abort
