@@ -700,3 +700,22 @@ for m in msgs:
   # codec's chunks be read back under another.
   _kvp_resolve_l2_serde || return 1
 }
+
+# ---------------------------------------------------------------------------
+# r2 P0-1: custom-LMCache-image mandate.
+# After the obsolete local race-guard was removed (recipes 799d634), the ONLY
+# retrieve/abort fix (PR #4136) and the incomplete-object fix (PR #5972) live
+# inside the custom LMCache build baked into the derivative image
+# (build-lmcache.sh / build-image.sh). A stock vLLM image silently reverts to
+# upstream LMCache without the fixes -- the engine dies on the first
+# retrieve/abort race. Every launcher that starts a model worker or the MP
+# server must verify the image identity BEFORE any model load.
+# ---------------------------------------------------------------------------
+_kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root>
+  local img="$1" root="$2" rc=0
+  [ -n "$img" ] || { echo "ERROR(_kvp_require_custom_image): no IMAGE given" >&2; return 4; }
+  [ -n "$root" ] || { echo "ERROR(_kvp_require_custom_image): no repo root given" >&2; return 4; }
+  PYTHONPATH="$root/implementation${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m kvpersist.check_image_identity "$img" "$root/vendor/patches/lmcache" || rc=$?
+  return "$rc"
+}

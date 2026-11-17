@@ -12,7 +12,13 @@ _kvp_load_env "$ROOT"
 # Launch mode (review 3A): host venv OR Docker sidecar in the same pinned image.
 # Docker mode ELIMINATES the Python-version / ABI mismatch problem entirely --
 # the lmcache server runs inside the same vLLM image (same Python, same PyTorch).
-KVP_LAUNCH_MODE="${KVP_LAUNCH_MODE:-host}"   # host | docker
+# R2 P0-1 (review): the DEFAULT is now `docker`, because only the custom derivative
+# image carries the required downstream fixes (PR #4136 retrieve/abort race, PR #5972
+# incomplete objects, see docs/lmcache-build.md). `host` still works, but it runs a
+# host-vendored LMCache which MIGHT lack those fixes; when chosen deliberately, the
+# operator is alerted below. Aligning the shared MP cache server with every worker
+# (custom image) guarantees they all carry ONE identical LMCache build.
+KVP_LAUNCH_MODE="${KVP_LAUNCH_MODE:-docker}"   # host | docker
 # Loopback-binding is a SECURITY contract (review 2A): never allow 0.0.0.0 / :: here.
 case "$LMCACHE_HOST" in
   127.0.0.1|localhost|::1) : ;;
@@ -25,7 +31,15 @@ case "$KVP_LAUNCH_MODE" in
   docker)
     DOCKER_IMAGE="${IMAGE:-${DOCKER_IMAGE:-}}"
     [ -n "$DOCKER_IMAGE" ] || die "KVP_LAUNCH_MODE=docker requires IMAGE (pinned vLLM digest) or DOCKER_IMAGE"
-    command -v docker >/dev/null || die "docker required for KVP_LAUNCH_MODE=docker" ;;
+    command -v docker >/dev/null || die "docker required for KVP_LAUNCH_MODE=docker"
+    # r2 P0-1: the shared MP cache server MUST run the custom LMCache build.
+    # A stock image would serve upstream LMCache (no #4136/#5972) while workers
+    # run the fixed build -> protocol-level inconsistencies and corrupted cache.
+    _kvp_require_custom_image "$DOCKER_IMAGE" "$ROOT" \
+      || die "IMAGE '$DOCKER_IMAGE' is NOT the custom LMCache derivative.
+Build it first (bash scripts/build-lmcache.sh && bash scripts/build-image.sh) and
+point IMAGE at the result (docker inspect --format '{{.Id}}' kvp-lmcache:latest),
+or run: bash scripts/verify-engine-identity.sh for details." ;;
   *) die "KVP_LAUNCH_MODE must be 'host' or 'docker', got '$KVP_LAUNCH_MODE'" ;;
 esac
 # Optional HTTP / serde flags: keep only those THIS build's --help understands,
