@@ -142,6 +142,7 @@ note "running build+tests inside the pinned image (in-container phase)"
 docker run --rm \
   -v "$SRC":/usr/src/lmcache:rw \
   -v "$PATCH_DIR":/kvp-patches:ro \
+  -v "$HERE":/kvp-scripts:ro \
   -v "$WHEEL_OUT":/kvp-wheels:rw \
   -v "$WORK_DIR":/kvp-work:rw \
   -e PYTHONUNBUFFERED=1 \
@@ -161,16 +162,38 @@ git config --global --add safe.directory /usr/src/lmcache
 # source-build stage and purges them after). Install them here in the
 # disposable build container; the derivative image never sees these (it only
 # receives the wheel). Any missing package must abort loudly by name.
+#
+# r4 P0-1: the package suffix is `major-minor` of torch.version.cuda with a
+# dash ("13.0" -> 13-0, "13.0.2" -> 13-0, "12.8" -> 12-8). The old
+# `${CUDA_TORCH%.*}` answered "13.0.2" with "13.0" -> "13-0" but "13.0" with
+# "13" -> "13" (no such package -- the build loop always died "BUILD
+# REFUSED"). Compute it through the single-source helper script so the unit
+# test and the container run the exact same code path.
 CUDA_TORCH="$(python3 -c 'import torch; print(torch.version.cuda)')"
-DEV_SUFFIX="${CUDA_TORCH%.*}"
-DEV_SUFFIX="${DEV_SUFFIX//./-}"    # 13.0 -> 13-0 (nvidia package suffix convention)
+DEV_SUFFIX="$(bash /kvp-scripts/_cuda_dev_suffix.sh "$CUDA_TORCH")"
+[ -n "$DEV_SUFFIX" ] || { echo "BUILD REFUSED: cannot derive a dev-package suffix from torch.version.cuda='$CUDA_TORCH'" >&2; exit 1; }
 echo "[in-container] CUDA dev suffix (from torch.version.cuda=$CUDA_TORCH): $DEV_SUFFIX"
 export CUDA_HOME=/usr/local/cuda
+# r4 P0-1: the vLLM image build ends with `rm -rf /var/lib/apt/lists/*`
+# (Dockerfile ~line 813), so without a fresh `apt-get update` every
+# `apt-get install` fails "Unable to locate package". Refresh the lists here,
+# fail-loud (--no || true), and keep apt's own error output visible instead of
+# hiding it behind >/dev/null 2>&1: the operator must see WHY a package
+# refused to install.
+apt_out="$(mktemp)"
+if ! apt-get update -y >"$apt_out" 2>&1; then
+  echo "BUILD REFUSED: 'apt-get update' failed in this image." >&2
+  echo "  Last lines of apt output:" >&2
+  tail -n 20 "$apt_out" >&2
+  exit 1
+fi
 for pkg in cuda-cudart-dev-$DEV_SUFFIX libcusparse-dev-$DEV_SUFFIX \
            libcusolver-dev-$DEV_SUFFIX libcublas-dev-$DEV_SUFFIX; do
-  if ! apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+  if ! apt-get install -y --no-install-recommends "$pkg" >"$apt_out" 2>&1; then
     echo "BUILD REFUSED: CUDA dev package '$pkg' is unavailable in this image." >&2
     echo "  The wheel cannot compile cuda_ops without it (missing headers)." >&2
+    echo "  Last lines of apt output:" >&2
+    tail -n 20 "$apt_out" >&2
     echo "  Check the image's apt sources provide $pkg for CUDA $CUDA_TORCH," >&2
     echo "  or run the build in an image that carries the CUDA dev stack." >&2
     exit 1
@@ -252,7 +275,15 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
     exit 1
   fi
   # summary line is the last non-empty line, e.g. "3 passed in 1.23s"
-  _summary_line="$(grep -E '^[0-9]+ (passed|failed|error)' /kvp-work/pytest-report.txt | tail -1)"
+  _summary_line="$(grep -E '^[0-9]+ (passed|failed|error)' /kvp-work/pytest-report.txt | tail -1 || true)"
+  # r4 P1: when the suite dies before the summary (collection error, crash),
+  # grep | tail under set -e/pipefail with an empty match used to abort the
+  # script with NO message. Fail loudly and name the problem instead.
+  if [ -z "$_summary_line" ]; then
+    echo "REGRESSION FAILURE: pytest summary not found in the report -- the suite" >&2
+    echo "  died before completion (collection error or crash). Full output above." >&2
+    exit 1
+  fi
   _skipped="$(python3 -c 'import re,sys; m=re.search(r"(\d+) skipped", sys.argv[1]); print(m.group(1) if m else 0)' "$_summary_line")"
   if [ "$_skipped" != "0" ]; then
     echo "REGRESSION FAILURE: $_skipped required test(s) SKIPPED (skipped != passed) -- aborting build"
