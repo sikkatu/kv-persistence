@@ -123,6 +123,16 @@ fi
 BUDGET_GB="${KVP_CACHE_BUDGET_GB:?}"
 ROOT_PATH="${KVP_CACHE_ROOT:?}"
 mkdir -p "$ROOT_PATH"; chmod 700 "$ROOT_PATH"
+# r4 P0-2: stamp the directory as a CONFIRMED cache root. The destructive
+# reset script accepts an explicit cache root as wipeable only when this
+# marker exists or the directory holds nothing but known LMCache/kvpersist
+# entries. Creating the marker here (at cache initialization) is the
+# operator-visible proof that this directory was set up as cache data by
+# start-cache.sh, never a home/repo dir.
+if [ ! -e "$ROOT_PATH/.kvp-cache-root-marker" ]; then
+  printf 'kvp-cache-root\ncreated_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ROOT_PATH/.kvp-cache-root-marker"
+  echo "cache root marker created: $ROOT_PATH/.kvp-cache-root-marker"
+fi
 
 # ---- Lossless L2 codec (task: lossless ONLY, never lossy) -----------------
 # USE_LOSSLESS_SERDE is folded into the exported LMCACHE_L2_SERDE by

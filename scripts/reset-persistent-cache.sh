@@ -93,6 +93,100 @@ cached_root_of() { # cached_root_of <candidate> -> echo the CONFIRMED raw root o
   [ -f "$1/.kvp-cache-root-marker" ] && return 0
   return 1
 }
+
+# r4 P0-2: known LMCache/kvpersist entry set -- every top-level name the code
+# in THIS repo actually writes into the cache root:
+#   * lmcache-server.log / lmcache-server.pid   (scripts/start-cache.sh, stop-cache.sh)
+#   * l2-adapter.rendered.json                  (scripts/start-cache.sh)
+#   * engine-identity.env                       (scripts/verify-engine-identity.sh)
+#   * crash-*                                   (scripts/collect-crash-evidence.sh,
+#                                                kept as diagnostics)
+#   * .kvp-cache-root-marker / .kvp-active-writes (start-cache.sh / tmp_guard.py)
+#   * *.bin / *.bin.tmp.<uuid>                  (nixl_store_dynamic payload,
+#                                                implementation/kvpersist/cli.py)
+#   * objects/ and kvp-* dirs                   (LMCache object stores + legacy
+#                                                legacy kvp-* namespace dirs)
+# Anything else top-level means this is NOT a pure cache dir: refuse and list.
+_kvp_known_cache_entry() { # _kvp_known_cache_entry <top-level name> -> 0 known / 1 unknown
+  case "$1" in
+    .kvp-cache-root-marker|\.kvp-cache-root-marker|\
+    .kvp-active-writes|\.kvp-active-writes|\
+    lmcache-server.log|lmcache-server.pid|l2-adapter.rendered.json|engine-identity.env|\
+    index.db|crash-*|objects|kvp-*|*.bin|*.bin.tmp.*)
+      return 0 ;;
+  esac
+  return 1
+}
+_kvp_unknown_cache_entries() { # _kvp_unknown_cache_entries <dir> -> echoes unknown names, rc 0 when at least one unknown
+  local d="$1" entry base unknown=1
+  for entry in "$d"/* "$d"/.[!.]* "$d"/..?*; do
+    [ -e "$entry" ] || continue
+    base="$(basename "$entry")"
+    case "$base" in
+      .|..) continue ;;
+    esac
+    if ! _kvp_known_cache_entry "$base"; then
+      printf '%s\n' "$base"
+      unknown=0
+    fi
+  done
+  return $unknown
+}
+
+# r4 P0-2: refuse any target that is a home dir, an ancestor of this repo (or
+# of a models/recipes checkout), or carries .git at nesting depth <= 2.
+# Print the reason to stderr (the caller turns safe_target's rc into a generic
+# refusal, so the DETAIL must be visible right here).
+_kvp_home_of_any_user() { # _kvp_home_of_any_user <real path> -> 0 when it IS a home dir
+  local real="$1" h
+  # current user's home + root + every dir matched by /home/<name> /root
+  for h in "${HOME:-}" /root; do
+    if [ -n "$h" ] && [ "$real" = "$(readlink -f "$h" 2>/dev/null || echo "$h")" ]; then
+      echo "  reason: '$real' is a user home directory (\$HOME)" >&2
+      return 0
+    fi
+  done
+  case "$real" in
+    /home/*|/root)
+      # /home/<name> exactly one level below /home = the user's home
+      if [ "$real" = "/home/$(basename "$real")" ] || [ "$real" = "/root" ]; then
+        echo "  reason: '$real' is a user home directory (/home/<user> or /root)" >&2
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+_kvp_has_git_within_two_levels() { # _kvp_has_git_within_two_levels <dir> -> 0 when a .git exists at depth <= 2
+  local d="$1"
+  [ -e "$d/.git" ] && return 0
+  local sub g
+  for sub in "$d"/* "$d"/.[!.]*; do
+    [ -d "$sub" ] || continue
+    g="$(basename "$sub")"
+    [ "$g" = ".kvp-active-writes" ] && continue
+    [ -e "$sub/.git" ] && return 0
+    local sub2
+    for sub2 in "$sub"/* "$sub"/.[!.]*; do
+      [ -e "$sub2/.git" ] && return 0
+    done
+  done
+  return 1
+}
+_kvp_is_ancestor_of_checkout() { # _kvp_is_ancestor_of_checkout <real path> -> 0 when an ancestor of THIS repo checkout
+  local real="$1" parent
+  # The reset script itself lives inside the repo checkout, so walk up from
+  # HERE: if $real is an ancestor of HERE, it is an ancestor of the checkout.
+  parent="$HERE"
+  while [ "$parent" != "/" ] && [ -n "$parent" ]; do
+    if [ "$real" = "$(readlink -f "$parent" 2>/dev/null || echo "$parent")" ]; then
+      echo "  reason: '$real' is an ancestor of the kv-persistence checkout -- never wipeable" >&2
+      return 0
+    fi
+    parent="$(dirname "$parent")"
+  done
+  return 1
+}
 safe_target() { # safe_target <path> -> 0 accepted / 1 refused
   local p="$1" real root rroot probe abs
   [ -n "$p" ] || return 1
@@ -106,6 +200,7 @@ safe_target() { # safe_target <path> -> 0 accepted / 1 refused
   # CONFIRMED cache root by definition and must NOT be lumped in with bare
   # /mnt or bare /home (which stay refused below).
   root=""
+  marked="0"
   for _cfg_root in "${KVP_CACHE_ROOT:-}" "${LMCACHE_L2_PATH:-}" "${LMCACHE_ROOT:-}"; do
     [ -n "$_cfg_root" ] || continue
     local _cfg_resolved
@@ -124,6 +219,17 @@ safe_target() { # safe_target <path> -> 0 accepted / 1 refused
     local up
     up="$(dirname "$real")"
     [ -e "$up/.kvp-cache-root-marker" ] && root="$up"
+  fi
+  # r4 P0-2: track whether a cache-root MARKER stamp exists anywhere relevant
+  # (the target itself, the confirmed root, or one level up) -- a marker alone
+  # is sufficient proof for the known-entry check below.
+  marked="0"
+  { [ -e "$real/.kvp-cache-root-marker" ] && marked=1; } || true
+  if [ "$marked" = "0" ] && [ -n "$root" ] && [ -e "$root/.kvp-cache-root-marker" ]; then
+    marked=1
+  fi
+  if [ "$marked" = "0" ] && [ -e "$(dirname "$real")/.kvp-cache-root-marker" ]; then
+    marked=1
   fi
 
   # Rule out genuinely dangerous exact paths outright -- these stay refused even
@@ -148,7 +254,38 @@ safe_target() { # safe_target <path> -> 0 accepted / 1 refused
   [ -e "$real/.git" ] && return 1
   case "$real" in */models|*/models/*|*/models/*/*) return 1 ;; esac
 
+  # r4 P0-2: ALWAYS refuse homes, ancestors of this checkout and dirs holding
+  # a .git at nesting depth <= 2 -- even when the path was explicitly
+  # configured as KVP_CACHE_ROOT (the r3 change dropped this protection and a
+  # `KVP_CACHE_ROOT=$HOME` typo wiped a real home directory).
+  _kvp_home_of_any_user "$real" && return 1
+  _kvp_is_ancestor_of_checkout "$real" && return 1
+  if _kvp_has_git_within_two_levels "$real"; then
+    echo "  reason: '.git' found within nesting depth 2 of '$real' -- repository data must never be wiped" >&2
+    return 1
+  fi
+
   [ -n "$root" ] || return 1
+
+  # r4 P0-2: an explicit root must PROVE it is a cache directory: either the
+  # .kvp-cache-root-marker stamp (created by start-cache.sh at cache
+  # initialization) or -- when unmarked -- a top-level listing made up
+  # EXCLUSIVELY of the known LMCache/kvpersist entry set. A single unknown
+  # entry means this is not a pure cache dir; refuse and list the entries so
+  # the operator can inspect and mark the dir manually afterwards.
+  if [ "$marked" = "1" ]; then
+    :  # marker confirmed this dir behind
+  else
+    local _uk _uk_all=""
+    _uk="$(_kvp_unknown_cache_entries "$real" || true)"
+    if [ -n "$_uk" ]; then
+      _uk_all="$(printf '%s' "$_uk" | tr '\n' ' ')"
+      echo "  reason: '$real' is not a confirmed cache dir -- unknown top-level entries: $_uk_all" >&2
+      echo "  inspect them; if this really is a dedicated cache dir, create the marker manually after inspection:" >&2
+      echo "    touch '$real/.kvp-cache-root-marker'" >&2
+      return 1
+    fi
+  fi
 
   # symlink escape: every broken-out prefix must stay inside root's resolved
   # path, again with a strict '/' boundary (r3 P1-2 point 2).

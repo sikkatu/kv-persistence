@@ -80,6 +80,10 @@ def run_reset(cache_root: str, confirm: str | None = CONFIRM, extra_env=None,
 def make_cache(tmp_path: pathlib.Path, name: str = "cache") -> pathlib.Path:
     d = tmp_path / name
     d.mkdir(parents=True, exist_ok=True)
+    # r4 P0-2: start-cache.sh stamps every cache root with the marker at init;
+    # the reset only accepts unmarked dirs that contain the known entry set
+    # alone (covered by test_reset_explicit_root_policy.py).
+    (d / ".kvp-cache-root-marker").write_text("kvp-cache-root\n")
     (d / "lmcache-server.log").write_text("old log line\n")
     (d / "lmcache-server.pid").write_text("12345\n")
     (d / "l2-adapter.rendered.json").write_text("{}")
