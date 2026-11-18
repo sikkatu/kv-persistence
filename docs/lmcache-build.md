@@ -38,6 +38,12 @@ in `scripts/build-image.sh` (one native kernel per GPU on the built image).
 
 `--no-build-isolation` against the pinned image's installed PyTorch, and writes
 `live/lmcache-build/provenance.json` with the full source identity and the
+
+`tests_skipped` in `provenance.json` means the whole test phase was
+skipped via `KVP_BUILD_SKIP_TESTS=1` -- it is NOT about individual pytest
+skips (those are refused by the gates). `gpu_regression_run` is the
+boolean record of whether the GPU regression step actually ran and
+passed (a module-level skip does not count as a run).
 wheel SHA-256.
 
 Both patches are small, share no files, and are individually removable:

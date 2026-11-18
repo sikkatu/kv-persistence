@@ -190,3 +190,20 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         f"a module-skip in the GPU step must refuse the build:\n{r.stdout[-500:]}"
     )
     assert "REGRESSION FAILURE" in (r.stdout + r.stderr) or "did NOT run" in (r.stdout + r.stderr)
+
+
+def test_provenance_has_boolean_gpu_regression_run(tmp_path):
+    """provenance.json must carry boolean gpu_regression_run (json.loads),
+    false by default without a GPU step (red before: field absent entirely)."""
+    env, log_dir = _stub_env(tmp_path)
+    # host phase sources identity.env with GPU_REGRESSION_RUN=false (default)
+    r = subprocess.run(["bash", str(BUILD_LMC)], capture_output=True, text=True,
+                       timeout=120, env=env, cwd=str(tmp_path))
+    prov = tmp_path / "out" / "provenance.json"
+    assert prov.is_file(), f"provenance.json missing:\n{r.stdout[-400:]}\n{r.stderr[-400:]}"
+    data = json.loads(prov.read_text())
+    assert "gpu_regression_run" in data, f"gpu_regression_run key missing: {data.keys()}"
+    assert isinstance(data["gpu_regression_run"], bool), (
+        f"gpu_regression_run must be a JSON boolean, got {data['gpu_regression_run']!r}"
+    )
+    assert data["gpu_regression_run"] is False, "no GPU step run -> false"

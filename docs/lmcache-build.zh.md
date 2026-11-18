@@ -36,6 +36,11 @@
 wheel，并将完整源码身份与 wheel SHA-256 写入
 `live/lmcache-build/provenance.json`。
 
+`provenance.json` 中的 `tests_skipped` 表示整个测试阶段通过
+`KVP_BUILD_SKIP_TESTS=1` **整体**跳过——它不是关于单个 pytest skip
+（那些会被门禁拒绝）。`gpu_regression_run` 是布尔记录，表明 GPU 回归
+步骤是否真正运行并通过（模块级 skip 不算运行）。
+
 两个补丁都小、不共享任何文件、可独立移除：
 
 * `4136-mp-retrieve-abort.patch` — 仅 vLLM MP 集成层
