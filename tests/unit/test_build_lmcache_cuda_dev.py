@@ -56,7 +56,9 @@ def _extract_apt_block() -> str:
         "(from `CUDA_TORCH=\"$(python3` to `done`)"
     )
     block = m.group(0)
-    # in the container the helper is mounted at /kvp-scripts; point at the repo copy
+    # in the container the helper is mounted at /kvp-scripts (overridable via
+    # KVP_SCRIPTS); for the test, point the call at the repo copy instead.
+    block = block.replace('bash "$KVP_SCRIPTS/_cuda_dev_suffix.sh"', f'bash {SUFFIX_SH}')
     block = block.replace("/kvp-scripts/_cuda_dev_suffix.sh", str(SUFFIX_SH))
     return block
 
