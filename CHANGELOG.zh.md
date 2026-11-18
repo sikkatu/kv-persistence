@@ -13,6 +13,15 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 11 轮（参考构建流水线 C0-C16）
+* `f6c4312`：`_incontainer_build.sh` 按 C0-C16 顺序重建（baseline freeze → apt/git → 工具链门禁 → 带 constraints 的构建依赖 → 恰好一次 `pip wheel` → wheel 检查（文件 + **两个**原生扩展 + cuobjdump sm_120）→ 安装 → 从 site-packages import-check（`python3 -P`）→ engine freeze diff → 最小测试依赖 → staging 无 lmcache/ → 带新插件 `kvp_assert_installed` 的 staged pytest → 摘要门禁 → 可选 GPU 步骤 → 单引号 identity.env）。主机端：identity.env 严格 source，provenance 字段用独立默认行（旧的 ${VAR:-{}} 会多写一个 `}`），转发 KVP_TORCH_CUDA_ARCH_LIST。
+* `c77dc6f`：测试夹具适配新阶段（python3 shim 先剥离 `-P`，C5 的 rm 后重建 wheel；工具链桩；staging 夹具；提取器接受 staged pytest 形式；接线测试要求**每个** pytest 调用都是 staged 形式）。
+* docs/lmcache-build.* 中含步骤→测试表格；变异（重复 pip wheel / 旧 brace 默认 / 去掉 -P）全部被抓住。
+
+两个仓库的全套测试（第 11 轮最终）：
+* kv-persistence：557 passed，26 skipped
+* recipes：        443 passed，5 skipped
+
 ### 第 10 轮审阅修复（P0 + P1，一项一提交；行为测试先行）
 * **P0-1** `425adec`：容器内阶段现在**先构建 wheel**（构建依赖含 grpcio-tools==1.78.0 → `pip wheel` → wheel 检查 → `pip install --no-deps --force-reinstall` → 通过 `python3 -P` 从 site-packages 做 import-check，打印三条 `__file__` 证明 → pytest）。旧顺序在构建**之前**从 PYTHONPATH=$LMC_SRC 导入 lmcache——但原生模块和 gRPC 桩只在构建后存在，因此阶段总是死于 ModuleNotFoundError("lmcache.lmcache_native")。变异（构建前导入 / PYTHONPATH 指向源码树）为红。
 * **P0-2** `c0efd97`：wheel 与镜像门禁要求**两个**原生扩展（cuda_ops*.so **和** lmcache_native*.so——缺后者 LMCache 退化为 CLI-only 模式）；可选的 redis/fs 记入 `native_extensions`；严格 gate 新增 KVP_NATIVE_IMPORT=OK 标记。变异（仅 cuda_ops）为红。

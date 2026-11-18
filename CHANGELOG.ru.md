@@ -14,6 +14,28 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
 
+### Раунд 11 (эталонный пайплайн сборки C0-C16)
+* `f6c4312`: `_incontainer_build.sh` перестроен ровно по порядку C0-C16
+  (baseline freeze -> apt/git -> гейт тулчейна -> build-зависимости с
+  constraints -> ровно один `pip wheel` -> проверки wheel (файлы + ОБА
+  нативных расширения + cuobjdump sm_120) -> установка -> import-check из
+  site-packages (`python3 -P`) -> diff engine freeze -> минимальные тестовые
+  зависимости -> staging без lmcache/ -> staged pytest с новым плагином
+  `kvp_assert_installed` -> гейт сводки -> опциональный GPU-шаг ->
+  identity.env в одинарных кавычках). Хост: identity.env source строго,
+  поля provenance через отдельные строки дефолтов (старый ${VAR:-{}}
+  дописывал лишнюю `}`), KVP_TORCH_CUDA_ARCH_LIST пробрасывается.
+* `c77dc6f`: фикстуры тестов подстроены под новую фазу (python3-шим срезает
+  `-P`, пересоздаёт wheel после rm в C5; тулчейн-стабы; staging-фикстуры;
+  экстрактор принимает staged-форму pytest; тест проводки требует staged-форму
+  у КАЖДОГО вызова pytest).
+* Таблица шаг->тест в docs/lmcache-build.*; мутации (дубль pip wheel / старый
+  brace-дефолт / убранный -P) все пойманы.
+
+Прогоны обоих репозиториев (итог раунда 11):
+* kv-persistence: 557 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
+
 ### Правки ревью раунда 10 (P0 + P1, по коммиту на пункт; поведенческие тесты вперёд)
 * **P0-1** `425adec`: in-container фаза теперь сначала строит wheel (build-зависимости, включая grpcio-tools==1.78.0 -> `pip wheel` -> проверки wheel -> `pip install --no-deps --force-reinstall` -> import-check ИЗ site-packages через `python3 -P` с тремя строками-доказательствами `__file__` -> pytest). Старый порядок импортировал lmcache из PYTHONPATH=$LMC_SRC ДО сборки -- но нативные модули и gRPC-стабы существуют только после неё, из-за чего фаза всегда падала ModuleNotFoundError("lmcache.lmcache_native"). Мутации (import до сборки / PYTHONPATH на исходники) красные.
 * **P0-2** `c0efd97`: гейты wheel и образа требуют ОБА нативных расширения (cuda_ops*.so И lmcache_native*.so -- без последнего LMCache уходит в CLI-only режим); опциональные redis/fs пишутся в `native_extensions`; новый маркер KVP_NATIVE_IMPORT=OK в строгом gate build-image.sh. Мутация (только cuda_ops) красная.

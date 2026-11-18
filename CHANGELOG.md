@@ -13,6 +13,28 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 11 (reference build pipeline C0-C16)
+* `f6c4312`: `_incontainer_build.sh` rebuilt to the exact C0-C16 order
+  (baseline freeze -> apt/git -> toolchain gate -> constrained build deps ->
+  exactly one `pip wheel` -> wheel checks (files + BOTH native extensions +
+  cuobjdump sm_120) -> install -> import-check from site-packages (`python3
+  -P`) -> engine freeze diff -> minimal test deps -> staging without
+  lmcache/ -> staged pytest with the new `kvp_assert_installed` plugin ->
+  summary gate -> optional GPU step -> single-quoted identity.env). Host:
+  identity.env sourced strictly, provenance fields via separate default
+  lines (the old ${VAR:-{}} appended a stray `}`), KVP_TORCH_CUDA_ARCH_LIST
+  forwarded.
+* `c77dc6f`: test fixtures adapted to the new phase (python3 shim strips
+  `-P`, recreates the wheel after C5's rm; toolchain stubs; staging
+  fixtures; extractor accepts the staged pytest form; wiring test requires
+  EVERY pytest run staged).
+* Step->test table in docs/lmcache-build.*; mutations (duplicate pip wheel /
+  old brace default / dropped -P) all caught.
+
+Full suite runs (both repositories, round 11 final):
+* kv-persistence: 557 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
+
 ### Round 10 review fixes (P0 + P1, one commit per item -- behavioral tests first)
 * **P0-1** `425adec`: the in-container phase now builds the wheel FIRST
   (build deps incl. grpcio-tools==1.78.0 -> `pip wheel` -> wheel checks ->

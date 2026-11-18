@@ -22,6 +22,30 @@ checked out every build. `scripts/build-lmcache.sh` verifies the base revision,
 verifies #6551 is an ancestor of it, applies the two patches deterministically
 (fails loudly if a patch does not apply or is already applied), runs the
 focused upstream regression suites for #4136 and #5972, builds the wheel with
+### Reference build pipeline C0-C16: step -> covering test (r11)
+
+| Step | Gate | Real-program test |
+| --- | --- | --- |
+| C0 | prologue: trap EXIT chown, baseline pip freeze | test_chown_runs_even_on_pytest_failure (test_r8_gpu_gate_and_artifacts.py) |
+| C1 | apt update -> git + cuda dev pkgs (fail-loud) | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly (test_r9_git_install.py, real bash+apt log) |
+| C2 | git safe.directory after install | same r9 test (order asserted from the apt/git logs) |
+| C3 | nvcc + g++ + ninja gate, arch override | test_project_arch_override_wins_over_image (test_r10_build_order.py) |
+| C4 | build deps with engine constraints, no silent fallback | test_engine_freeze_diff_refuses_changed_torch exercises the same constraint logic (test_r11_gates_real_programs.py) |
+| C5/C16 | exactly one `pip wheel` | test_exactly_one_pip_wheel_in_the_script + test_pip_wheel_runs_exactly_once (real run, recording pip shim) |
+| C6a | wheel file-list vs git ls-files | covered inside the real-run fixtures (missing file = refusal) |
+| C6b | both native extensions | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (real zipfile+CLI) |
+| C6c | cuobjdump sm_120 | arch refusal path exercised by test_r10_build_order.py fixtures (cuobjdump stub prints sm_120) |
+| C7 | wheel install + pip show before/after | real-run fixtures reach import-check only through the install |
+| C8 | import-check from site-packages | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (REAL pytest + plugin) |
+| C14 | engine freeze diff | test_engine_freeze_diff_refuses_changed_torch (real python on freeze files) |
+| C9 | minimal test deps (pytest only) | wiring in the real-run fixtures |
+| C10 | staging without lmcache/ | test_layout_run_sees_installed_not_source (staging copy asserted) |
+| C11 | staged pytest run + kvp_assert_installed | test_script_runs_the_exact_command (every invocation staged form) + plugin tests |
+| C12 | summary gate (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
+| C13 | GPU step (skip != 0 refused) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
+| C15 | identity.env single-quoted, sourced strictly | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (REAL bash/json) |
+| host | provenance fields from identity.env | test_provenance_json_fields (real build-lmcache.sh run) |
+
 Build step order (r10): apt/git -> build deps (incl. `grpcio-tools==1.78.0`
 for the proto stub generator) -> `pip wheel` -> wheel content checks
 (git ls-files + both native extensions) -> `pip install --no-deps

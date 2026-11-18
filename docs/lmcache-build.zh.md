@@ -21,6 +21,30 @@
 补丁（补丁无法应用或已被意外应用时响亮失败），运行 #4136 与 #5972 的聚焦
 上游回归测试，用 `--no-build-isolation` 针对镜像内已安装的 PyTorch 构建
 
+### 参考构建流水线 C0-C16：步骤 -> 覆盖测试（r11）
+
+| 步骤 | 门禁 | 真实程序测试 |
+| --- | --- | --- |
+| C0 | 前导：trap EXIT chown、baseline pip freeze | test_chown_runs_even_on_pytest_failure（test_r8_gpu_gate_and_artifacts.py） |
+| C1 | apt update -> git + cuda dev pkgs（响亮拒绝） | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly（test_r9_git_install.py，真实 bash+apt 日志） |
+| C2 | git safe.directory 在安装之后 | 同 r9 测试（顺序由 apt/git 日志断言） |
+| C3 | nvcc + g++ + ninja 门禁、架构覆盖 | test_project_arch_override_wins_over_image（test_r10_build_order.py） |
+| C4 | 带引擎 constraints 的构建依赖，无静默回退 | test_engine_freeze_diff_refuses_changed_torch（同一 constraints 逻辑） |
+| C5/C16 | 恰好一次 `pip wheel` | test_exactly_one_pip_wheel_in_the_script + test_pip_wheel_runs_exactly_once（真实运行、记录型 pip shim） |
+| C6a | wheel 文件清单对比 git ls-files | 真实运行夹具覆盖（缺文件 = 拒绝） |
+| C6b | 两个原生扩展 | test_wheel_without_lmcache_native_refused（test_r10_build_order.py）+ test_check_wheel_native.py（真实 zipfile+CLI） |
+| C6c | cuobjdump sm_120 | test_r10_build_order.py 夹具走架构拒绝路径（cuobjdump 桩打印 sm_120） |
+| C7 | wheel 安装 + pip show 前后 | 真实运行夹具只有经安装才能到 import-check |
+| C8 | 从 site-packages import-check | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件） |
+| C14 | engine freeze diff | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件） |
+| C9 | 最小测试依赖（仅 pytest） | 真实运行夹具的接线 |
+| C10 | staging 不含 lmcache/ | test_layout_run_sees_installed_not_source（staging 拷贝被断言） |
+| C11 | staged pytest + kvp_assert_installed | test_script_runs_the_exact_command（每个调用都须 staged 形式）+ 插件测试 |
+| C12 | 摘要门禁（skipped==0，passed>0） | test_skip_in_five_cpu_files_still_aborts（test_r8_gpu_gate_and_artifacts.py） |
+| C13 | GPU 步骤（skip != 0 => 拒绝） | test_gpu_step_skip_is_not_success（test_r9_gpu_step_honesty.py） |
+| C15 | identity.env 单引号、严格 source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields（真实 bash/json） |
+| 主机 | provenance 字段取自 identity.env | test_provenance_json_fields（真实运行 build-lmcache.sh） |
+
 构建步骤顺序（r10）：apt/git → 构建依赖（含 proto 桩生成器所需的
 `grpcio-tools==1.78.0`）→ `pip wheel` → wheel 内容检查（git ls-files +
 两个原生扩展）→ `pip install --no-deps --force-reinstall` → 从

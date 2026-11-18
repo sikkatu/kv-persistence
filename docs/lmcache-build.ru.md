@@ -23,6 +23,30 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 применяет оба патча (громко завершается, если патч не применился или уже
 применён), гоняет узкие регрессионные наборы тестов для #4136 и #5972, собирает
 
+### Эталонный пайплайн сборки C0-C16: шаг -> закрывающий тест (r11)
+
+| Шаг | Гейт | Тест с настоящей программой |
+| --- | --- | --- |
+| C0 | пролог: trap EXIT chown, baseline pip freeze | test_chown_runs_even_on_pytest_failure (test_r8_gpu_gate_and_artifacts.py) |
+| C1 | apt update -> git + cuda dev pkgs (громкий отказ) | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly (test_r9_git_install.py, реальный bash+лог apt) |
+| C2 | git safe.directory после установки | тот же r9-тест (порядок из логов apt/git) |
+| C3 | гейт nvcc + g++ + ninja, оверрайд архитект | test_project_arch_override_wins_over_image (test_r10_build_order.py) |
+| C4 | build-зависимости с constraints движка, без тихого fallback | test_engine_freeze_diff_refuses_changed_torch (та же логика constraints) |
+| C5/C16 | ровно один `pip wheel` | test_exactly_one_pip_wheel_in_the_script + test_pip_wheel_runs_exactly_once (реальный прогон, пишущий pip shim) |
+| C6a | состав wheel против git ls-files | покрыто фикстурами реального прогона (пропавший файл = отказ) |
+| C6b | оба нативных расширения | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (реальный zipfile+CLI) |
+| C6c | cuobjdump sm_120 | путь отказа по архитектурам в фикстурах test_r10_build_order.py (cuobjdump-стаб печатает sm_120) |
+| C7 | установка wheel + pip show до/после | фикстуры реального прогона доходят до import-check только через установку |
+| C8 | import-check из site-packages | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (РЕАЛЬНЫЙ pytest + плагин) |
+| C14 | diff engine freeze | test_engine_freeze_diff_refuses_changed_torch (реальный python на freeze-файлах) |
+| C9 | минимальные тестовые зависимости (только pytest) | проводка в фикстурах реального прогона |
+| C10 | staging без lmcache/ | test_layout_run_sees_installed_not_source (копирование staging проверяется) |
+| C11 | staged pytest + kvp_assert_installed | test_script_runs_the_exact_command (каждый вызов в staged-форме) + тесты плагина |
+| C12 | гейт сводки (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
+| C13 | GPU-шаг (skip != 0 => отказ) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
+| C15 | identity.env в одинарных кавычках, строгий source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (РЕАЛЬНЫЙ bash/json) |
+| хост | поля provenance из identity.env | test_provenance_json_fields (реальный прогон build-lmcache.sh) |
+
 Порядок шагов сборки (r10): apt/git -> build-зависимости (включая
 `grpcio-tools==1.78.0` для генератора proto-стабов) -> `pip wheel` ->
 проверки состава wheel (git ls-files + оба нативных расширения) ->
