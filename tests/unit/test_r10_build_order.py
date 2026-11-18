@@ -23,7 +23,7 @@ def _harness(tmp_path: pathlib.Path, wheel_has_native: bool = True,
     bin_dir.mkdir(parents=True, exist_ok=True)
     for tool in ("bash", "cat", "grep", "tail", "mktemp", "chmod", "printf",
                  "sed", "awk", "tr", "cut", "find", "head", "wc", "mkdir",
-                 "rm", "cp", "ls", "date", "basename", "dirname"):
+                 "rm", "cp", "ls", "date", "basename", "dirname", "df"):
         real = shutil.which(tool)
         if real:
             (bin_dir / tool).symlink_to(real)
@@ -43,6 +43,12 @@ def _harness(tmp_path: pathlib.Path, wheel_has_native: bool = True,
         "if [ \"$1\" = \"--version\" ]; then echo 'Python 3.12.3'; exit 0; fi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
         f"  cat {tmp_path}/pytest-out.txt; exit 0; fi\n"
+        "if [ \"${1:-}\" = \"-m\" ] && [ \"${2:-}\" = \"pip\" ]; then\n"
+        f"  echo \"python3|$*\" >> \"{call_log}\"\n"
+        "  case \"$*\" in *wheel*)\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'# stub'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        "  esac\n"
+        "  exit 0\nfi\n"
         # r10: the wheel-native check runs as `python3 -m kvpersist.check_wheel_native`
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"kvpersist.check_wheel_native\" ]; then\n"
         "  shift 2; exec /usr/bin/python3 -m kvpersist.check_wheel_native \"$@\"; fi\n"
@@ -83,6 +89,9 @@ def _harness(tmp_path: pathlib.Path, wheel_has_native: bool = True,
         ("git", "#!/usr/bin/env bash\ncase \"$*\" in *ls-files*) exit 0 ;; esac\nexit 0\n"),
         ("apt-get", "#!/usr/bin/env bash\nexit 0\n"),
         ("nvcc", "#!/usr/bin/env bash\necho 'Cuda 13.0'\n"),
+        ("g++", "#!/usr/bin/env bash\necho g++\n"),
+        ("ninja", "#!/usr/bin/env bash\necho ninja\n"),
+        ("cuobjdump", "#!/usr/bin/env bash\necho 'Fatbin elf code:\n  arch = sm_120'\n"),
         ("chown", "#!/usr/bin/env bash\nexit 0\n"),
     ]:
         p = bin_dir / tool

@@ -95,12 +95,18 @@ def test_plugin_refuses_source_tree_with_exit4(tmp_path):
 
 
 def test_script_runs_the_exact_command(tmp_path):
-    """Wiring: the command _incontainer_build.sh runs matches pytest_cmd()."""
+    """Wiring: every pytest invocation in the script is the staged form
+    (python3 -P -m pytest -p kvp_assert_installed) -- a run WITHOUT -P would
+    silently collect the SOURCE tree (mutation: dropping -P must fail)."""
     src = INCONTAINER.read_text()
     expected = "python3 -P -m pytest -p kvp_assert_installed"
-    assert expected in src, (
-        f"the in-container script must run exactly: {expected}"
-    )
+    n_runs = [ln for ln in src.splitlines()
+              if "-m pytest" in ln and not ln.lstrip().startswith("#")]
+    assert n_runs, "no pytest invocation found"
+    for ln in n_runs:
+        assert expected in ln, (
+            f"every pytest run must use the staged form {expected!r}:\n{ln}"
+        )
     assert "PYTHONPATH=\"$KVP_SCRIPTS\"" in src, (
         "the script must pass the plugin dir on PYTHONPATH"
     )

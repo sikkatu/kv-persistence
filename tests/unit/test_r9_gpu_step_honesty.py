@@ -130,7 +130,7 @@ def test_gpu_step_skip_is_not_success(tmp_path):
     bin_dir.mkdir(parents=True)
     for tool in ("bash", "cat", "grep", "tail", "mktemp", "chmod", "printf",
                  "sed", "awk", "tr", "cut", "find", "head", "wc", "mkdir",
-                 "rm", "cp", "ls", "date", "basename", "dirname", "unzip", "sort"):
+                 "rm", "cp", "ls", "date", "basename", "dirname", "unzip", "sort", "df"):
         real = shutil.which(tool)
         if real:
             (bin_dir / tool).symlink_to(real)
@@ -147,6 +147,12 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         "cuda = _C()\n__version__ = '2.4.0'\nclass version:\n    cuda = '13.0'\n")
     (bin_dir / "python3").write_text(
         "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = \"-P\" ]; then shift; fi\n"
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then\n"
+        "  case \"$*\" in *wheel*)\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        "  esac\n"
+        "  exit 0\nfi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
         "  case \"$*\" in\n"
         f"    *test_cache_server.py*) cat \"{gpu_out}\" ;;\n"
@@ -163,6 +169,7 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         "    *re.search*|*zipfile*) exec /usr/bin/python3 \"$@\" ;;\n"
         "    *) echo '' ;;\n  esac\n  exit 0\nfi\n"
         "if [ \"$1\" = \"-\" ] || [ \"$1\" = \"-P\" ]; then cat > /dev/null; exit 0; fi\n"
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then shift 2; exec pip \"$@\"; fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "exec /usr/bin/python3 \"$@\"\n")
     (bin_dir / "python3").chmod(0o755)
@@ -170,6 +177,9 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         ("git", "#!/usr/bin/env bash\ncase \"$*\" in *ls-files*) exit 0 ;; esac\nexit 0\n"),
         ("apt-get", "#!/usr/bin/env bash\nexit 0\n"),
         ("nvcc", "#!/usr/bin/env bash\necho 'Cuda 13.0'\n"),
+        ("g++", "#!/usr/bin/env bash\necho g++\n"),
+        ("ninja", "#!/usr/bin/env bash\necho ninja\n"),
+        ("cuobjdump", "#!/usr/bin/env bash\necho 'Fatbin elf code:\n  arch = sm_120'\n"),
         ("pip", "#!/usr/bin/env bash\nexit 0\n"),
         ("chown", "#!/usr/bin/env bash\nexit 0\n"),
     ]:
@@ -178,6 +188,20 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         p.chmod(0o755)
     for sub in ("kvp-work", "kvp-wheels", "src"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    # r11 C10: staging copies tests/ + pytest.ini from $LMC_SRC into testroot
+    _t1 = tmp_path / "src" / "tests" / "v1"
+    _t1.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "tests" / "__init__.py").write_text("")
+    (_t1 / "__init__.py").write_text("")
+    (_t1 / "test_stub.py").write_text("def test_stub():\n    assert True\n")
+    (_t1 / "multiprocess").mkdir(exist_ok=True)
+    (_t1 / "multiprocess" / "__init__.py").write_text("")
+    for _n in ("test_lmcache_mp_connector.py", "test_vllm_mp_adapter.py"):
+        (_t1 / _n).write_text("def test_x():\n    assert True\n")
+    for _n in ("test_lmcache_driven_transfer_skip.py", "test_native_state_lookup.py",
+               "test_l1_owner_completion.py", "test_cache_server.py"):
+        (_t1 / "multiprocess" / _n).write_text("def test_x():\n    assert True\n")
+    (tmp_path / "src" / "pytest.ini").write_text("[pytest]\n")
     # r10: the phase verifies the wheel content before the GPU step -- provide
     # a complete one (both native extensions).
     import zipfile

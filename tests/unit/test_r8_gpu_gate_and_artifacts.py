@@ -62,6 +62,12 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
     ident_env = tmp_path / "kvp-work" / "identity.env"
     py_stub = (
         "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = \"-P\" ]; then shift; fi\n"
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then\n"
+"  case \"$*\" in *wheel*)\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        "  esac\n"
+        "  exit 0\nfi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
         # honest pytest model: the module-level CUDA skip of
         # test_cache_server.py happens ONLY when that file is collected.
@@ -101,6 +107,9 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
         ("apt-get", "#!/usr/bin/env bash\nexit 0\n"),
         ("pip", "#!/usr/bin/env bash\nexit 0\n"),
         ("nvcc", "#!/usr/bin/env bash\necho 'Cuda compilation tools, release 13.0, V13.0.61'\n"),
+        ("g++", "#!/usr/bin/env bash\necho g++\n"),
+        ("ninja", "#!/usr/bin/env bash\necho ninja\n"),
+        ("cuobjdump", "#!/usr/bin/env bash\necho 'Fatbin elf code:\\n  arch = sm_120'\n"),
         ("chown", f'#!/usr/bin/env bash\necho "$@" >> "{chown_log}"\nexit 0\n'),
     ]:
         p = bin_dir / tool
@@ -114,6 +123,20 @@ def _run_incontainer(tmp_path: pathlib.Path, pytest_out: str,
     bin_dir, chown_log = _make_stubs(tmp_path, pytest_out, pytest_rc, gpu_out=gpu_out)
     for sub in ("kvp-work", "kvp-wheels", "src"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    # r11 C10: staging copies tests/ + pytest.ini from $LMC_SRC into testroot
+    _t1 = tmp_path / "src" / "tests" / "v1"
+    _t1.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "tests" / "__init__.py").write_text("")
+    (_t1 / "__init__.py").write_text("")
+    (_t1 / "test_stub.py").write_text("def test_stub():\n    assert True\n")
+    (_t1 / "multiprocess").mkdir(exist_ok=True)
+    (_t1 / "multiprocess" / "__init__.py").write_text("")
+    for _n in ("test_lmcache_mp_connector.py", "test_vllm_mp_adapter.py"):
+        (_t1 / _n).write_text("def test_x():\n    assert True\n")
+    for _n in ("test_lmcache_driven_transfer_skip.py", "test_native_state_lookup.py",
+               "test_l1_owner_completion.py", "test_cache_server.py"):
+        (_t1 / "multiprocess" / _n).write_text("def test_x():\n    assert True\n")
+    (tmp_path / "src" / "pytest.ini").write_text("[pytest]\n")
     # r10: the phase verifies the wheel content before the tests -- provide a
     # complete one (both native extensions).
     import zipfile

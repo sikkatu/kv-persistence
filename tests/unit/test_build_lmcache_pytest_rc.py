@@ -46,8 +46,11 @@ def test_skips_counted_from_summary_not_grep_skipped():
 def test_mutation_reintroducing_or_true_is_red():
     """Mutation detector: putting back `|| true` must trip the wiring check."""
     import re
+    # r11: the pytest invocation moved into a subshell (`cd "$TESTROOT" &&
+    # ... python3 -P -m pytest -p kvp_assert_installed ...`); the detector
+    # must mutate THAT line, whatever the prefix.
     mutant = re.sub(
-        r"^(\s*python3 -m pytest .*)$",
+        r"^((?:.*&& )?.*python3 -P? -m pytest .*)$",
         r"\1 || true",
         INCONTAINER.read_text(),
         flags=re.M,
@@ -63,7 +66,8 @@ def _pytest_block(src: str) -> str:
     """Extract just the pytest invocation + surrounding flow (rough cut)."""
     lines = src.splitlines(keepends=True)
     for i, ln in enumerate(lines):
-        if "python3 -m pytest" in ln:
+        # r11: the invocation form is `python3 -P -m pytest` (C11 staging)
+        if "-m pytest" in ln:
             return "".join(lines[max(0, i - 2) : i + 6])
     return ""
 

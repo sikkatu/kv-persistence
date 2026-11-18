@@ -24,7 +24,7 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
     for tool in ("bash", "cat", "grep", "tail", "mktemp", "chmod", "printf",
                  "echo", "sed", "awk", "tr", "cut", "find", "head", "wc",
                  "mkdir", "rm", "cp", "ls", "date", "basename", "dirname",
-                 "unzip", "sort"):
+                 "unzip", "sort", "df"):
         real = shutil.which(tool)
         if real:
             (bin_dir / tool).symlink_to(real)
@@ -70,7 +70,9 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
         "    *md.version*) echo 'x' ;;\n"
         "    *re.search*|*zipfile*) exec /usr/bin/python3 \"$@\" ;;\n"
         "    *) echo '' ;;\n  esac\n  exit 0\nfi\n"
-        "if [ \"$1\" = \"-\" ] || [ \"$1\" = \"-P\" ]; then cat > /dev/null; exit 0; fi\n"
+        "if [ \"$1\" = \"-P\" ]; then case \"$*\" in *pytest*) cat \"" + str(py_out) + "\"; exit 0 ;; esac; cat > /dev/null; exit 0; fi\n"
+        "if [ \"$1\" = \"-\" ]; then cat > /dev/null; exit 0; fi\n"
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then shift 2; exec pip \"$@\"; fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "exec /usr/bin/python3 \"$@\"\n")
     (bin_dir / "python3").chmod(0o755)
@@ -78,7 +80,18 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
         pass  # git deliberately absent until apt installs it
     (bin_dir / "nvcc").write_text("#!/usr/bin/env bash\necho 'Cuda 13.0'\n")
     (bin_dir / "nvcc").chmod(0o755)
-    (bin_dir / "pip").write_text("#!/usr/bin/env bash\nexit 0\n")
+    for _t in ("g++", "ninja"):
+        (bin_dir / _t).write_text("#!/usr/bin/env bash\necho " + _t + "\n")
+        (bin_dir / _t).chmod(0o755)
+    (bin_dir / "cuobjdump").write_text("#!/usr/bin/env bash\necho 'Fatbin elf code:\\n  arch = sm_120'\n")
+    (bin_dir / "cuobjdump").chmod(0o755)
+    (bin_dir / "pip").write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "pip|$*|PP=${{PYTHONPATH:-}}" >> "{apt_log}"\n'
+        "  case \"$*\" in *wheel*)\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        "  esac\n"
+        "exit 0\n")
     (bin_dir / "pip").chmod(0o755)
     (bin_dir / "chown").write_text("#!/usr/bin/env bash\nexit 0\n")
     (bin_dir / "chown").chmod(0o755)
@@ -89,6 +102,20 @@ def _run(tmp_path: pathlib.Path, git_installs: bool = True):
     bin_dir, apt_log, git_log = _harness(tmp_path, git_installs)
     for sub in ("kvp-work", "kvp-wheels", "src"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    # r11 C10: staging copies tests/ + pytest.ini from $LMC_SRC into testroot
+    _t1 = tmp_path / "src" / "tests" / "v1"
+    _t1.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "tests" / "__init__.py").write_text("")
+    (_t1 / "__init__.py").write_text("")
+    (_t1 / "test_stub.py").write_text("def test_stub():\n    assert True\n")
+    (_t1 / "multiprocess").mkdir(exist_ok=True)
+    (_t1 / "multiprocess" / "__init__.py").write_text("")
+    for _n in ("test_lmcache_mp_connector.py", "test_vllm_mp_adapter.py"):
+        (_t1 / _n).write_text("def test_x():\n    assert True\n")
+    for _n in ("test_lmcache_driven_transfer_skip.py", "test_native_state_lookup.py",
+               "test_l1_owner_completion.py", "test_cache_server.py"):
+        (_t1 / "multiprocess" / _n).write_text("def test_x():\n    assert True\n")
+    (tmp_path / "src" / "pytest.ini").write_text("[pytest]\n")
     (tmp_path / "src" / ".git").mkdir(exist_ok=True)
     # r10: the phase now builds+checks a wheel -- provide one with BOTH native
     # extensions so the run reaches the git-config point we assert below.
@@ -126,10 +153,13 @@ def test_git_is_installed_before_first_use(tmp_path):
     git = git_log.read_text()
     assert "config" in git, "git config must run AFTER the install"
     # ordering: the apt install line precedes the git config call
-    apt_lines = apt.splitlines()
+    # (the pip stub shares the log -- filter its lines out)
+    apt_lines = [ln for ln in apt.splitlines() if not ln.startswith("pip|")]
     first_install = next(i for i, ln in enumerate(apt_lines) if "install" in ln and "git" in ln)
     assert first_install >= 0
-    assert "update" in apt_lines[0], "apt-get update must come first"
+    assert "update" in apt_lines[0], (
+        f"apt-get update must come first among apt calls:\n{apt_lines[:5]}"
+    )
 
 
 def test_missing_git_package_refuses_loudly(tmp_path):
