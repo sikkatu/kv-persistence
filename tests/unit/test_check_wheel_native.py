@@ -99,7 +99,10 @@ def test_cli_exit2_on_unreadable_wheel(tmp_path):
 # ---- build-script wiring ----------------------------------------------------------
 def test_build_script_requires_nvcc_and_checks_wheel():
     src = (ROOT / "scripts" / "build-lmcache.sh").read_text()
-    assert "nvcc" in src, "build-lmcache.sh must preflight the nvcc compiler"
+    # r6-7 A-1: the compile phase lives in scripts/_incontainer_build.sh
+    inc = (ROOT / "scripts" / "_incontainer_build.sh").read_text()
+    src = src + inc
+    assert "nvcc" in inc, "the in-container phase must preflight the nvcc compiler"
     assert "BUILD_WITH_CUDA" in src, "the CUDA extension build must be forced on"
     assert "TORCH_CUDA_ARCH_LIST" in src, (
         "the arch list must include 12.0 (RTX PRO 6000 Blackwell / SM 120)"

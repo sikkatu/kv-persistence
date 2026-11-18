@@ -31,8 +31,9 @@ bash scripts/start-all.sh
   的固定 vLLM runtime。从 `vendor/pinned-base-image.env` 读取；可用
   `KVP_BASE_IMAGE=<digest>` 覆盖。
 * **自定义运行时镜像**（`IMAGE` / `live/image`）：`scripts/build-image.sh` 构建
-  的衍生镜像（vLLM + 自定义 LMCache 构建），在*启动*时由 `start-cache.sh`、
-  `start-all.sh` 和配方启动器使用。记录在 `live/image`；显式
+  的衍生镜像（vLLM + 自定义 LMCache 构建），在*启动*时由 `start-all.sh`
+  （先经 `start-observability.sh` 启动监控，再启动缓存）和配方启动器使用。
+  记录在 `live/image`；显式
   `export IMAGE=<sha256:...>` 优先。
 
 **📖 文档（EN / RU / ZH）位于 Wiki：**

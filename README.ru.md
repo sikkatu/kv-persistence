@@ -34,7 +34,8 @@ bash scripts/start-all.sh
   `vendor/pinned-base-image.env`; переопределяется `KVP_BASE_IMAGE=<digest>`.
 * **custom runtime образ** (`IMAGE` / `live/image`): производный образ из
   `scripts/build-image.sh` (vLLM + custom LMCache), используется при *запуске*
-  в `start-cache.sh`, `start-all.sh` и лаунчерах рецептов. Записывается в
+  в `start-all.sh` (который сначала поднимает мониторинг через
+  `start-observability.sh`, и лишь затем кэш) и лаунчерах рецептов. Записывается в
   `live/image`; явный `export IMAGE=<sha256:...>` имеет приоритет.
 
 **📖 Документация (EN / RU / ZH) — в Wiki:**

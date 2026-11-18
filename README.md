@@ -36,7 +36,8 @@ No `export IMAGE` anywhere: the base vLLM image is pinned once in
   `vendor/pinned-base-image.env`; override with `KVP_BASE_IMAGE=<digest>`.
 * **custom runtime image** (`IMAGE` / `live/image`): the derivative built by
   `scripts/build-image.sh` (vLLM + the custom LMCache build), used at *launch*
-  time by `start-cache.sh`, `start-all.sh` and the recipe launchers. Recorded
+  time by `start-all.sh` (which starts monitoring via `start-observability.sh`
+  and only then the cache) and the recipe launchers. Recorded
   in `live/image`; an explicit `export IMAGE=<sha256:...>` still wins.
 
 **📖 Documentation (EN / RU / ZH) lives in the Wiki:**

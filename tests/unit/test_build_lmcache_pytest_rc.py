@@ -18,10 +18,12 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-lmcache.sh"
+# r6-7 A-1: the pytest phase lives in the in-container file
+INCONTAINER = ROOT / "scripts" / "_incontainer_build.sh"
 
 
 def test_pytest_rc_is_captured_not_swallowed():
-    src = SCRIPT.read_text()
+    src = INCONTAINER.read_text()
     assert "|| true" not in _pytest_block(src), (
         "the `pytest ... || true` line must be gone -- it swallows the exit code"
     )
@@ -32,7 +34,7 @@ def test_pytest_rc_is_captured_not_swallowed():
 
 
 def test_skips_counted_from_summary_not_grep_skipped():
-    src = SCRIPT.read_text()
+    src = INCONTAINER.read_text()
     assert "grep -cE '^SKIPPED'" not in src and "grep -c '^SKIPPED'" not in src, (
         "skip counts must come from --junitxml or the summary line, not grep of SKIPPED rows"
     )
@@ -47,7 +49,7 @@ def test_mutation_reintroducing_or_true_is_red():
     mutant = re.sub(
         r"^(\s*python3 -m pytest .*)$",
         r"\1 || true",
-        SCRIPT.read_text(),
+        INCONTAINER.read_text(),
         flags=re.M,
     )
     assert "|| true" in _pytest_block(mutant), (
