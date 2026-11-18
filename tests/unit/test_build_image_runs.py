@@ -82,7 +82,7 @@ case "$cmd" in
   inspect) echo sha256:{"0" * 56}abcdef; exit 0 ;;
   run) echo "KVP_LMC_VERSION=stub
 KVP_PY_IMPORTS=OK
-KVP_CUDA_OPS_IMPORT=OK
+KVP_CUDA_OPS_IMPORT=OK\nKVP_NATIVE_IMPORT=OK
 KVP_IDENTITY_FILE=OK
 KVP_GPU_COUNT=4
 KVP_GPU_SMOKE_OK_COUNT=4"; exit 0 ;;

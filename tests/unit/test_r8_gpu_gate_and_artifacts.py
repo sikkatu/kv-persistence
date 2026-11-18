@@ -88,6 +88,9 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
         "  exit 0\n"
         "fi\n"
         f"if [ \"$1\" = \"-\" ]; then body=$(cat); case \"$body\" in *GPU_CC=*) printf '%s\\n' \"$body\" | PYTHONPATH={ts} /usr/bin/python3 - > \"{ident_env}\" ;; *) : ;; esac; exit 0; fi\n"
+        # r10: the import-check heredoc runs as `python3 -P -` -- it must see
+        # site-packages modules; the stub accepts it and prints the proof lines.
+        "if [ \"$1\" = \"-P\" ]; then cat > /dev/null; echo 'lmcache.__file__ = /usr/lib/python3/site-packages/lmcache/__init__.py'; echo 'lmcache.cuda_ops.__file__ = /usr/lib/python3/site-packages/lmcache/cuda_ops.so'; echo 'lmcache.lmcache_native.__file__ = /usr/lib/python3/site-packages/lmcache/lmcache_native.so'; echo '[in-container] import-check OK (all native modules from site-packages)'; exit 0; fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "exec /usr/bin/python3 \"$@\"\n"
     )
@@ -111,6 +114,15 @@ def _run_incontainer(tmp_path: pathlib.Path, pytest_out: str,
     bin_dir, chown_log = _make_stubs(tmp_path, pytest_out, pytest_rc, gpu_out=gpu_out)
     for sub in ("kvp-work", "kvp-wheels", "src"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    # r10: the phase verifies the wheel content before the tests -- provide a
+    # complete one (both native extensions).
+    import zipfile
+    with zipfile.ZipFile(
+        tmp_path / "kvp-wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl", "w"
+    ) as z:
+        z.writestr("lmcache/__init__.py", b"# stub\n")
+        z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
+        z.writestr("lmcache/lmcache_native_stub.so", b"\x00")
     env = dict(os.environ,
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
                KVP_BUILD_SKIP_TESTS="0",
