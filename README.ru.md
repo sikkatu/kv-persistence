@@ -14,6 +14,29 @@ KV-блоки промптов восстанавливаются с NVMe, а н
 [docs/benchmarks.md](docs/benchmarks.md) по завершении приёмочного прогона
 (см. [Статус](#статус)).
 
+## С нуля за три команды
+
+```
+git clone https://github.com/sikkatu/kv-persistence.git && cd kv-persistence
+bash scripts/build-lmcache.sh
+bash scripts/build-image.sh
+bash scripts/start-all.sh
+```
+
+Никакого `export IMAGE`: базовый образ vLLM зафиксирован один раз в
+`vendor/pinned-base-image.env`, а custom runtime образ, собранный
+`build-image.sh`, записывается в `live/image` и подхватывается автоматически.
+
+**В цепочке два разных образа -- не путайте:**
+
+* **базовый образ** (`KVP_BASE_IMAGE`): закреплённый vLLM runtime, на котором
+  *собирается* custom LMCache wheel и производный образ. Читается из
+  `vendor/pinned-base-image.env`; переопределяется `KVP_BASE_IMAGE=<digest>`.
+* **custom runtime образ** (`IMAGE` / `live/image`): производный образ из
+  `scripts/build-image.sh` (vLLM + custom LMCache), используется при *запуске*
+  в `start-cache.sh`, `start-all.sh` и лаунчерах рецептов. Записывается в
+  `live/image`; явный `export IMAGE=<sha256:...>` имеет приоритет.
+
 **📖 Документация (EN / RU / ZH) — в Wiki:**
 [Главная](https://github.com/sikkatu/kv-persistence/wiki) ·
 [Быстрый старт](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.ru) ·

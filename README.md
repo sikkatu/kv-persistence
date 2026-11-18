@@ -16,6 +16,29 @@ once the hardware acceptance run completes on a target GPU host (see [Status](#s
 Until that run lands, claims of "seconds" are UNKNOWN — no numbers are published
 as verified yet.
 
+## Zero to running in three commands
+
+```
+git clone https://github.com/sikkatu/kv-persistence.git && cd kv-persistence
+bash scripts/build-lmcache.sh
+bash scripts/build-image.sh
+bash scripts/start-all.sh
+```
+
+No `export IMAGE` anywhere: the base vLLM image is pinned once in
+`vendor/pinned-base-image.env`, and the custom runtime image built by
+`build-image.sh` is recorded in `live/image` and picked up automatically.
+
+**Two different images exist in the chain -- do not mix them up:**
+
+* **base image** (`KVP_BASE_IMAGE`): the pinned vLLM runtime used *to build*
+  the custom LMCache wheel and derivative image. Read from
+  `vendor/pinned-base-image.env`; override with `KVP_BASE_IMAGE=<digest>`.
+* **custom runtime image** (`IMAGE` / `live/image`): the derivative built by
+  `scripts/build-image.sh` (vLLM + the custom LMCache build), used at *launch*
+  time by `start-cache.sh`, `start-all.sh` and the recipe launchers. Recorded
+  in `live/image`; an explicit `export IMAGE=<sha256:...>` still wins.
+
 **📖 Documentation (EN / RU / ZH) lives in the Wiki:**
 [Home](https://github.com/sikkatu/kv-persistence/wiki) ·
 [Quick Start](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start) ·

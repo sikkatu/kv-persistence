@@ -89,7 +89,23 @@ note "work dir  : $WORK_DIR"
 note "out dir   : $OUT_DIR"
 note "image     : $IMAGE"
 
-command -v docker >/dev/null || die "docker is required -- the build runs inside the pinned image"
+command -v docker >/dev/null || die "docker is required -- the build runs inside the pinned image.
+What to do: install docker (https://docs.docker.com/engine/install/) and re-run."
+# r6-7 B-4 pre-flight checks -- every refusal has ONE clear 'what to do' line.
+if ! docker info >/dev/null 2>&1; then
+  die "docker daemon is not reachable.
+What to do: start the docker service ('sudo systemctl start docker') or add your user to the docker group."
+fi
+# the base image must be pull-able or already present; a pull can be huge.
+if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+  echo "[build-lmcache] base image not present locally -- 'docker pull' will fetch it (tens of GB)." >&2
+  echo "[build-lmcache] free space for /var/lib/docker must cover it; abort and free space if unsure." >&2
+fi
+# disk space: wheel output lives under $OUT_DIR, the build work under $WORK_DIR
+_avail_kb="$(df -Pk "$(dirname "$OUT_DIR")" 2>/dev/null | awk 'NR==2{print $4}')"
+if [ -n "${_avail_kb:-}" ] && [ "$_avail_kb" -lt 4194304 ] 2>/dev/null; then
+  echo "WARNING(build-lmcache): less than 4 GB free for $OUT_DIR -- the build may run out of space." >&2
+fi
 
 # ---------------------------------------------------------------------------
 # 1 + 2. Check out the exact pinned source commit and verify it.

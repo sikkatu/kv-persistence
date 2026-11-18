@@ -12,6 +12,29 @@
 验收运行完成后结果发布于 [docs/benchmarks.md](docs/benchmarks.md)
 （见[状态](#状态)）。
 
+## 三条命令从零到运行
+
+```
+git clone https://github.com/sikkatu/kv-persistence.git && cd kv-persistence
+bash scripts/build-lmcache.sh
+bash scripts/build-image.sh
+bash scripts/start-all.sh
+```
+
+无需 `export IMAGE`：基础 vLLM 镜像只在 `vendor/pinned-base-image.env` 中
+固定一次，`build-image.sh` 构建的自定义运行时镜像会记录到 `live/image` 并被
+自动读取。
+
+**链路中有两个不同的镜像 -- 不要混淆：**
+
+* **基础镜像**（`KVP_BASE_IMAGE`）：用于*构建*自定义 LMCache wheel 和衍生镜像
+  的固定 vLLM runtime。从 `vendor/pinned-base-image.env` 读取；可用
+  `KVP_BASE_IMAGE=<digest>` 覆盖。
+* **自定义运行时镜像**（`IMAGE` / `live/image`）：`scripts/build-image.sh` 构建
+  的衍生镜像（vLLM + 自定义 LMCache 构建），在*启动*时由 `start-cache.sh`、
+  `start-all.sh` 和配方启动器使用。记录在 `live/image`；显式
+  `export IMAGE=<sha256:...>` 优先。
+
 **📖 文档（EN / RU / ZH）位于 Wiki：**
 [首页](https://github.com/sikkatu/kv-persistence/wiki) ·
 [快速开始](https://github.com/sikkatu/kv-persistence/wiki/Quick-Start.zh) ·
