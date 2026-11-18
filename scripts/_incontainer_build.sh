@@ -233,7 +233,7 @@ print(f"TORCH_CUDA={torch.version.cuda}")
 print(f"PYTHON_VERSION={sys.version.split()[0]}")
 print(f"CUDA_AVAILABLE={torch.cuda.is_available()}")
 print(f"GPU_COUNT={torch.cuda.device_count()}")
-print(f"GPU_CC={torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'n/a'}")
+print("GPU_CC=" + ("%d.%d" % torch.cuda.get_device_capability(0) if torch.cuda.is_available() else "n/a"))
 print("gpu_regression_run=" + __import__("os").environ.get("KVP_GPU_REGRESSION_RUN", "false"))
 PY
 echo "[in-container] build phase complete"

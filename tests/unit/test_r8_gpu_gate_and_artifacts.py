@@ -191,3 +191,26 @@ def test_chown_runs_on_success(tmp_path):
     assert "1000:1000" in log, f"chown must run after a successful build too:\n{log}"
 
 
+# ---------------------------------------------------------------------------
+# P2-2
+# ---------------------------------------------------------------------------
+def test_gpu_cc_identity_format_is_shell_safe(tmp_path):
+    """identity.env must hold GPU_CC=12.0 (a tuple `(12, 0)` breaks `source`
+    in bash and `${GPU_CC:-unknown}` yields '12,')."""
+    r, _ = _run_incontainer(tmp_path, PYTEST_OUT_CPU_OK)
+    identity = tmp_path / "kvp-work" / "identity.env"
+    text = identity.read_text() if identity.is_file() else r.stdout
+    m = re.search(r"^GPU_CC=(.*)$", text, re.M)
+    assert m, f"identity.env must carry GPU_CC:\n{text}"
+    val = m.group(1).strip()
+    assert re.fullmatch(r"[0-9]+\.[0-9]+|n/a", val), (
+        f"GPU_CC must be plain '12.0' or 'n/a', got {val!r}"
+    )
+
+
+def test_build_lmcache_passes_host_uid_gid():
+    """build-lmcache.sh must forward -e KVP_HOST_UID/GID to the container."""
+    src = BUILD_LMC.read_text()
+    assert "KVP_HOST_UID" in src and "KVP_HOST_GID" in src, (
+        "build-lmcache.sh must pass the host uid/gid for the chown step"
+    )
