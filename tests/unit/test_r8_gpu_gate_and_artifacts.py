@@ -1,0 +1,171 @@
+# SPDX-License-Identifier: Apache-2.0
+"""r8: GPU-integration test must not gate a GPU-less build; root-owned build
+artifacts must be chowned back to the host user even on failure; GPU_CC in
+identity.env must be plain `12.0` (a tuple breaks `source` in bash).
+
+Reproduced: scripts/_incontainer_build.sh ran six regression files and
+required skipped == 0. The build container runs WITHOUT --gpus, and
+tests/v1/multiprocess/test_cache_server.py does
+`pytest.skip("requires available CUDA runtime", allow_module_level=True)`
+-- 'N passed, 1 skipped' trips the gate, so a production build WITHOUT
+KVP_BUILD_SKIP_TESTS=1 can never finish.
+
+Rule: stubs must not forgive what the real command does not forgive.
+"""
+from __future__ import annotations
+import os
+import pathlib
+import re
+import subprocess
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+INCONTAINER = ROOT / "scripts" / "_incontainer_build.sh"
+BUILD_LMC = ROOT / "scripts" / "build-lmcache.sh"
+
+PYTEST_OUT_CPU_OK = "......                                                           [100%]\n6 passed in 0.05s\n"
+PYTEST_OUT_CACHE_SERVER_SKIP = (
+    ".....                                                            [100%]\n"
+    "5 passed, 1 skipped in 0.05s\n"
+    "SKIPPED [1] tests/v1/multiprocess/test_cache_server.py:50: requires available CUDA runtime\n"
+)
+PYTEST_OUT_GATE_FILE_SKIP = (
+    ".....                                                            [100%]\n"
+    "5 passed, 1 skipped in 0.05s\n"
+    "SKIPPED [1] tests/v1/test_vllm_mp_adapter.py:483: could not import 'lmcache.integration.vllm.lmcache_mp_connector'\n"
+)
+
+
+def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
+                gpu_out: str | None = None):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    out_file = tmp_path / "pytest-out.txt"
+    out_file.write_text(pytest_out)
+    gpu_file = tmp_path / "pytest-gpu-out.txt"
+    gpu_file.write_text(gpu_out if gpu_out is not None else pytest_out)
+    chown_log = tmp_path / "chown.log"
+    # torch stub so the REAL identity-heredoc python code runs unmodified
+    ts = tmp_path / "torchstub"
+    (ts / "torch").mkdir(parents=True, exist_ok=True)
+    (ts / "torch" / "__init__.py").write_text(
+        "class _C:\n"
+        "    @staticmethod\n"
+        "    def is_available(): return False\n"
+        "    @staticmethod\n"
+        "    def device_count(): return 0\n"
+        "    @staticmethod\n"
+        "    def get_device_capability(i): return (12, 0)\n"
+        "cuda = _C()\n"
+        "__version__ = '2.4.0'\n"
+        "class version:\n    cuda = '13.0'\n"
+    )
+    ident_env = tmp_path / "kvp-work" / "identity.env"
+    py_stub = (
+        "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
+        # honest pytest model: the module-level CUDA skip of
+        # test_cache_server.py happens ONLY when that file is collected.
+        "  case \"$*\" in\n"
+        "    *test_cache_server.py*)\n"
+        f"      cat \"{gpu_file}\" ;;\n"
+        "    *)\n"
+        f"      cat \"{out_file}\" ;;\n"
+        "  esac\n"
+        f"  exit {pytest_rc}\n"
+        "fi\n"
+        "if [ \"$1\" = \"--version\" ]; then echo 'Python 3.12.3'; exit 0; fi\n"
+        "if [ \"$1\" = \"-c\" ]; then\n"
+        "  case \"$2\" in\n"
+        "    *torch.version.cuda*) echo '13.0' ;;\n"
+        "    *is_available*) echo 'False' ;;\n"
+        "    *device_count*) echo '0' ;;\n"
+        "    *__version__*) echo '2.4.0' ;;\n"
+        "    *get_device_capability*) echo '(12, 0)' ;;\n"
+        "    *md.version*) echo '0.5.7.dev428+kvp.abc' ;;\n"
+        "    *re.search*) exec /usr/bin/python3 \"$@\" ;;\n"
+        "    *) echo '' ;;\n"
+        "  esac\n"
+        "  exit 0\n"
+        "fi\n"
+        f"if [ \"$1\" = \"-\" ]; then body=$(cat); case \"$body\" in *GPU_CC=*) printf '%s\\n' \"$body\" | PYTHONPATH={ts} /usr/bin/python3 - > \"{ident_env}\" ;; *) : ;; esac; exit 0; fi\n"
+        "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
+        "exec /usr/bin/python3 \"$@\"\n"
+    )
+    (bin_dir / "python3").write_text(py_stub)
+    (bin_dir / "python3").chmod(0o755)
+    for tool, body in [
+        ("git", "#!/usr/bin/env bash\nexit 0\n"),
+        ("apt-get", "#!/usr/bin/env bash\nexit 0\n"),
+        ("pip", "#!/usr/bin/env bash\nexit 0\n"),
+        ("nvcc", "#!/usr/bin/env bash\necho 'Cuda compilation tools, release 13.0, V13.0.61'\n"),
+        ("chown", f'#!/usr/bin/env bash\necho "$@" >> "{chown_log}"\nexit 0\n'),
+    ]:
+        p = bin_dir / tool
+        p.write_text(body)
+        p.chmod(0o755)
+    return bin_dir, chown_log
+
+
+def _run_incontainer(tmp_path: pathlib.Path, pytest_out: str,
+                     pytest_rc: int = 0, extra_env=None, gpu_out: str | None = None):
+    bin_dir, chown_log = _make_stubs(tmp_path, pytest_out, pytest_rc, gpu_out=gpu_out)
+    for sub in ("kvp-work", "kvp-wheels", "src"):
+        (tmp_path / sub).mkdir(exist_ok=True)
+    env = dict(os.environ,
+               PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
+               KVP_BUILD_SKIP_TESTS="0",
+               KVP_BUILD_GPU_TESTS="0",
+               KVP_HOST_UID="1000", KVP_HOST_GID="1000",
+               KVP_SCRIPTS_DIR=str(ROOT / "scripts"),
+               KVP_LMC_SRC=str(tmp_path / "src"),
+               KVP_WORK_DIR=str(tmp_path / "kvp-work"),
+               KVP_WHEELS_DIR=str(tmp_path / "kvp-wheels"))
+    if extra_env:
+        env.update(extra_env)
+    r = subprocess.run(
+        ["bash", str(INCONTAINER)], capture_output=True, text=True,
+        timeout=120, env=env, cwd=str(tmp_path),
+    )
+    return r, chown_log
+
+
+# ---------------------------------------------------------------------------
+# P0
+# ---------------------------------------------------------------------------
+def test_cache_server_skip_passes_the_gate(tmp_path):
+    """The module-level CUDA skip of test_cache_server.py must NOT gate the
+    build -- the five CPU gate files run WITHOUT that file and pass
+    (red before the fix: the old single six-file run collected it and the
+    skipped!=0 gate aborted the build)."""
+    r, _ = _run_incontainer(tmp_path, PYTEST_OUT_CPU_OK,
+                            gpu_out=PYTEST_OUT_CACHE_SERVER_SKIP)
+    assert r.returncode == 0, (
+        f"a skip of test_cache_server.py must not gate the build:\n"
+        f"{r.stdout[-800:]}\n{r.stderr[-800:]}"
+    )
+
+
+def test_skip_in_five_cpu_files_still_aborts(tmp_path):
+    """A skip in one of the FIVE mandatory CPU files must still abort the
+    build (the gate must not become toothless)."""
+    r, _ = _run_incontainer(tmp_path, PYTEST_OUT_GATE_FILE_SKIP)
+    assert r.returncode != 0, "a skip in a mandatory CPU test must abort"
+    out = r.stdout + r.stderr
+    assert "SKIPPED" in out and "test_vllm_mp_adapter" in out, (
+        f"the error must list the SKIPPED lines from -rs:\n{out[-800:]}"
+    )
+
+
+def test_gpu_tests_run_only_when_requested(tmp_path):
+    """KVP_BUILD_GPU_TESTS=1 runs test_cache_server.py in a separate GPU step
+    (the log must say so); with 0 the step is skipped with a clear message."""
+    r, _ = _run_incontainer(tmp_path, PYTEST_OUT_CPU_OK, extra_env={"KVP_BUILD_GPU_TESTS": "1"})
+    assert "gpu" in (r.stdout + r.stderr).lower(), (
+        "the GPU regression step must be announced in the log"
+    )
+    r2, _ = _run_incontainer(tmp_path, PYTEST_OUT_CPU_OK)
+    assert "skip" in (r2.stdout + r2.stderr).lower() or "gpu" in (r2.stdout + r2.stderr).lower(), (
+        "the skipped GPU step must be announced in the log"
+    )
+
+

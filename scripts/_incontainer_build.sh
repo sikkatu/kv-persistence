@@ -15,10 +15,16 @@
 # Mounted paths: /usr/src/lmcache (patched source, rw), /kvp-patches (ro),
 # /kvp-scripts (ro), /kvp-wheels (rw), /kvp-work (rw).
 set -Eeuo pipefail
+# r8: path variables overridable for the behavioral unit tests (the real
+# container values below are the defaults).
+LMC_SRC="${KVP_LMC_SRC:-/usr/src/lmcache}"
+KVP_WORK="${KVP_WORK_DIR:-/kvp-work}"
+KVP_WHEELS="${KVP_WHEELS_DIR:-/kvp-wheels}"
+KVP_SCRIPTS="${KVP_SCRIPTS_DIR:-/kvp-scripts}"
 # r3 P0-2: the mounted source tree is owned by a non-root uid while we run as
 # root inside the container -- git would refuse ("dubious ownership") and
 # setuptools_scm would abort the wheel build. Configure safe.directory here.
-git config --global --add safe.directory /usr/src/lmcache
+git config --global --add safe.directory $LMC_SRC
 # r3 P0-3: the vLLM runtime image ships nvcc + CUDA runtime but NOT the dev
 # headers cuda_ops compiles against (cuda-cudart-dev, libcusparse-dev,
 # libcusolver-dev -- vLLM's own Dockerfile installs them just for its LMCache
@@ -33,7 +39,7 @@ git config --global --add safe.directory /usr/src/lmcache
 # REFUSED"). Compute it through the single-source helper script so the unit
 # test and the container run the exact same code path.
 CUDA_TORCH="$(python3 -c 'import torch; print(torch.version.cuda)')"
-DEV_SUFFIX="$(bash /kvp-scripts/_cuda_dev_suffix.sh "$CUDA_TORCH")"
+DEV_SUFFIX="$(bash "$KVP_SCRIPTS/_cuda_dev_suffix.sh" "$CUDA_TORCH")"
 [ -n "$DEV_SUFFIX" ] || { echo "BUILD REFUSED: cannot derive a dev-package suffix from torch.version.cuda='$CUDA_TORCH'" >&2; exit 1; }
 echo "[in-container] CUDA dev suffix (from torch.version.cuda=$CUDA_TORCH): $DEV_SUFFIX"
 export CUDA_HOME=/usr/local/cuda
@@ -87,7 +93,7 @@ echo "[in-container] nvcc: $NVCC_VERSION"
 export BUILD_WITH_CUDA=1
 export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
 echo "[in-container] BUILD_WITH_CUDA=1 TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
-echo "$NVCC_VERSION" > /kvp-work/nvcc-version.txt
+echo "$NVCC_VERSION" > $KVP_WORK/nvcc-version.txt
 
 echo "[in-container] checking vLLM ABI / identity matches ..."
 python3 - <<'PY'
@@ -97,7 +103,7 @@ print("python", sys.version.split()[0])
 PY
 
 # Fail-fast native import check with the patched tree on PYTHONPATH.
-export PYTHONPATH=/usr/src/lmcache
+export PYTHONPATH=$LMC_SRC
 python3 - <<'PY'
 import sys, importlib
 try:
@@ -112,33 +118,38 @@ PY
 if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
   # Test-only dependencies must NOT disturb the pinned torch stack.
   echo "[in-container] installing pinned test deps (no torch upgrade)"
-  pip install --no-cache-dir -q -r /usr/src/lmcache/requirements/test.txt
+  pip install --no-cache-dir -q -r $LMC_SRC/requirements/test.txt
   echo "[in-container] running migration-regression suites for #4136 and #5972"
-  cd /usr/src/lmcache
+  cd $LMC_SRC
   # r3 P1-1: capture the real pytest exit code -- the old pattern of silencing
   # failures and grepping output words (any 'error' substring) both under- and
   # over-claimed: a crash without those words got "passed", a stderr mention of
   # "error" got "failed". The exit code is the ONLY authoritative signal; skip
   # counts come from the pytest summary line (never from counting detail rows).
+  # r8 P0: the FIVE CPU regression files are the mandatory gate (skipped==0).
+  # test_cache_server.py is a GPU-INTEGRATION suite (starts the LMCache
+  # server + CUDA IPC, does pytest.skip at module level without CUDA) and
+  # CANNOT be mandatory in a build container that runs without --gpus -- it
+  # runs as a separate step only when KVP_BUILD_GPU_TESTS=1 (container then
+  # needs --gpus all).
   set +e
   python3 -m pytest -q -rs \
-    --junitxml=/kvp-work/pytest-report.xml \
+    --junitxml=$KVP_WORK/pytest-report.xml \
     tests/v1/test_lmcache_mp_connector.py \
     tests/v1/test_vllm_mp_adapter.py \
     tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py \
     tests/v1/multiprocess/test_native_state_lookup.py \
     tests/v1/multiprocess/test_l1_owner_completion.py \
-    tests/v1/multiprocess/test_cache_server.py \
-    > /kvp-work/pytest-report.txt 2>&1
+    > $KVP_WORK/pytest-report.txt 2>&1
   rc=$?
   set -e
-  cat /kvp-work/pytest-report.txt
+  cat $KVP_WORK/pytest-report.txt
   if [ "$rc" != "0" ]; then
     echo "REGRESSION FAILURE: pytest exited rc=$rc -- aborting build" >&2
     exit 1
   fi
   # summary line is the last non-empty line, e.g. "3 passed in 1.23s"
-  _summary_line="$(grep -E '^[0-9]+ (passed|failed|error)' /kvp-work/pytest-report.txt | tail -1 || true)"
+  _summary_line="$(grep -E '^[0-9]+ (passed|failed|error)' $KVP_WORK/pytest-report.txt | tail -1 || true)"
   # r4 P1: when the suite dies before the summary (collection error, crash),
   # grep | tail under set -e/pipefail with an empty match used to abort the
   # script with NO message. Fail loudly and name the problem instead.
@@ -150,9 +161,39 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
   _skipped="$(python3 -c 'import re,sys; m=re.search(r"(\d+) skipped", sys.argv[1]); print(m.group(1) if m else 0)' "$_summary_line")"
   if [ "$_skipped" != "0" ]; then
     echo "REGRESSION FAILURE: $_skipped required test(s) SKIPPED (skipped != passed) -- aborting build"
+    echo "  r8: the five CPU gate files must run 0 skipped. SKIPPED rows from -rs:"
+    grep '^SKIPPED \[' $KVP_WORK/pytest-report.txt || true
     exit 1
   fi
   echo "pytest rc=$rc, skipped=$_skipped -- focused regression tests PASSED (0 failed, 0 skipped)"
+
+  # r8 P0: GPU-integration regression (test_cache_server.py) is a SEPARATE
+  # step, only when explicitly requested (container must have --gpus all).
+  GPU_REGRESSION_RUN=false
+  if [ "${KVP_BUILD_GPU_TESTS:-0}" = "1" ]; then
+    echo "[in-container] GPU regression step: tests/v1/multiprocess/test_cache_server.py (needs --gpus all)"
+    set +e
+    python3 -m pytest -q -rs \
+      --junitxml=$KVP_WORK/pytest-gpu-report.xml \
+      tests/v1/multiprocess/test_cache_server.py \
+      > $KVP_WORK/pytest-gpu-report.txt 2>&1
+    _gpu_rc=$?
+    set -e
+    cat $KVP_WORK/pytest-gpu-report.txt
+    if [ "$_gpu_rc" != "0" ]; then
+      echo "REGRESSION FAILURE: GPU regression pytest exited rc=$_gpu_rc -- aborting build"
+      exit 1
+    fi
+    GPU_REGRESSION_RUN=true
+    export KVP_GPU_REGRESSION_RUN=true
+    echo "[in-container] GPU regression PASSED (gpu_regression_run: true)"
+  else
+    export KVP_GPU_REGRESSION_RUN=false
+    echo "[in-container] GPU regression step SKIPPED -- set KVP_BUILD_GPU_TESTS=1 to run"
+    echo "  tests/v1/multiprocess/test_cache_server.py here (container needs --gpus all)."
+    echo "  Its CUDA IPC checks are covered by the GPU-smoke in scripts/build-image.sh"
+    echo "  (one native kernel per GPU on the built image)."
+  fi
 else
   echo "[in-container] KVP_BUILD_SKIP_TESTS=1 -- tests skipped (not production-acceptable)"
 fi
@@ -160,16 +201,16 @@ fi
 # 9. Build the wheel against the INSTALLED torch, no build isolation,
 #    pinned build deps only.
 echo "[in-container] building custom LMCache wheel (no build isolation)"
-cd /usr/src/lmcache
-pip install --no-cache-dir -q -r /usr/src/lmcache/requirements/build.txt 2>/dev/null \
+cd $LMC_SRC
+pip install --no-cache-dir -q -r $LMC_SRC/requirements/build.txt 2>/dev/null \
   || pip install --no-cache-dir -q "ninja" "packaging>=24.2" "setuptools>=77.0.3,<81.0.0" "setuptools_scm>=8" "wheel"
-python3 -m pip wheel . --no-build-isolation --no-deps -w /kvp-wheels
+python3 -m pip wheel . --no-build-isolation --no-deps -w $KVP_WHEELS
 
 echo "[in-container] artifacts:"
-ls -la /kvp-wheels
+ls -la $KVP_WHEELS
 
 # Identity block written for the host phase.
-python3 - <<'PY' > /kvp-work/identity.env
+python3 - <<'PY' > $KVP_WORK/identity.env
 import importlib.metadata as md, torch, sys
 try:
     lm = md.version("lmcache")
@@ -182,5 +223,6 @@ print(f"PYTHON_VERSION={sys.version.split()[0]}")
 print(f"CUDA_AVAILABLE={torch.cuda.is_available()}")
 print(f"GPU_COUNT={torch.cuda.device_count()}")
 print(f"GPU_CC={torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'n/a'}")
+print("gpu_regression_run=" + __import__("os").environ.get("KVP_GPU_REGRESSION_RUN", "false"))
 PY
 echo "[in-container] build phase complete"
