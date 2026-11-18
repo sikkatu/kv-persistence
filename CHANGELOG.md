@@ -13,6 +13,28 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 9 review fixes (P0 + P1, one commit per item -- behavioral tests first)
+* **P0** `20fafcf`: the vLLM image ships NO git -- the in-container phase died
+  rc=127 on its first line (`git config`). Fix: `apt-get install git` right
+  after the mandatory `apt-get update` (fail-loud, apt tail visible), the
+  `git config` safe.directory line moved below it, and after `pip wheel` the
+  wheel's `lmcache/` listing is checked against `git ls-files lmcache`
+  (non-py, non-so) -- without git the setuptools_scm file-finder silently
+  drops package data from the wheel. External-program audit table in the
+  commit. Mutation (git config above the install) red.
+* **P1-1** `0ad1f2d`: KVP_BUILD_GPU_TESTS=1 now passes `--gpus all` (array
+  args) with an nvidia-runtime pre-flight BEFORE docker run; the GPU step
+  requires torch.cuda.is_available() and parses the pytest summary like the
+  CPU gate -- a module-level skip is NOT a pass (skipped != 0 or passed == 0
+  -> REGRESSION FAILURE with SKIPPED rows). GPU_REGRESSION_RUN=true only
+  after a real passed run. Mutations (skip check removed / --gpus removed)
+  red.
+* **P1-2** `18e0f5d`: provenance.json records the BOOLEAN `gpu_regression_run`
+  (the field the r8 commit promised but never wrote); identity.env variable
+  renamed to GPU_REGRESSION_RUN (the name the host sources); docs x3 clarify
+  tests_skipped = whole-phase skip via KVP_BUILD_SKIP_TESTS=1, not pytest
+  skips. Mutation (field removed) red.
+
 ### Round 8 review fixes (P0 + P2, one commit per item -- behavioral tests first)
 * **P0** `03029c2`: the GPU-integration suite `test_cache_server.py` (module
   skip without CUDA) no longer gates the GPU-less build. Gate = FIVE CPU

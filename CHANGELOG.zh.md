@@ -13,6 +13,11 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 9 轮审阅修复（P0 + P1，一项一提交；行为测试先行）
+* **P0** `20fafcf`：vLLM 镜像没有 git——容器内阶段在第一行（`git config`）以 rc=127 崩溃。修复：在强制 `apt-get update` 后立即 `apt-get install git`（响亮拒绝，apt 尾部可见），`git config` safe.directory 行移到安装之后，`pip wheel` 后用 `git ls-files lmcache`（不含 .py 和 .so）核对 wheel 中 `lmcache/` 的内容——没有 git 时 setuptools_scm file-finder 会静默丢失包数据。外部程序审计表在提交信息中。变异（git config 在安装之上）为红。
+* **P1-1** `0ad1f2d`：KVP_BUILD_GPU_TESTS=1 现在传递 `--gpus all`（数组参数）并在 docker run 之前预检 nvidia-runtime；GPU 步骤要求 torch.cuda.is_available() 并像 CPU 门禁一样解析 pytest 摘要——模块级 skip **不**等于通过（skipped != 0 或 passed == 0 → REGRESSION FAILURE 并列出 SKIPPED 行）。仅在真正通过后设置 GPU_REGRESSION_RUN=true。变异（移除 skip 检查 / 移除 --gpus）为红。
+* **P1-2** `18e0f5d`：provenance.json 记录**布尔** `gpu_regression_run`（r8 提交承诺但未写入的字段）；identity.env 变量重命名为 GPU_REGRESSION_RUN（主机读取的名称）；三语文档澄清 tests_skipped = 通过 KVP_BUILD_SKIP_TESTS=1 整体跳过，而非 pytest 的 skip。变异（移除字段）为红。
+
 ### 第 8 轮审阅修复（P0 + P2，一项一提交；行为测试先行）
 * **P0** `03029c2`：GPU 集成套件 `test_cache_server.py`（无 CUDA 时模块级 skip）不再阻塞无 GPU 构建。门禁 = 五个 CPU 文件（skipped==0）；GPU 套件仅在 `KVP_BUILD_GPU_TESTS=1`（--gpus all）时运行；`provenance.json` 记录 `gpu_regression_run`；门禁失败列出 `-rs` 的 SKIPPED 行。五个文件已核查：无 skipif/pytest.skip；仅 test_vllm_mp_adapter 有 `importorskip`（在 vLLM 镜像中可导入）。变异（套件回到门禁）为红。
 * **P2-1** `f78b7d0`：root 拥有的构建产物——`trap EXIT` 将 /usr/src/lmcache /kvp-wheels /kvp-work 归还 KVP_HOST_UID:GID（失败时也执行）；build-lmcache.sh 传递 host uid/gid。变异（去掉 trap）为红。
