@@ -13,9 +13,12 @@
 # live/lmcache-build/wheels and records provenance.json).
 #
 # Usage:
-#   export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
 #   bash scripts/build-lmcache.sh
 #   bash scripts/build-image.sh
+#
+# r6-7 B-3: the BASE vLLM image digest is NOT hardcoded here -- it lives in
+# ONE place, vendor/pinned-base-image.env (KVP_BASE_IMAGE_DEFAULT), and is
+# resolved by both build scripts (override: KVP_BASE_IMAGE).
 #
 # Result: image "kvp-lmcache:<tag>" + live/image-identity.env (digest pin).
 
