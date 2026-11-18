@@ -13,6 +13,19 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 6-7 轮审阅修复（P0 + P1，一项一提交；行为测试先行）
+* **A-1/A-3/A-4** `68f68c9`：容器内构建阶段从 stdin heredoc 迁移到挂载的**文件**（`scripts/_incontainer_build.sh`）。在操作员机器上复现：`docker run` 没有 `-i` 时 `bash -s` 的 stdin 是**空的**，阶段悄悄消失，脚本在空输出中报「no wheel produced」。docker 桩现在与真正的 docker 行为一致（仅 `-i` 时附带 stdin；argv 中的挂载文件才是真正执行的脚本），失败时输出 docker rc + 工作目录 + pytest-report.txt 最后 20 行。其他 stdin-heredoc 位置已审计（build-image.sh 在 A-2 修复；探测用 -c）。
+* **A-2** `9223306` + `6ebaa04`：build-image.sh 的 verify 阶段是挂载**文件**（`scripts/_verify_image.py`），并在记录任何内容**之前**严格校验标记：`KVP_CUDA_OPS_IMPORT=OK`、`KVP_PY_IMPORTS=OK`、`KVP_IDENTITY_FILE=OK`、`KVP_GPU_SMOKE_OK_COUNT == KVP_GPU_COUNT > 0`——旧 heredoc 产生空的 verify.txt 和**虚假成功**。
+* **B-1** `8937148`：基础 vLLM 镜像只有一个 pin 文件 `vendor/pinned-base-image.env`。干净克隆**无需** `export IMAGE` 即可构建；`KVP_BASE_IMAGE` 覆盖；构建脚本中 `IMAGE`/`KVP_LMC_IMAGE` 被忽略（带警告）；浮动标签被拒绝，拒绝信息指明 pin 文件。
+* **B-2** `049a90f`（kv）+ `71dc08c`（recipes）：custom 镜像 ID **仅**在 verify-gate 之后写入 `live/image`；`IMAGE` 为空时 `start-cache.sh`/`start-all.sh` 与 KV_PERSIST=1 的配方启动器自动取用；失败的 smoke 绝不创建或覆盖该记录。
+* **B-3** `4db5b3f`：pin 一致性——digest **只**存在于 pin 文件（build-image.sh 头部硬编码已移除）；交叉检查 mimo-v2.6-pro-hotsplit 的 `tp4.env.example`（无 recipes 检出时明确 skip）。
+* **B-4** `10df544`：build-lmcache.sh 预检，每条拒绝附一行「怎么办」（无 docker / 守护进程不可达 / 镜像 pull 体积 / 磁盘空间），README EN/RU/ZH 新增「三条命令从零到运行」并区分基础镜像与 custom 镜像。
+* **测试补充** `3cac6c9`：静态 wiring 测试跟随 A-1 的文件迁移；快速开始措辞保持「监控先于缓存」的顺序。
+
+两个仓库的全套测试（第 6-7 轮最终）：
+* kv-persistence：533 passed，26 skipped
+* recipes：        443 passed，5 skipped
+
 ### 第 5 轮审阅修复（P1，一项一提交；行为测试先行）
 * **P1-1** `df8f096`：reset 拒绝真实的旧缓存目录（allowlist 不认识 LMCache 适配器真正写入的产物）。以 `fs_l2_adapter.py` / `key_codec.py` 为准：`encode_fs_filename` -> 每个 ObjectKey 一个 `<名称>.data`，临时文件回退为 `final.with_suffix('.tmp')` 或进入配置的 `relative_tmp_dir` 子目录。allowlist 新增 `*.data`、`*.tmp`（窄掩码，不用 `*`）以及从缓存自身 `l2-adapter.rendered.json` 读取的 `relative_tmp_dir` 顶层目录名（无键则不添加）。行为测试（test_reset_legacy_cache_allowlist.py）：无标记的旧缓存无需手动 touch 即可重置；出现一个外来文件即拒绝，未知列表恰为该外来文件；未配置的类 tmp 目录仍被视为外来。变异（移除 `*.data`）为红。
 * **P1-2** `c5d75f0`：面向运维的缓存根标记文档 x3（EN/RU/ZH，docs/lmcache-build.* 的 reset 小节）：标记的用途与 start-cache.sh 在初始化时创建；旧缓存的精确流程 `ls -A <KVP_CACHE_ROOT>` + `touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker`（与 reset 拒绝提示逐字一致，提示中亦加入 `ls -A`）；无条件拒绝（$HOME / /root / /home/<user>、检出目录的父目录、`.git` 深度 ≤ 2）。措辞保持「implemented, unit-tested; hardware validation pending」。按本轮规则不写静态词面测试。

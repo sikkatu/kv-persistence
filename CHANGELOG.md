@@ -13,6 +13,43 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 6-7 review fixes (P0 + P1, one commit per item -- behavioral tests first)
+* **A-1/A-3/A-4** `68f68c9`: in-container build phase moved from the stdin
+  heredoc to a mounted FILE (`scripts/_incontainer_build.sh`). Reproduced on
+  the operator machine: `docker run` WITHOUT `-i` left `bash -s` an EMPTY
+  stdin, the phase silently vanished and the script died 'no wheel produced'
+  into empty output. The docker stub now behaves like REAL docker (stdin only
+  with `-i`; a mounted file in the argv is what runs) and the failure carries
+  docker rc + work dir + last 20 lines of pytest-report.txt. All other
+  stdin-heredoc sites audited (build-image.sh fixed in A-2; probes use -c).
+* **A-2** `9223306` + `6ebaa04`: build-image.sh verify phase is a mounted
+  FILE (`scripts/_verify_image.py`) and a STRICT marker gate demands
+  `KVP_CUDA_OPS_IMPORT=OK`, `KVP_PY_IMPORTS=OK`, `KVP_IDENTITY_FILE=OK`,
+  `KVP_GPU_SMOKE_OK_COUNT == KVP_GPU_COUNT > 0` BEFORE anything is recorded
+  -- the old heredoc produced an empty verify.txt and a FAKE success.
+* **B-1** `8937148`: ONE pin file `vendor/pinned-base-image.env` for the base
+  vLLM image. Clean clone builds with NO `export IMAGE`; `KVP_BASE_IMAGE`
+  overrides; `IMAGE`/`KVP_LMC_IMAGE` are ignored (warned) in the build
+  scripts; a floating tag is refused and the refusal names the pin file.
+* **B-2** `049a90f` (kv) + `71dc08c` (recipes): custom image id recorded in
+  `live/image` ONLY after the verify gate; `start-cache.sh`/`start-all.sh`
+  and the KV_PERSIST=1 recipe launchers pick it up when `IMAGE` is empty; a
+  failed smoke never creates or overwrites the record.
+* **B-3** `4db5b3f`: pin consistency -- the digest lives ONLY in the pin
+  file (build-image.sh header de-hardcoded); cross-check test against
+  mimo-v2.6-pro-hotsplit's `tp4.env.example` (skips with a clear reason
+  without a recipes checkout).
+* **B-4** `10df544`: pre-flight checks in build-lmcache.sh, each refusal with
+  ONE 'what to do' line (docker missing / daemon unreachable / base image
+  pull size / free space), plus 'Zero to running in three commands' quick
+  start in README EN/RU/ZH with the base-vs-custom image distinction.
+* **Tests follow-up** `3cac6c9`: static wiring tests follow the A-1 file
+  move; quick-start wording keeps the monitoring-before-cache order.
+
+Full suite runs (both repositories, round 6-7 final):
+* kv-persistence: 533 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
+
 ### Round 5 review fixes (P1, one commit per item -- behavioral tests first)
 * **P1-1** `df8f096`: reset refused a REAL pre-marker cache dir (the allowlist
   did not know the artifacts the LMCache adapter actually writes). Source of
