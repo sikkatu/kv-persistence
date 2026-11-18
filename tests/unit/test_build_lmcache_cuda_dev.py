@@ -60,6 +60,9 @@ def _extract_apt_block() -> str:
     # KVP_SCRIPTS); for the test, point the call at the repo copy instead.
     block = block.replace('bash "$KVP_SCRIPTS/_cuda_dev_suffix.sh"', f'bash {SUFFIX_SH}')
     block = block.replace("/kvp-scripts/_cuda_dev_suffix.sh", str(SUFFIX_SH))
+    # r9: the block now runs `git config ... $LMC_SRC` after the git install --
+    # define the container path variable for the isolated run.
+    block = 'LMC_SRC="${KVP_LMC_SRC:-/usr/src/lmcache}"\n' + block
     return block
 
 
