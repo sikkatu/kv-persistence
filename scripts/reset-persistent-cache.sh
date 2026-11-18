@@ -94,8 +94,8 @@ cached_root_of() { # cached_root_of <candidate> -> echo the CONFIRMED raw root o
   return 1
 }
 
-# r4 P0-2: known LMCache/kvpersist entry set -- every top-level name the code
-# in THIS repo actually writes into the cache root:
+# r4 P0-2 / r5 P1-1: known LMCache/kvpersist entry set -- every top-level name
+# the code actually writes into the cache root:
 #   * lmcache-server.log / lmcache-server.pid   (scripts/start-cache.sh, stop-cache.sh)
 #   * l2-adapter.rendered.json                  (scripts/start-cache.sh)
 #   * engine-identity.env                       (scripts/verify-engine-identity.sh)
@@ -104,21 +104,55 @@ cached_root_of() { # cached_root_of <candidate> -> echo the CONFIRMED raw root o
 #   * .kvp-cache-root-marker / .kvp-active-writes (start-cache.sh / tmp_guard.py)
 #   * *.bin / *.bin.tmp.<uuid>                  (nixl_store_dynamic payload,
 #                                                implementation/kvpersist/cli.py)
+#   * *.data / *.tmp                            (fs_l2_adapter.py: every ObjectKey
+#                                                -> '<name>.data' via
+#                                                encode_fs_filename; temp files
+#                                                fall back to the '.tmp' suffix,
+#                                                final.with_suffix('.tmp'))
 #   * objects/ and kvp-* dirs                   (LMCache object stores + legacy
-#                                                legacy kvp-* namespace dirs)
+#                                                kvp-* namespace dirs)
 # Anything else top-level means this is NOT a pure cache dir: refuse and list.
+# Public masks stay narrow -- never a bare '*'.
 _kvp_known_cache_entry() { # _kvp_known_cache_entry <top-level name> -> 0 known / 1 unknown
   case "$1" in
     .kvp-cache-root-marker|\.kvp-cache-root-marker|\
     .kvp-active-writes|\.kvp-active-writes|\
     lmcache-server.log|lmcache-server.pid|l2-adapter.rendered.json|engine-identity.env|\
-    index.db|crash-*|objects|kvp-*|*.bin|*.bin.tmp.*)
+    index.db|crash-*|objects|kvp-*|*.bin|*.bin.tmp.*|*.data|*.tmp)
       return 0 ;;
   esac
+  # r5 P1-1: the configured `relative_tmp_dir` sub-dir (name read from THIS
+  # cache's own l2-adapter.rendered.json by _kvp_unknown_cache_entries) is a
+  # first-class adapter artifact -- anything else named *.tmp-ish is foreign.
+  [ -n "${_KVP_REL_TMP_DIR:-}" ] && [ "$1" = "$_KVP_REL_TMP_DIR" ] && return 0
   return 1
+}
+_kvp_rel_tmp_dir_from_adapter() { # _kvp_rel_tmp_dir_from_adapter <dir> -> top-level name of relative_tmp_dir or ""
+  local d="$1" cfg="$1/l2-adapter.rendered.json" _v
+  [ -f "$cfg" ] || return 0
+  _v="$(python3 - "$cfg" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+v = d.get("relative_tmp_dir")
+if isinstance(v, str):
+    v = v.strip().strip("/")
+    if v and ".." not in v.split("/"):
+        # only the TOP-LEVEL entry is checked against the allowlist;
+        # fs_l2_adapter.py rejects absolute paths and '..' components.
+        print(v.split("/")[0])
+PY
+)"
+  [ -n "$_v" ] && printf '%s\n' "$_v"
+  return 0
 }
 _kvp_unknown_cache_entries() { # _kvp_unknown_cache_entries <dir> -> echoes unknown names, rc 0 when at least one unknown
   local d="$1" entry base unknown=1
+  # r5 P1-1: trust the configured relative_tmp_dir (adapter config next to the
+  # payload) as a cache artifact -- everything else is judged by the allowlist.
+  _KVP_REL_TMP_DIR="$(_kvp_rel_tmp_dir_from_adapter "$d")" || _KVP_REL_TMP_DIR=""
   for entry in "$d"/* "$d"/.[!.]* "$d"/..?*; do
     [ -e "$entry" ] || continue
     base="$(basename "$entry")"
