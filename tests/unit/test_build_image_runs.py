@@ -80,7 +80,12 @@ case "$cmd" in
     [ -f "$CTX/kvp-lmcache-identity.json" ] && cp "$CTX/kvp-lmcache-identity.json" "{dockerfile_store}/kvp-lmcache-identity.json"
     exit 0 ;;
   inspect) echo sha256:{"0" * 56}abcdef; exit 0 ;;
-  run) echo "KVP_LMC_VERSION=stub"; exit 0 ;;
+  run) echo "KVP_LMC_VERSION=stub
+KVP_PY_IMPORTS=OK
+KVP_CUDA_OPS_IMPORT=OK
+KVP_IDENTITY_FILE=OK
+KVP_GPU_COUNT=4
+KVP_GPU_SMOKE_OK_COUNT=4"; exit 0 ;;
   *) exit 0 ;;
 esac
 """)
