@@ -32,10 +32,6 @@ _kvp_chown_back() {
   echo "[in-container] ownership returned to $_uid:$_gid ($LMC_SRC $KVP_WHEELS $KVP_WORK)"
 }
 trap _kvp_chown_back EXIT
-# r3 P0-2: the mounted source tree is owned by a non-root uid while we run as
-# root inside the container -- git would refuse ("dubious ownership") and
-# setuptools_scm would abort the wheel build. Configure safe.directory here.
-git config --global --add safe.directory $LMC_SRC
 # r3 P0-3: the vLLM runtime image ships nvcc + CUDA runtime but NOT the dev
 # headers cuda_ops compiles against (cuda-cudart-dev, libcusparse-dev,
 # libcusolver-dev -- vLLM's own Dockerfile installs them just for its LMCache
@@ -67,6 +63,25 @@ if ! apt-get update -y >"$apt_out" 2>&1; then
   tail -n 20 "$apt_out" >&2
   exit 1
 fi
+# r9 P0: the vLLM image ships NO git -- the phase died rc=127 on line 1.
+# git is needed for (a) the dubious-ownership safe.directory fix below and
+# (b) setuptools_scm's file-finder: without git it returns an EMPTY file list
+# and non-py package data (yaml/json/configs) silently drops out of the wheel.
+# Install it in the same fail-loud style as the CUDA dev packages; the image
+# repo supplies the version.
+if ! apt-get install -y --no-install-recommends git >"$apt_out" 2>&1; then
+  echo "BUILD REFUSED: package 'git' is unavailable in this image." >&2
+  echo "  The wheel build needs git (setuptools_scm file-finder + safe.directory)." >&2
+  echo "  Last lines of apt output:" >&2
+  tail -n 20 "$apt_out" >&2
+  exit 1
+fi
+echo "[in-container] installed git ($(git --version 2>/dev/null || echo unknown))"
+# r3 P0-2: the mounted source tree is owned by a non-root uid while we run as
+# root inside the container -- git would refuse ("dubious ownership") and
+# setuptools_scm would abort the wheel build. Configure safe.directory here
+# (r9: AFTER the git install -- git must exist first).
+git config --global --add safe.directory $LMC_SRC
 for pkg in cuda-cudart-dev-$DEV_SUFFIX libcusparse-dev-$DEV_SUFFIX \
            libcusolver-dev-$DEV_SUFFIX libcublas-dev-$DEV_SUFFIX; do
   if ! apt-get install -y --no-install-recommends "$pkg" >"$apt_out" 2>&1; then
@@ -216,6 +231,31 @@ cd $LMC_SRC
 pip install --no-cache-dir -q -r $LMC_SRC/requirements/build.txt 2>/dev/null \
   || pip install --no-cache-dir -q "ninja" "packaging>=24.2" "setuptools>=77.0.3,<81.0.0" "setuptools_scm>=8" "wheel"
 python3 -m pip wheel . --no-build-isolation --no-deps -w $KVP_WHEELS
+# r9 P0: the wheel must carry the non-py package data git tracks. Without git
+# the setuptools_scm file-finder returns an empty list and such files silently
+# disappear from the wheel -- compare the wheel's lmcache/ listing against
+# `git ls-files lmcache` (excluding *.py sources and *.so build outputs).
+python3 - "$KVP_WHEELS" "$LMC_SRC" <<'PY' || exit 1
+import subprocess, sys, zipfile, pathlib, os
+wheels, src = sys.argv[1], sys.argv[2]
+whl = sorted(pathlib.Path(wheels).glob("*.whl"))
+if not whl:
+    print("BUILD REFUSED: no wheel produced for the file-list check", file=sys.stderr)
+    raise SystemExit(1)
+names = set(zipfile.ZipFile(whl[0]).namelist())
+tracked = subprocess.run(["git", "-C", src, "ls-files", "lmcache"],
+                         capture_output=True, text=True, check=True).stdout.split()
+missing = [f for f in tracked
+           if not f.endswith(".py") and not f.endswith(".so")
+           and f not in names]
+if missing:
+    print("BUILD REFUSED: the wheel is missing non-py package data tracked by git:", file=sys.stderr)
+    for f in missing:
+        print("  missing:", f, file=sys.stderr)
+    print("  (setuptools_scm file-finder needs git -- was the wheel built without it?)", file=sys.stderr)
+    raise SystemExit(1)
+print(f"[in-container] wheel file-list check OK ({len(tracked)} tracked, none missing)")
+PY
 
 echo "[in-container] artifacts:"
 ls -la $KVP_WHEELS
