@@ -30,6 +30,20 @@ case "$KVP_LAUNCH_MODE" in
     command -v lmcache >/dev/null || die "lmcache CLI missing — see docs/deployment.md (or set KVP_LAUNCH_MODE=docker)" ;;
   docker)
     DOCKER_IMAGE="${IMAGE:-${DOCKER_IMAGE:-}}"
+    # r6-7 B-2: no manual IMAGE needed -- the custom image id recorded by
+    # build-image.sh (live/image) is the default runtime image.
+    if [ -z "$DOCKER_IMAGE" ]; then
+      _kvp_live="${KVP_LIVE_DIR:-$ROOT/live}"
+      if [ -s "$_kvp_live/image" ]; then
+        DOCKER_IMAGE="$(tr -d '[:space:]' < "$_kvp_live/image")"
+        echo "IMAGE not set -- using the custom image recorded in $_kvp_live/image: $DOCKER_IMAGE"
+      else
+        die "no IMAGE set and no $_kvp_live/image -- first run:
+  bash scripts/build-lmcache.sh
+  bash scripts/build-image.sh
+(or export IMAGE=<custom image id from 'docker inspect --format {{.Id}}' kvp-lmcache:latest>)"
+      fi
+    fi
     [ -n "$DOCKER_IMAGE" ] || die "KVP_LAUNCH_MODE=docker requires IMAGE (pinned vLLM digest) or DOCKER_IMAGE"
     command -v docker >/dev/null || die "docker required for KVP_LAUNCH_MODE=docker"
     # r2 P0-1: the shared MP cache server MUST run the custom LMCache build.

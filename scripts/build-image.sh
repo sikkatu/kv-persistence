@@ -162,6 +162,16 @@ IMAGE_ID="$(docker inspect --format='{{.Id}}' "$OUT_IMAGE" | sed 's/sha256://')"
   cat "$TMPD/verify.txt"
 } > "$IDENTITY"
 
+# r6-7 B-2: record the CUSTOM image id for the whole launch chain. This is
+# written ONLY after the strict verify gate above passed -- a failed smoke
+# must never create or overwrite live/image. start-cache.sh / start-all.sh /
+# the recipe launchers read this file when IMAGE is empty; an explicit IMAGE
+# still wins. KVP_LIVE_DIR keeps test runs out of the repo's live/.
+KVP_LIVE_DIR="${KVP_LIVE_DIR:-$ROOT/live}"
+mkdir -p "$KVP_LIVE_DIR"
+printf 'sha256:%s\n' "$IMAGE_ID" > "$KVP_LIVE_DIR/image"
+note "custom image id recorded: $KVP_LIVE_DIR/image (sha256:${IMAGE_ID:0:16}...)"
+note "ready to launch: bash scripts/start-all.sh   # picks the image up from live/image"
 note "custom image built: $OUT_IMAGE (id sha256:${IMAGE_ID:0:16}...)"
 note "identity written:   $IDENTITY"
 note "DIGEST use: pin the runtime by EXACT digest -- record ${IMAGE_ID} and pass the"
