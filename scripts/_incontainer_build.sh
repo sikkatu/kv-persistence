@@ -21,6 +21,17 @@ LMC_SRC="${KVP_LMC_SRC:-/usr/src/lmcache}"
 KVP_WORK="${KVP_WORK_DIR:-/kvp-work}"
 KVP_WHEELS="${KVP_WHEELS_DIR:-/kvp-wheels}"
 KVP_SCRIPTS="${KVP_SCRIPTS_DIR:-/kvp-scripts}"
+# r8 P2-1: the phase runs as root on the mounted dirs; return ownership to the
+# host user even on failure (trap EXIT) so a re-run is not blocked by
+# root-owned artifacts.
+_kvp_chown_back() {
+  _uid="${KVP_HOST_UID:-}"
+  _gid="${KVP_HOST_GID:-}"
+  [ -n "$_uid" ] && [ -n "$_gid" ] || return 0
+  chown -R "$_uid:$_gid" "$LMC_SRC" "$KVP_WHEELS" "$KVP_WORK" 2>/dev/null || true
+  echo "[in-container] ownership returned to $_uid:$_gid ($LMC_SRC $KVP_WHEELS $KVP_WORK)"
+}
+trap _kvp_chown_back EXIT
 # r3 P0-2: the mounted source tree is owned by a non-root uid while we run as
 # root inside the container -- git would refuse ("dubious ownership") and
 # setuptools_scm would abort the wheel build. Configure safe.directory here.

@@ -197,6 +197,8 @@ docker run --rm \
   -e PR6551_MERGE="$PR6551_MERGE" \
   -e KVP_BUILD_SKIP_TESTS="${KVP_BUILD_SKIP_TESTS:-0}" \
   -e SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE="$KVP_WHEEL_VERSION" \
+  -e KVP_HOST_UID="$(id -u)" \
+  -e KVP_HOST_GID="$(id -g)" \
   -e KVP_BUILD_GPU_TESTS="${KVP_BUILD_GPU_TESTS:-0}" \
   --entrypoint bash "$IMAGE" /kvp-scripts/_incontainer_build.sh \
   || DOCKER_RC=$?

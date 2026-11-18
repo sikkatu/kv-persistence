@@ -169,3 +169,25 @@ def test_gpu_tests_run_only_when_requested(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
+# P2-1
+# ---------------------------------------------------------------------------
+def test_chown_runs_even_on_pytest_failure(tmp_path):
+    """Even when pytest fails, the trap must chown the mounted dirs back to
+    the host user (root-owned artifacts block a re-run)."""
+    r, chown_log = _run_incontainer(tmp_path, "1 failed in 0.05s", pytest_rc=1)
+    assert r.returncode != 0
+    log = chown_log.read_text() if chown_log.is_file() else ""
+    assert "1000:1000" in log, (
+        f"chown back to KVP_HOST_UID:GID must run on failure too:\n{log}"
+    )
+    for d in (str(tmp_path / "src"), str(tmp_path / "kvp-wheels"), str(tmp_path / "kvp-work")):
+        assert d in log, f"chown must cover {d}:\n{log}"
+
+
+def test_chown_runs_on_success(tmp_path):
+    r, chown_log = _run_incontainer(tmp_path, PYTEST_OUT_CPU_OK)
+    log = chown_log.read_text() if chown_log.is_file() else ""
+    assert "1000:1000" in log, f"chown must run after a successful build too:\n{log}"
+
+
