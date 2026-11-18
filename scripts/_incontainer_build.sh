@@ -117,28 +117,121 @@ NVCC_VERSION="$(nvcc --version | tail -1)"
 echo "[in-container] nvcc: $NVCC_VERSION"
 # Force the CUDA extension build and target SM 120 (RTX PRO 6000 Blackwell).
 export BUILD_WITH_CUDA=1
-export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
-echo "[in-container] BUILD_WITH_CUDA=1 TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
+# r10 P1: the pinned image predefines TORCH_CUDA_ARCH_LIST="7.5 8.0 ... 12.0"
+# -- the old ${TORCH_CUDA_ARCH_LIST:-12.0} let the IMAGE value win (7 archs,
+# slow, huge .so). The project variable wins instead; the image value is
+# only the fallback. The log names the override explicitly.
+if [ -n "${TORCH_CUDA_ARCH_LIST:-}" ]; then
+  echo "[in-container] NOTE: image TORCH_CUDA_ARCH_LIST='$TORCH_CUDA_ARCH_LIST' is overridden to '${KVP_TORCH_CUDA_ARCH_LIST:-12.0}' (r10 P1)"
+fi
+export TORCH_CUDA_ARCH_LIST="${KVP_TORCH_CUDA_ARCH_LIST:-12.0}"
+echo "[in-container] BUILD_WITH_CUDA=1 TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST (KVP_TORCH_CUDA_ARCH_LIST)"
 echo "$NVCC_VERSION" > $KVP_WORK/nvcc-version.txt
 
-echo "[in-container] checking vLLM ABI / identity matches ..."
-python3 - <<'PY'
-import importlib.metadata as md, torch, sys
-print("vllm", md.version("vllm") if True else "?")
-print("python", sys.version.split()[0])
+# r10 P0-1: build the wheel FIRST (the only long step), then verify the
+# artifact we will actually ship. Order: build deps -> pip wheel -> wheel
+# checks -> install the wheel -> import-check (site-packages) -> pytest.
+echo "[in-container] building custom LMCache wheel (no build isolation)"
+cd $LMC_SRC
+pip install --no-cache-dir -q -r $LMC_SRC/requirements/build.txt 2>/dev/null \
+  || pip install --no-cache-dir -q "ninja" "packaging>=24.2" "setuptools>=77.0.3,<81.0.0" "setuptools_scm>=8" "wheel"
+# r10 P0-1: grpcio-tools feeds the proto stub generator in setup.py
+# (_BuildPyWithGrpcStubs) -- without it the generated gRPC bindings are missing.
+pip install --no-cache-dir -q "grpcio-tools==1.78.0" || {
+  echo "BUILD REFUSED: 'grpcio-tools==1.78.0' cannot be installed -- the gRPC stub generator needs it." >&2
+  exit 1
+}
+python3 -m pip wheel . --no-build-isolation --no-deps -w $KVP_WHEELS
+# r9 P0: the wheel must carry the non-py package data git tracks. Without git
+# the setuptools_scm file-finder returns an empty list and such files silently
+# disappear from the wheel -- compare the wheel's lmcache/ listing against
+# `git ls-files lmcache` (excluding *.py sources and *.so build outputs).
+python3 - "$KVP_WHEELS" "$LMC_SRC" <<'PY' || exit 1
+import subprocess, sys, zipfile, pathlib
+wheels, src = sys.argv[1], sys.argv[2]
+whl = sorted(pathlib.Path(wheels).glob("*.whl"))
+if not whl:
+    print("BUILD REFUSED: no wheel produced for the file-list check", file=sys.stderr)
+    raise SystemExit(1)
+names = set(zipfile.ZipFile(whl[0]).namelist())
+tracked = subprocess.run(["git", "-C", src, "ls-files", "lmcache"],
+                         capture_output=True, text=True, check=True).stdout.split()
+missing = [f for f in tracked
+           if not f.endswith(".py") and not f.endswith(".so")
+           and f not in names]
+if missing:
+    print("BUILD REFUSED: the wheel is missing non-py package data tracked by git:", file=sys.stderr)
+    for f in missing:
+        print("  missing:", f, file=sys.stderr)
+    print("  (setuptools_scm file-finder needs git -- was the wheel built without it?)", file=sys.stderr)
+    raise SystemExit(1)
+print(f"[in-container] wheel file-list check OK ({len(tracked)} tracked, none missing)")
 PY
+# r10 P0-2: the wheel MUST carry BOTH native extensions (cuda_ops AND
+# lmcache_native). Optional ones (redis/fs) are recorded but not required.
+NATIVE_OUT="$(PYTHONPATH="${KVP_IMPL_DIR:-/kvp-impl}" python3 -m kvpersist.check_wheel_native "$KVP_WHEELS"/*.whl)" \
+  || { echo "BUILD REFUSED: the wheel lacks the required native extensions (see above)." >&2; exit 1; }
+echo "$NATIVE_OUT"
+NATIVE_EXTENSIONS_JSON="${NATIVE_EXTENSIONS_JSON:-{}}"
+export NATIVE_EXTENSIONS_JSON
+NATIVE_EXTENSIONS_JSON="$(printf '%s
+' "$NATIVE_OUT" | sed -n 's/^native_extensions=//p' | tail -1)"
+echo "[in-container] artifacts:"
+ls -la $KVP_WHEELS
 
-# Fail-fast native import check with the patched tree on PYTHONPATH.
-export PYTHONPATH=$LMC_SRC
-python3 - <<'PY'
-import sys, importlib
-try:
-    import lmcache  # noqa: F401
-    from lmcache.integration.vllm import lmcache_mp_connector  # noqa: F401
-    from lmcache.v1.multiprocess.modules import lmcache_driven_transfer  # noqa: F401
-except Exception as e:  # pragma: no cover
-    print("LMCache import/ABI failure:", repr(e)); raise
-print("LMCache source imports OK with both patches applied (no undefined symbols)")
+# r10 P1: the built cuda_ops*.so must carry sm_120 (RTX PRO 6000). cuobjdump
+# ships with the CUDA toolkit (same as nvcc). The found arch list goes to
+# identity.env -> provenance.json; missing sm_120 is a BUILD REFUSED.
+CUDA_OPS_ARCHS="unknown"
+if command -v cuobjdump >/dev/null 2>&1; then
+  _so="$(ls $KVP_WHEELS/*.whl >/dev/null 2>&1 && unzip -l $KVP_WHEELS/*.whl | awk '/lmcache\/cuda_ops.*\.so$/{print $NF; exit}')"
+  if [ -n "$_so" ]; then
+    mkdir -p /tmp/kvp-arch && cd /tmp/kvp-arch
+    unzip -o -q $KVP_WHEELS/*.whl "$_so"
+    CUDA_OPS_ARCHS="$(cuobjdump --list-elf "$_so" 2>/dev/null | grep -o 'sm_[0-9]*' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+    cd - >/dev/null
+  fi
+  echo "[in-container] cuda_ops archs (cuobjdump): $CUDA_OPS_ARCHS"
+  case " $CUDA_OPS_ARCHS " in
+    *" sm_120 "*) : ;;
+    *) echo "BUILD REFUSED: cuda_ops*.so does NOT contain sm_120 (found: '$CUDA_OPS_ARCHS') --" >&2
+       echo "  the RTX PRO 6000 kernel would be missing. Check KVP_TORCH_CUDA_ARCH_LIST." >&2
+       exit 1 ;;
+  esac
+else
+  echo "[in-container] WARNING: cuobjdump not found -- arch check skipped (see the program audit)" >&2
+fi
+
+# r10 P0-1: install the wheel we just built (the image may carry its own
+# lmcache -- force-reinstall replaces it). pip show before/after in the log.
+echo "[in-container] pip show lmcache BEFORE install:"
+pip show lmcache 2>/dev/null | head -3 || echo "(not installed)"
+WHEEL_FILE="$(ls $KVP_WHEELS/*.whl | head -1)"
+pip install --no-deps --force-reinstall "$WHEEL_FILE" || {
+  echo "BUILD REFUSED: cannot install the built wheel." >&2; exit 1; }
+echo "[in-container] pip show lmcache AFTER install:"
+pip show lmcache 2>/dev/null | head -3
+
+# r10 P0-1: import-check FROM THE INSTALLED WHEEL (site-packages). python3 -P
+# keeps the cwd out of sys.path; the three __file__ lines are the proof that
+# the tests will exercise the shipped artifact, not the source tree.
+python3 -P - <<'PY' || exit 1
+import sys
+import lmcache
+import lmcache.cuda_ops  # noqa: F401
+import lmcache.lmcache_native  # noqa: F401
+from lmcache.integration.vllm import lmcache_mp_connector  # noqa: F401
+from lmcache.v1.multiprocess.modules import lmcache_driven_transfer  # noqa: F401
+for mod in (lmcache, sys.modules["lmcache.cuda_ops"], sys.modules["lmcache.lmcache_native"]):
+    f = getattr(mod, "__file__", "")
+    if "site-packages" not in f:
+        print(f"BUILD REFUSED: {mod.__name__} imported from {f}, not site-packages -- "
+              "the tests would silently run against the source tree", file=sys.stderr)
+        raise SystemExit(1)
+print("lmcache.__file__ =", lmcache.__file__)
+print("lmcache.cuda_ops.__file__ =", sys.modules["lmcache.cuda_ops"].__file__)
+print("lmcache.lmcache_native.__file__ =", sys.modules["lmcache.lmcache_native"].__file__)
+print("[in-container] import-check OK (all native modules from site-packages)")
 PY
 
 if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
@@ -250,6 +343,19 @@ else
   echo "[in-container] KVP_BUILD_SKIP_TESTS=1 -- tests skipped (not production-acceptable)"
 fi
 
+echo "[in-container] checking vLLM ABI / identity matches ..."
+python3 - <<'PY'
+import importlib.metadata as md, torch, sys
+print("vllm", md.version("vllm") if True else "?")
+print("python", sys.version.split()[0])
+PY
+
+# r10 P0-1: the source tree CANNOT be imported before the build -- the native
+# modules (lmcache_native, cuda_ops, ...) and the gRPC stubs only exist AFTER
+# `pip wheel`. The import-check and pytest run AFTER the wheel is built and
+# installed (from site-packages; no PYTHONPATH to the source tree).
+
+
 # 9. Build the wheel against the INSTALLED torch, no build isolation,
 #    pinned build deps only.
 echo "[in-container] building custom LMCache wheel (no build isolation)"
@@ -300,6 +406,9 @@ print(f"PYTHON_VERSION={sys.version.split()[0]}")
 print(f"CUDA_AVAILABLE={torch.cuda.is_available()}")
 print(f"GPU_COUNT={torch.cuda.device_count()}")
 print("GPU_CC=" + ("%d.%d" % torch.cuda.get_device_capability(0) if torch.cuda.is_available() else "n/a"))
+print("TORCH_CUDA_ARCH_LIST_USED=\"" + __import__("os").environ.get("TORCH_CUDA_ARCH_LIST", "") + "\"")
+print("CUDA_OPS_ARCHS=\"" + __import__("os").environ.get("CUDA_OPS_ARCHS", "unknown") + "\"")
+print("native_extensions=" + __import__("os").environ.get("NATIVE_EXTENSIONS_JSON", "{}"))
 print("GPU_REGRESSION_RUN=" + __import__("os").environ.get("GPU_REGRESSION_RUN", "false"))
 PY
 echo "[in-container] build phase complete"

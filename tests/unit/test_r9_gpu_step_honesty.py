@@ -69,6 +69,7 @@ def _stub_env(tmp_path: pathlib.Path) -> tuple:
     (build_dir / "wheels").mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(build_dir / "wheels" / whl_name, "w") as z:
         z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
+        z.writestr("lmcache/lmcache_native_stub.so", b"\x00")
     # WHEEL_OUT is OUT_DIR/wheels -- the host phase looks there after the run
     (out_dir / "wheels").mkdir()
     import shutil
@@ -129,7 +130,7 @@ def test_gpu_step_skip_is_not_success(tmp_path):
     bin_dir.mkdir(parents=True)
     for tool in ("bash", "cat", "grep", "tail", "mktemp", "chmod", "printf",
                  "sed", "awk", "tr", "cut", "find", "head", "wc", "mkdir",
-                 "rm", "cp", "ls", "date", "basename", "dirname"):
+                 "rm", "cp", "ls", "date", "basename", "dirname", "unzip", "sort"):
         real = shutil.which(tool)
         if real:
             (bin_dir / tool).symlink_to(real)
@@ -161,7 +162,7 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         "    *md.version*) echo 'x' ;;\n"
         "    *re.search*|*zipfile*) exec /usr/bin/python3 \"$@\" ;;\n"
         "    *) echo '' ;;\n  esac\n  exit 0\nfi\n"
-        "if [ \"$1\" = \"-\" ]; then cat > /dev/null; exit 0; fi\n"
+        "if [ \"$1\" = \"-\" ] || [ \"$1\" = \"-P\" ]; then cat > /dev/null; exit 0; fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "exec /usr/bin/python3 \"$@\"\n")
     (bin_dir / "python3").chmod(0o755)
@@ -177,10 +178,20 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         p.chmod(0o755)
     for sub in ("kvp-work", "kvp-wheels", "src"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    # r10: the phase verifies the wheel content before the GPU step -- provide
+    # a complete one (both native extensions).
+    import zipfile
+    with zipfile.ZipFile(
+        tmp_path / "kvp-wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl", "w"
+    ) as z:
+        z.writestr("lmcache/__init__.py", b"# stub\n")
+        z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
+        z.writestr("lmcache/lmcache_native_stub.so", b"\x00")
     env = dict(os.environ, PATH=str(bin_dir),
                KVP_BUILD_SKIP_TESTS="0", KVP_BUILD_GPU_TESTS="1",
                KVP_HOST_UID="1000", KVP_HOST_GID="1000",
                KVP_SCRIPTS_DIR=str(ROOT / "scripts"),
+               KVP_IMPL_DIR=str(ROOT / "implementation"),
                KVP_LMC_SRC=str(tmp_path / "src"),
                KVP_WORK_DIR=str(tmp_path / "kvp-work"),
                KVP_WHEELS_DIR=str(tmp_path / "kvp-wheels"))

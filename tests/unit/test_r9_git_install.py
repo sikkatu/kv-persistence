@@ -23,7 +23,8 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
     # base utilities the phase needs (like the real image provides)
     for tool in ("bash", "cat", "grep", "tail", "mktemp", "chmod", "printf",
                  "echo", "sed", "awk", "tr", "cut", "find", "head", "wc",
-                 "mkdir", "rm", "cp", "ls", "date", "basename", "dirname"):
+                 "mkdir", "rm", "cp", "ls", "date", "basename", "dirname",
+                 "unzip", "sort"):
         real = shutil.which(tool)
         if real:
             (bin_dir / tool).symlink_to(real)
@@ -69,7 +70,7 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
         "    *md.version*) echo 'x' ;;\n"
         "    *re.search*|*zipfile*) exec /usr/bin/python3 \"$@\" ;;\n"
         "    *) echo '' ;;\n  esac\n  exit 0\nfi\n"
-        "if [ \"$1\" = \"-\" ]; then cat > /dev/null; exit 0; fi\n"
+        "if [ \"$1\" = \"-\" ] || [ \"$1\" = \"-P\" ]; then cat > /dev/null; exit 0; fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "exec /usr/bin/python3 \"$@\"\n")
     (bin_dir / "python3").chmod(0o755)
@@ -89,10 +90,20 @@ def _run(tmp_path: pathlib.Path, git_installs: bool = True):
     for sub in ("kvp-work", "kvp-wheels", "src"):
         (tmp_path / sub).mkdir(exist_ok=True)
     (tmp_path / "src" / ".git").mkdir(exist_ok=True)
+    # r10: the phase now builds+checks a wheel -- provide one with BOTH native
+    # extensions so the run reaches the git-config point we assert below.
+    import zipfile
+    with zipfile.ZipFile(
+        tmp_path / "kvp-wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl", "w"
+    ) as z:
+        z.writestr("lmcache/__init__.py", b"# stub\n")
+        z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
+        z.writestr("lmcache/lmcache_native_stub.so", b"\x00")
     env = dict(os.environ, PATH=str(bin_dir),
                KVP_BUILD_SKIP_TESTS="0", KVP_BUILD_GPU_TESTS="0",
                KVP_HOST_UID="1000", KVP_HOST_GID="1000",
                KVP_SCRIPTS_DIR=str(ROOT / "scripts"),
+               KVP_IMPL_DIR=str(ROOT / "implementation"),
                KVP_LMC_SRC=str(tmp_path / "src"),
                KVP_WORK_DIR=str(tmp_path / "kvp-work"),
                KVP_WHEELS_DIR=str(tmp_path / "kvp-wheels"))

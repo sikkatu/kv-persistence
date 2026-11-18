@@ -206,6 +206,7 @@ docker run "${KVP_DOCKER_ARGS[@]}" \
   -v "$SRC":/usr/src/lmcache:rw \
   -v "$PATCH_DIR":/kvp-patches:ro \
   -v "$HERE":/kvp-scripts:ro \
+  -v "$ROOT/implementation":/kvp-impl:ro \
   -v "$WHEEL_OUT":/kvp-wheels:rw \
   -v "$WORK_DIR":/kvp-work:rw \
   -e PYTHONUNBUFFERED=1 \
@@ -279,7 +280,9 @@ cat > "$PROV" <<EOF
   "build_image": "$IMAGE",
   "nvcc_version": "$NVCC_VERSION_REC",
   "build_with_cuda": "1",
-  "torch_cuda_arch_list": "${TORCH_CUDA_ARCH_LIST:-12.0}",
+  "torch_cuda_arch_list": "${TORCH_CUDA_ARCH_LIST_USED:-${KVP_TORCH_CUDA_ARCH_LIST:-12.0}}",
+  "cuda_ops_archs": "${CUDA_OPS_ARCHS:-unknown}",
+  "native_extensions": ${NATIVE_EXTENSIONS_JSON:-{}},
   "cuda_ops_in_wheel": true,
   "wheel_version": "${KVP_WHEEL_VERSION:-unknown}",
   "torch_version": "${TORCH_VERSION:-unknown}",
