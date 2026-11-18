@@ -91,6 +91,31 @@ KVP_RESET_CONFIRM=FULL-RESET bash scripts/reset-persistent-cache.sh
 和越界符号链接。重置报告（清除路径及字节数、无关数据保全确认）写入
 `live/cache-reset-report-<UTC>.txt`。
 
+### 缓存根标记（`.kvp-cache-root-marker`）
+
+`start-cache.sh` 在初始化缓存时会在缓存根目录打上 `.kvp-cache-root-marker`
+标记。破坏性的 reset 通过该标记证明目标确实是缓存目录：显式配置的
+`KVP_CACHE_ROOT` 只有在带标记，或者其顶层条目全部是已知的
+LMCache/kvpersist 产物（`*.data`、`*.tmp`、`*.bin`、`*.bin.tmp.*`、`objects/`、
+`kvp-*`、`index.db`、`crash-*`、`lmcache-server.log/.pid`、
+`l2-adapter.rendered.json`、`engine-identity.env`、`.kvp-active-writes`，
+以及 `l2-adapter.rendered.json` 中配置的 `relative_tmp_dir` 目录名）时
+才被接受。任何顶层的外来条目都会导致拒绝，拒绝信息会列出这些条目。
+
+**对于在标记出现之前创建的缓存**（旧部署）：先查看目录内容，再手动打标记：
+
+```
+ls -A <KVP_CACHE_ROOT>
+touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
+```
+
+只有当 `ls -A` 显示的全部是缓存数据时才这样做。若缓存根目录含有非标准
+内容，先移走外来文件（或仅在完全确定是缓存数据时打标记）。
+
+无论有无标记，reset **始终**拒绝：`$HOME` 与任何用户主目录（`/root`、
+`/home/<user>`）、仓库检出目录的任意父目录，以及 `.git` 嵌套深度不超过 2
+的任意目录。
+
 绝不删除：模型权重、模型配置、应用数据、recipes、源代码、LMCache 构建
 产物、诊断日志、NVMe 上的无关文件或 NVMe 挂载点本身。
 

@@ -316,6 +316,7 @@ safe_target() { # safe_target <path> -> 0 accepted / 1 refused
       _uk_all="$(printf '%s' "$_uk" | tr '\n' ' ')"
       echo "  reason: '$real' is not a confirmed cache dir -- unknown top-level entries: $_uk_all" >&2
       echo "  inspect them; if this really is a dedicated cache dir, create the marker manually after inspection:" >&2
+      echo "    ls -A '$real'   (inspect first -- all entries must be cache data)" >&2
       echo "    touch '$real/.kvp-cache-root-marker'" >&2
       return 1
     fi

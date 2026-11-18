@@ -106,6 +106,35 @@ root; `/`, home dirs, model dirs, repos, build artifacts and escaping symlinks
 are refused. A reset report (cleared paths with byte counts, preserved data
 confirmation) is written to `live/cache-reset-report-<UTC>.txt`.
 
+### The cache-root marker (`.kvp-cache-root-marker`)
+
+`start-cache.sh` stamps the cache root with `.kvp-cache-root-marker` at cache
+initialization. The marker is how the destructive reset run proves the target
+is really a cache directory: an explicitly configured `KVP_CACHE_ROOT` is
+accepted either because it carries the marker, or because its top-level
+entries are nothing but known LMCache/kvpersist artifacts (`*.data`, `*.tmp`,
+`*.bin`, `*.bin.tmp.*`, `objects/`, `kvp-*`, `index.db`, `crash-*`,
+`lmcache-server.log/.pid`, `l2-adapter.rendered.json`, `engine-identity.env`,
+`.kvp-active-writes`, and the `relative_tmp_dir` name configured in
+`l2-adapter.rendered.json`). Any foreign top-level entry refuses the run and
+the refusal names the entries.
+
+**On a cache created before the marker existed** (older deployments): look at
+the directory first, then mark it by hand:
+
+```
+ls -A <KVP_CACHE_ROOT>
+touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
+```
+
+Only do this when `ls -A` shows nothing but cache data. To wipe a cache root
+of a non-standard layout containing foreign files, move those files away
+first (or mark the dir only when you are fully sure it holds cache data).
+
+Regardless of the marker, the reset **always** refuses: `$HOME` and any user
+home (`/root`, `/home/<user>`), any ancestor of the repository checkout, and
+any directory carrying `.git` at nesting depth <= 2.
+
 NEVER delete: model weights, model configuration, application data, recipes,
 source code, LMCache build artifacts, diagnostic logs, unrelated NVMe files or
 the NVMe mount itself.
