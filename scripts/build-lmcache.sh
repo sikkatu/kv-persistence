@@ -217,6 +217,7 @@ docker run "${KVP_DOCKER_ARGS[@]}" \
   -e KVP_HOST_UID="$(id -u)" \
   -e KVP_HOST_GID="$(id -g)" \
   -e KVP_BUILD_GPU_TESTS="${KVP_BUILD_GPU_TESTS:-0}" \
+  -e KVP_TORCH_CUDA_ARCH_LIST="${KVP_TORCH_CUDA_ARCH_LIST:-12.0}" \
   --entrypoint bash "$IMAGE" /kvp-scripts/_incontainer_build.sh \
   || DOCKER_RC=$?
 
@@ -261,8 +262,25 @@ WHEEL_SHA="$(sha256sum "$WHEEL_OUT/$WHEEL_NAME" | awk '{print $1}')"
 NVCC_VERSION_REC="$(cat "$WORK_DIR/nvcc-version.txt" 2>/dev/null || echo unknown)"
 
 # shellcheck disable=SC1090
-[ -f "$WORK_DIR/identity.env" ] && . "$WORK_DIR/identity.env" || true
+# r11: identity.env is sourced without `|| true` that hides breakage.
+# The container writes single-quoted values (C15) so a non-empty JSON
+# (NATIVE_EXTENSIONS_JSON='{"a": "b"}') is a valid shell assignment.
+if [ -f "$WORK_DIR/identity.env" ]; then
+  . "$WORK_DIR/identity.env"
+else
+  echo "WARNING(build-lmcache): identity.env not found -- provenance will use defaults" >&2
+fi
 
+# r11: default values assigned separately before the heredoc (no ${...:-{}})
+# which appends '}' when the value is non-empty.
+TORCH_CUDA_ARCH_LIST_USED_VALUE="${TORCH_CUDA_ARCH_LIST_USED:-}"
+CUDA_OPS_ARCHS_VALUE="${CUDA_OPS_ARCHS:-}"
+NATIVE_EXTENSIONS_JSON_VALUE="${NATIVE_EXTENSIONS_JSON:-}"
+GPU_REGRESSION_RUN_VALUE="${GPU_REGRESSION_RUN:-}"
+[ -n "$TORCH_CUDA_ARCH_LIST_USED_VALUE" ] || TORCH_CUDA_ARCH_LIST_USED_VALUE="12.0"
+[ -n "$CUDA_OPS_ARCHS_VALUE" ] || CUDA_OPS_ARCHS_VALUE="unknown"
+[ -n "$NATIVE_EXTENSIONS_JSON_VALUE" ] || NATIVE_EXTENSIONS_JSON_VALUE="{}"
+[ -n "$GPU_REGRESSION_RUN_VALUE" ] || GPU_REGRESSION_RUN_VALUE="false"
 cat > "$PROV" <<EOF
 {
   "module": "custom-lmcache-build",
@@ -280,9 +298,9 @@ cat > "$PROV" <<EOF
   "build_image": "$IMAGE",
   "nvcc_version": "$NVCC_VERSION_REC",
   "build_with_cuda": "1",
-  "torch_cuda_arch_list": "${TORCH_CUDA_ARCH_LIST_USED:-${KVP_TORCH_CUDA_ARCH_LIST:-12.0}}",
-  "cuda_ops_archs": "${CUDA_OPS_ARCHS:-unknown}",
-  "native_extensions": ${NATIVE_EXTENSIONS_JSON:-{}},
+  "torch_cuda_arch_list": "$TORCH_CUDA_ARCH_LIST_USED_VALUE",
+  "cuda_ops_archs": "$CUDA_OPS_ARCHS_VALUE",
+  "native_extensions": $NATIVE_EXTENSIONS_JSON_VALUE,
   "cuda_ops_in_wheel": true,
   "wheel_version": "${KVP_WHEEL_VERSION:-unknown}",
   "torch_version": "${TORCH_VERSION:-unknown}",
@@ -292,7 +310,14 @@ cat > "$PROV" <<EOF
   "gpu_count": "${GPU_COUNT:-unknown}",
   "gpu_compute_capability": "${GPU_CC:-unknown}",
   "tests_skipped": "${KVP_BUILD_SKIP_TESTS:-0}",
-  "gpu_regression_run": ${GPU_REGRESSION_RUN:-false},
+  "gpu_regression_run": $GPU_REGRESSION_RUN_VALUE,
+  "torch_version": "${TORCH_VERSION:-unknown}",
+  "torch_cuda": "${TORCH_CUDA:-unknown}",
+  "python_version": "${PYTHON_VERSION:-unknown}",
+  "cuda_available": "${CUDA_AVAILABLE:-unknown}",
+  "gpu_count": "${GPU_COUNT:-unknown}",
+  "gpu_compute_capability": "${GPU_CC:-unknown}",
+  "tests_skipped": "${KVP_BUILD_SKIP_TESTS:-0}",
   "wheel": "$WHEEL_NAME",
   "wheel_sha256": "$WHEEL_SHA"
 }
