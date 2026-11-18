@@ -179,6 +179,22 @@ PROV="$OUT_DIR/provenance.json"
 WHEEL_OUT="$OUT_DIR/wheels"
 mkdir -p "$WHEEL_OUT"
 note "running build+tests inside the pinned image (in-container phase)"
+# r9 P1-1: the GPU regression step needs REAL GPUs. KVP_BUILD_GPU_TESTS=1 adds
+# --gpus all (array args); without the nvidia runtime the build stops HERE,
+# before the container starts. A GPU run that would only skip must never be
+# recorded as done.
+KVP_DOCKER_ARGS=(--rm)
+if [ "${KVP_BUILD_GPU_TESTS:-0}" = "1" ]; then
+  if ! docker info 2>/dev/null | grep -qi "Runtimes:.*nvidia\|nvidia"; then
+    echo "ERROR(build-lmcache): KVP_BUILD_GPU_TESTS=1 needs the nvidia container runtime." >&2
+    echo "  What to do: install/configure the NVIDIA Container Toolkit" >&2
+    echo "  (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)," >&2
+    echo "  verify with: docker info | grep -i nvidia, then re-run." >&2
+    exit 1
+  fi
+  KVP_DOCKER_ARGS+=(--gpus all)
+  note "GPU regression requested -- docker run with --gpus all"
+fi
 # r6-7 A-1: the in-container phase is delivered as a FILE mounted read-only at
 # /kvp-scripts (scripts/_incontainer_build.sh), NOT over stdin. `docker run`
 # without `-i` leaves stdin EMPTY, so the old `bash -s <<'INCONTAINER'` ran
@@ -186,7 +202,7 @@ note "running build+tests inside the pinned image (in-container phase)"
 # bug). A mounted file always arrives, and the phase is shellcheck-able alone.
 # NOTE: no heredoc here on purpose -- never hand build work over stdin.
 DOCKER_RC=0
-docker run --rm \
+docker run "${KVP_DOCKER_ARGS[@]}" \
   -v "$SRC":/usr/src/lmcache:rw \
   -v "$PATCH_DIR":/kvp-patches:ro \
   -v "$HERE":/kvp-scripts:ro \

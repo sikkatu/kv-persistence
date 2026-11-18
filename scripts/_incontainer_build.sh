@@ -196,8 +196,18 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
   # r8 P0: GPU-integration regression (test_cache_server.py) is a SEPARATE
   # step, only when explicitly requested (container must have --gpus all).
   GPU_REGRESSION_RUN=false
+  export GPU_REGRESSION_RUN=false
   if [ "${KVP_BUILD_GPU_TESTS:-0}" = "1" ]; then
     echo "[in-container] GPU regression step: tests/v1/multiprocess/test_cache_server.py (needs --gpus all)"
+    # r9 P1-1: refuse BEFORE pytest when the container sees no CUDA at all --
+    # the suite would module-level skip and a pass would be a LIE.
+    if ! python3 -c 'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)'; then
+      echo "REGRESSION FAILURE: KVP_BUILD_GPU_TESTS=1 but torch.cuda.is_available() is False" >&2
+      echo "  -- the container was started WITHOUT --gpus all (or no GPU is visible)." >&2
+      echo "  What to do: run with KVP_BUILD_GPU_TESTS=1 and a docker run that has" >&2
+      echo "  --gpus all (build-lmcache.sh adds it automatically when the flag is set)." >&2
+      exit 1
+    fi
     set +e
     python3 -m pytest -q -rs \
       --junitxml=$KVP_WORK/pytest-gpu-report.xml \
@@ -210,9 +220,25 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
       echo "REGRESSION FAILURE: GPU regression pytest exited rc=$_gpu_rc -- aborting build"
       exit 1
     fi
+    # r9 P1-1: a skip here is NOT a pass -- the whole point of this step is the
+    # CUDA integration run. Parse the summary like the CPU gate; refuse on
+    # skipped != 0 or passed == 0 and print the SKIPPED rows.
+    _gpu_summary="$(grep -E '^[0-9]+ (passed|failed|error|skipped)' $KVP_WORK/pytest-gpu-report.txt | tail -1 || true)"
+    if [ -z "$_gpu_summary" ]; then
+      echo "REGRESSION FAILURE: GPU regression summary not found -- suite died early" >&2
+      exit 1
+    fi
+    _gpu_skipped="$(python3 -c 'import re,sys; m=re.search(r"(\d+) skipped", sys.argv[1]); print(m.group(1) if m else 0)' "$_gpu_summary")"
+    _gpu_passed="$(python3 -c 'import re,sys; m=re.search(r"(\d+) passed", sys.argv[1]); print(m.group(1) if m else 0)' "$_gpu_summary")"
+    if [ "$_gpu_skipped" != "0" ] || [ "$_gpu_passed" = "0" ]; then
+      echo "REGRESSION FAILURE: GPU regression did NOT run (passed=$_gpu_passed, skipped=$_gpu_skipped)" >&2
+      echo "  A skip here would be a FALSE 'gpu_regression_run: true'. SKIPPED rows:" >&2
+      grep '^SKIPPED \[' $KVP_WORK/pytest-gpu-report.txt >&2 || true
+      exit 1
+    fi
     GPU_REGRESSION_RUN=true
-    export KVP_GPU_REGRESSION_RUN=true
-    echo "[in-container] GPU regression PASSED (gpu_regression_run: true)"
+    export GPU_REGRESSION_RUN=true
+    echo "[in-container] GPU regression PASSED ($_gpu_passed passed, 0 skipped)"
   else
     export KVP_GPU_REGRESSION_RUN=false
     echo "[in-container] GPU regression step SKIPPED -- set KVP_BUILD_GPU_TESTS=1 to run"
@@ -274,6 +300,6 @@ print(f"PYTHON_VERSION={sys.version.split()[0]}")
 print(f"CUDA_AVAILABLE={torch.cuda.is_available()}")
 print(f"GPU_COUNT={torch.cuda.device_count()}")
 print("GPU_CC=" + ("%d.%d" % torch.cuda.get_device_capability(0) if torch.cuda.is_available() else "n/a"))
-print("gpu_regression_run=" + __import__("os").environ.get("KVP_GPU_REGRESSION_RUN", "false"))
+print("GPU_REGRESSION_RUN=" + __import__("os").environ.get("GPU_REGRESSION_RUN", "false"))
 PY
 echo "[in-container] build phase complete"
