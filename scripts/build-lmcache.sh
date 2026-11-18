@@ -139,6 +139,13 @@ PROV="$OUT_DIR/provenance.json"
 WHEEL_OUT="$OUT_DIR/wheels"
 mkdir -p "$WHEEL_OUT"
 note "running build+tests inside the pinned image (in-container phase)"
+# r6-7 A-1: the in-container phase is delivered as a FILE mounted read-only at
+# /kvp-scripts (scripts/_incontainer_build.sh), NOT over stdin. `docker run`
+# without `-i` leaves stdin EMPTY, so the old `bash -s <<'INCONTAINER'` ran
+# NOTHING and exited 0 -- the entire phase silently vanished (operator-machine
+# bug). A mounted file always arrives, and the phase is shellcheck-able alone.
+# NOTE: no heredoc here on purpose -- never hand build work over stdin.
+DOCKER_RC=0
 docker run --rm \
   -v "$SRC":/usr/src/lmcache:rw \
   -v "$PATCH_DIR":/kvp-patches:ro \
@@ -150,184 +157,39 @@ docker run --rm \
   -e PR6551_MERGE="$PR6551_MERGE" \
   -e KVP_BUILD_SKIP_TESTS="${KVP_BUILD_SKIP_TESTS:-0}" \
   -e SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE="$KVP_WHEEL_VERSION" \
-  --entrypoint bash "$IMAGE" -s <<'INCONTAINER'
-set -Eeuo pipefail
-# r3 P0-2: the mounted source tree is owned by a non-root uid while we run as
-# root inside the container -- git would refuse ("dubious ownership") and
-# setuptools_scm would abort the wheel build. Configure safe.directory here.
-git config --global --add safe.directory /usr/src/lmcache
-# r3 P0-3: the vLLM runtime image ships nvcc + CUDA runtime but NOT the dev
-# headers cuda_ops compiles against (cuda-cudart-dev, libcusparse-dev,
-# libcusolver-dev -- vLLM's own Dockerfile installs them just for its LMCache
-# source-build stage and purges them after). Install them here in the
-# disposable build container; the derivative image never sees these (it only
-# receives the wheel). Any missing package must abort loudly by name.
-#
-# r4 P0-1: the package suffix is `major-minor` of torch.version.cuda with a
-# dash ("13.0" -> 13-0, "13.0.2" -> 13-0, "12.8" -> 12-8). The old
-# `${CUDA_TORCH%.*}` answered "13.0.2" with "13.0" -> "13-0" but "13.0" with
-# "13" -> "13" (no such package -- the build loop always died "BUILD
-# REFUSED"). Compute it through the single-source helper script so the unit
-# test and the container run the exact same code path.
-CUDA_TORCH="$(python3 -c 'import torch; print(torch.version.cuda)')"
-DEV_SUFFIX="$(bash /kvp-scripts/_cuda_dev_suffix.sh "$CUDA_TORCH")"
-[ -n "$DEV_SUFFIX" ] || { echo "BUILD REFUSED: cannot derive a dev-package suffix from torch.version.cuda='$CUDA_TORCH'" >&2; exit 1; }
-echo "[in-container] CUDA dev suffix (from torch.version.cuda=$CUDA_TORCH): $DEV_SUFFIX"
-export CUDA_HOME=/usr/local/cuda
-# r4 P0-1: the vLLM image build ends with `rm -rf /var/lib/apt/lists/*`
-# (Dockerfile ~line 813), so without a fresh `apt-get update` every
-# `apt-get install` fails "Unable to locate package". Refresh the lists here,
-# fail-loud (--no || true), and keep apt's own error output visible instead of
-# hiding it behind >/dev/null 2>&1: the operator must see WHY a package
-# refused to install.
-apt_out="$(mktemp)"
-if ! apt-get update -y >"$apt_out" 2>&1; then
-  echo "BUILD REFUSED: 'apt-get update' failed in this image." >&2
-  echo "  Last lines of apt output:" >&2
-  tail -n 20 "$apt_out" >&2
+  --entrypoint bash "$IMAGE" /kvp-scripts/_incontainer_build.sh \
+  || DOCKER_RC=$?
+
+# r6-7 A-4: a failed or silent phase must produce REAL diagnostics, not
+# "see output above" into empty output.
+if [ "$DOCKER_RC" != "0" ]; then
+  echo "ERROR(build-lmcache): in-container phase failed (docker run rc=$DOCKER_RC)." >&2
+  echo "  work dir: $WORK_DIR" >&2
+  if [ -s "$WORK_DIR/pytest-report.txt" ]; then
+    echo "  last lines of $WORK_DIR/pytest-report.txt:" >&2
+    tail -n 20 "$WORK_DIR/pytest-report.txt" >&2
+  else
+    echo "  (no pytest-report.txt in the work dir -- the phase likely died before tests)" >&2
+  fi
   exit 1
 fi
-for pkg in cuda-cudart-dev-$DEV_SUFFIX libcusparse-dev-$DEV_SUFFIX \
-           libcusolver-dev-$DEV_SUFFIX libcublas-dev-$DEV_SUFFIX; do
-  if ! apt-get install -y --no-install-recommends "$pkg" >"$apt_out" 2>&1; then
-    echo "BUILD REFUSED: CUDA dev package '$pkg' is unavailable in this image." >&2
-    echo "  The wheel cannot compile cuda_ops without it (missing headers)." >&2
-    echo "  Last lines of apt output:" >&2
-    tail -n 20 "$apt_out" >&2
-    echo "  Check the image's apt sources provide $pkg for CUDA $CUDA_TORCH," >&2
-    echo "  or run the build in an image that carries the CUDA dev stack." >&2
-    exit 1
+if [ ! -d "$WHEEL_OUT" ] || [ -z "$(find "$WHEEL_OUT" -name '*.whl' -print -quit 2>/dev/null)" ]; then
+  echo "ERROR(build-lmcache): the in-container phase produced no wheel." >&2
+  echo "  docker run rc=0 but no *.whl appeared in $WHEEL_OUT -- the build" >&2
+  echo "  script inside the container did not reach 'pip wheel'." >&2
+  echo "  work dir: $WORK_DIR" >&2
+  if [ -s "$WORK_DIR/pytest-report.txt" ]; then
+    echo "  last lines of $WORK_DIR/pytest-report.txt:" >&2
+    tail -n 20 "$WORK_DIR/pytest-report.txt" >&2
   fi
-  echo "[in-container] installed $pkg"
-done
-echo "[in-container] CUDA_HOME=$CUDA_HOME"
-echo "[in-container] python: $(python3 --version)"
-echo "[in-container] torch : $(python3 -c 'import torch; print(torch.__version__)')"
-echo "[in-container] torch CUDA: $(python3 -c 'import torch; print(torch.version.cuda)')"
-echo "[in-container] cuda available: $(python3 -c 'import torch; print(torch.cuda.is_available())')"
-echo "[in-container] GPU count: $(python3 -c 'import torch; print(torch.cuda.device_count())')"
-
-# r2 P0-2: REFUSE to build without the CUDA compiler. The upstream build
-# silently degrades to a pure-Python wheel when nvcc is absent ("building
-# without extensions") and that wheel silently runs the slow Python copy
-# fallback (the cudaMemcpy error 1 incident). A production wheel must carry
-# lmcache/cuda_ops*.so.
-if ! command -v nvcc >/dev/null 2>&1; then
-  echo "BUILD REFUSED: no nvcc in the image -- cannot compile the CUDA extensions." >&2
-  echo "  This runtime image is a runtime image; build the wheel in a CUDA toolkit" >&2
-  echo "  stage (nvcc matching torch CUDA 13.0.x) or pass an image with nvcc." >&2
   exit 1
 fi
-NVCC_VERSION="$(nvcc --version | tail -1)"
-echo "[in-container] nvcc: $NVCC_VERSION"
-# Force the CUDA extension build and target SM 120 (RTX PRO 6000 Blackwell).
-export BUILD_WITH_CUDA=1
-export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
-echo "[in-container] BUILD_WITH_CUDA=1 TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
-echo "$NVCC_VERSION" > /kvp-work/nvcc-version.txt
-
-echo "[in-container] checking vLLM ABI / identity matches ..."
-python3 - <<'PY'
-import importlib.metadata as md, torch, sys
-print("vllm", md.version("vllm") if True else "?")
-print("python", sys.version.split()[0])
-PY
-
-# Fail-fast native import check with the patched tree on PYTHONPATH.
-export PYTHONPATH=/usr/src/lmcache
-python3 - <<'PY'
-import sys, importlib
-try:
-    import lmcache  # noqa: F401
-    from lmcache.integration.vllm import lmcache_mp_connector  # noqa: F401
-    from lmcache.v1.multiprocess.modules import lmcache_driven_transfer  # noqa: F401
-except Exception as e:  # pragma: no cover
-    print("LMCache import/ABI failure:", repr(e)); raise
-print("LMCache source imports OK with both patches applied (no undefined symbols)")
-PY
-
-if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
-  # Test-only dependencies must NOT disturb the pinned torch stack.
-  echo "[in-container] installing pinned test deps (no torch upgrade)"
-  pip install --no-cache-dir -q -r /usr/src/lmcache/requirements/test.txt
-  echo "[in-container] running migration-regression suites for #4136 and #5972"
-  cd /usr/src/lmcache
-  # r3 P1-1: capture the real pytest exit code -- the old pattern of silencing
-  # failures and grepping output words (any 'error' substring) both under- and
-  # over-claimed: a crash without those words got "passed", a stderr mention of
-  # "error" got "failed". The exit code is the ONLY authoritative signal; skip
-  # counts come from the pytest summary line (never from counting detail rows).
-  set +e
-  python3 -m pytest -q -rs \
-    --junitxml=/kvp-work/pytest-report.xml \
-    tests/v1/test_lmcache_mp_connector.py \
-    tests/v1/test_vllm_mp_adapter.py \
-    tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py \
-    tests/v1/multiprocess/test_native_state_lookup.py \
-    tests/v1/multiprocess/test_l1_owner_completion.py \
-    tests/v1/multiprocess/test_cache_server.py \
-    > /kvp-work/pytest-report.txt 2>&1
-  rc=$?
-  set -e
-  cat /kvp-work/pytest-report.txt
-  if [ "$rc" != "0" ]; then
-    echo "REGRESSION FAILURE: pytest exited rc=$rc -- aborting build" >&2
-    exit 1
-  fi
-  # summary line is the last non-empty line, e.g. "3 passed in 1.23s"
-  _summary_line="$(grep -E '^[0-9]+ (passed|failed|error)' /kvp-work/pytest-report.txt | tail -1 || true)"
-  # r4 P1: when the suite dies before the summary (collection error, crash),
-  # grep | tail under set -e/pipefail with an empty match used to abort the
-  # script with NO message. Fail loudly and name the problem instead.
-  if [ -z "$_summary_line" ]; then
-    echo "REGRESSION FAILURE: pytest summary not found in the report -- the suite" >&2
-    echo "  died before completion (collection error or crash). Full output above." >&2
-    exit 1
-  fi
-  _skipped="$(python3 -c 'import re,sys; m=re.search(r"(\d+) skipped", sys.argv[1]); print(m.group(1) if m else 0)' "$_summary_line")"
-  if [ "$_skipped" != "0" ]; then
-    echo "REGRESSION FAILURE: $_skipped required test(s) SKIPPED (skipped != passed) -- aborting build"
-    exit 1
-  fi
-  echo "pytest rc=$rc, skipped=$_skipped -- focused regression tests PASSED (0 failed, 0 skipped)"
-else
-  echo "[in-container] KVP_BUILD_SKIP_TESTS=1 -- tests skipped (not production-acceptable)"
-fi
-
-# 9. Build the wheel against the INSTALLED torch, no build isolation,
-#    pinned build deps only.
-echo "[in-container] building custom LMCache wheel (no build isolation)"
-cd /usr/src/lmcache
-pip install --no-cache-dir -q -r /usr/src/lmcache/requirements/build.txt 2>/dev/null \
-  || pip install --no-cache-dir -q "ninja" "packaging>=24.2" "setuptools>=77.0.3,<81.0.0" "setuptools_scm>=8" "wheel"
-python3 -m pip wheel . --no-build-isolation --no-deps -w /kvp-wheels
-
-echo "[in-container] artifacts:"
-ls -la /kvp-wheels
-
-# Identity block written for the host phase.
-python3 - <<'PY' > /kvp-work/identity.env
-import importlib.metadata as md, torch, sys
-try:
-    lm = md.version("lmcache")
-except Exception:
-    lm = "built-from-source"
-print(f"LMCACHE_VERSION={lm}")
-print(f"TORCH_VERSION={torch.__version__}")
-print(f"TORCH_CUDA={torch.version.cuda}")
-print(f"PYTHON_VERSION={sys.version.split()[0]}")
-print(f"CUDA_AVAILABLE={torch.cuda.is_available()}")
-print(f"GPU_COUNT={torch.cuda.device_count()}")
-print(f"GPU_CC={torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'n/a'}")
-PY
-echo "[in-container] build phase complete"
-INCONTAINER
 
 # ---------------------------------------------------------------------------
 # 10. Record exact final source identity and artifact checksum.
 # ---------------------------------------------------------------------------
 WHEEL_NAME="$(find "$WHEEL_OUT" -name '*.whl' -printf '%f\n' | head -1 || true)"
-[ -n "$WHEEL_NAME" ] || die "no wheel produced -- see output above"
+[ -n "$WHEEL_NAME" ] || die "no wheel produced (see the phase diagnostics above; work dir: $WORK_DIR)"
 
 # r2 P0-2: the wheel MUST contain the compiled cuda_ops extension. A wheel
 # without it was built without nvcc and silently degrades to the slow Python

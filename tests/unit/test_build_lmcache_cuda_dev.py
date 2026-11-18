@@ -23,6 +23,7 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BUILD_LMC = ROOT / "scripts" / "build-lmcache.sh"
+INCONTAINER = ROOT / "scripts" / "_incontainer_build.sh"
 BUILD_IMG = ROOT / "scripts" / "build-image.sh"
 SUFFIX_SH = ROOT / "scripts" / "_cuda_dev_suffix.sh"
 
@@ -45,7 +46,8 @@ def test_dev_package_suffix_follows_torch_cuda(torch_cuda, expected):
 # The apt block of build-lmcache.sh, re-hosted with a stubbed apt-get
 # ---------------------------------------------------------------------------
 def _extract_apt_block() -> str:
-    src = BUILD_LMC.read_text()
+    # r6-7 A-1: the in-container phase lives in its own file now
+    src = INCONTAINER.read_text()
     m = re.search(r'^CUDA_TORCH="\$\(python3.*?\nfor pkg in .*?^done$',
                   src, re.M | re.S)
     assert m, (
@@ -136,7 +138,7 @@ def test_apt_error_text_is_visible_on_refusal(tmp_path):
 # Remaining static wiring checks from r3 (still valid)
 # ---------------------------------------------------------------------------
 def test_in_container_installs_cuda_dev_packages():
-    src = BUILD_LMC.read_text()
+    src = INCONTAINER.read_text()
     for pkg in ("cuda-cudart-dev", "libcusparse-dev", "libcusolver-dev", "libcublas-dev"):
         assert pkg in src, f"{pkg} must be apt-installed in the build container"
     assert "apt-get install" in src
@@ -144,7 +146,7 @@ def test_in_container_installs_cuda_dev_packages():
 
 
 def test_install_is_fail_loud():
-    src = BUILD_LMC.read_text()
+    src = INCONTAINER.read_text()
     for ln in src.splitlines():
         if "apt-get install" in ln:
             assert "|| true" not in ln, (
@@ -154,7 +156,7 @@ def test_install_is_fail_loud():
 
 
 def test_cuda_home_exported():
-    src = BUILD_LMC.read_text()
+    src = INCONTAINER.read_text()
     assert re.search(r"export CUDA_HOME=|CUDA_HOME=/usr/local/cuda", src)
 
 
