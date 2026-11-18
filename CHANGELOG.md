@@ -13,6 +13,33 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 5 review fixes (P1, one commit per item -- behavioral tests first)
+* **P1-1** `df8f096`: reset refused a REAL pre-marker cache dir (the allowlist
+  did not know the artifacts the LMCache adapter actually writes). Source of
+  truth `fs_l2_adapter.py` / `key_codec.py`: `encode_fs_filename` ->
+  `<name>.data` per ObjectKey, temp files fall back to `final.with_suffix('.tmp')`
+  or land in the configured `relative_tmp_dir` sub-dir. Added to the
+  allowlist: `*.data`, `*.tmp` (narrow masks, no bare `*`) and the
+  `relative_tmp_dir` top-level name read from the cache's own
+  `l2-adapter.rendered.json` (no key -> nothing added). Behavioral tests
+  (test_reset_legacy_cache_allowlist.py): legacy cache without marker resets
+  WITHOUT a manual touch; one foreign file refuses with an unknown listing
+  naming exactly the foreign entry; an UNconfigured tmp-ish sub-dir stays
+  refused. Mutation (`*.data` removed) red.
+* **P1-2** `c5d75f0`: cache-root marker documented for operators x3
+  (EN/RU/ZH, docs/lmcache-build.* reset section): why the marker exists and
+  that start-cache.sh creates it at cache init; the exact pre-marker
+  procedure `ls -A <KVP_CACHE_ROOT>` + `touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker`
+  (byte-identical to the hint in the reset refusal, where `ls -A` was added
+  to keep doc and script synchronized); unconditional refusals
+  ($HOME / /root / /home/<user>, checkout ancestors, .git at depth <= 2).
+  Verdict wording kept "implemented, unit-tested; hardware validation
+  pending". No static word-check tests, per the round's rule.
+
+Full suite runs (both repositories, round 5 final):
+* kv-persistence: 515 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
+
 ### Round 4 review fixes (P0/P1, one commit per item -- behavioral tests first)
 * **P0-1** `0d20ce6`: CUDA dev-package suffix computed wrong (`%.*` answered
   `13` for torch CUDA `13.0` -> nonexistent `cuda-cudart-dev-13`, build

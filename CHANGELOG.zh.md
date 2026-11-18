@@ -13,6 +13,14 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 5 轮审阅修复（P1，一项一提交；行为测试先行）
+* **P1-1** `df8f096`：reset 拒绝真实的旧缓存目录（allowlist 不认识 LMCache 适配器真正写入的产物）。以 `fs_l2_adapter.py` / `key_codec.py` 为准：`encode_fs_filename` -> 每个 ObjectKey 一个 `<名称>.data`，临时文件回退为 `final.with_suffix('.tmp')` 或进入配置的 `relative_tmp_dir` 子目录。allowlist 新增 `*.data`、`*.tmp`（窄掩码，不用 `*`）以及从缓存自身 `l2-adapter.rendered.json` 读取的 `relative_tmp_dir` 顶层目录名（无键则不添加）。行为测试（test_reset_legacy_cache_allowlist.py）：无标记的旧缓存无需手动 touch 即可重置；出现一个外来文件即拒绝，未知列表恰为该外来文件；未配置的类 tmp 目录仍被视为外来。变异（移除 `*.data`）为红。
+* **P1-2** `c5d75f0`：面向运维的缓存根标记文档 x3（EN/RU/ZH，docs/lmcache-build.* 的 reset 小节）：标记的用途与 start-cache.sh 在初始化时创建；旧缓存的精确流程 `ls -A <KVP_CACHE_ROOT>` + `touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker`（与 reset 拒绝提示逐字一致，提示中亦加入 `ls -A`）；无条件拒绝（$HOME / /root / /home/<user>、检出目录的父目录、`.git` 深度 ≤ 2）。措辞保持「implemented, unit-tested; hardware validation pending」。按本轮规则不写静态词面测试。
+
+两个仓库的全套测试（第 5 轮最终）：
+* kv-persistence：515 passed，26 skipped
+* recipes：        443 passed，5 skipped
+
 ### 第 4 轮审阅修复（P0/P1，一项一提交；行为测试先行）
 * **P0-1** `0d20ce6`：CUDA dev 包后缀计算错误（`%.*` 对 torch CUDA `13.0` 输出 `13` → 不存在的 `cuda-cudart-dev-13`，构建总是「BUILD REFUSED」）；缺少 `apt-get update`（vLLM 镜像清空了 apt 列表）；apt 错误被 `>/dev/null 2>&1` 吞掉。修复：`scripts/_cuda_dev_suffix.sh`（唯一真值来源，`major-minor`：13.0→13-0 / 13.0.2→13-0 / 12.8→12-8），安装循环前执行 `apt-get update -y`，任何拒绝都打印 apt 输出的最后 20 行。另 P1：pytest 的空 summary 行现在会给出明确的「pytest summary not found」拒绝。行为测试（test_build_lmcache_cuda_dev.py）提取真实的 in-container apt 代码块并用 stubbed apt-get 运行；后缀通过辅助脚本直接调用验证；`%.*` 突变为红。
 * **P0-2** `2493925`：reset 安全回归 — r3 P1-2 与 /mnt//home 封锁一起移除了防护，导致显式 `KVP_CACHE_ROOT=$HOME`（cache.env 中的错字）会清空主目录。修复：显式缓存根必须证明其身份 — `.kvp-cache-root-marker`（由 start-cache.sh 在缓存初始化时创建）或者顶层条目全部属于已知的 LMCache/kvpersist 集合（lmcache-server.log/.pid, l2-adapter.rendered.json, engine-identity.env, index.db, crash-*, objects/, kvp-*, *.bin, *.bin.tmp.<uuid>, .kvp-active-writes）。一律拒绝：$HOME（当前用户和任意 /home/<user> / /root）、checkout 的任意父目录、`.git` 深度不超过 2 的任意目录。拒绝会列出未知条目并提示人工检查后打标记。/mnt/<x>/<dir> 带标记或是已知集合仍然接受。行为测试（test_reset_explicit_root_policy.py 中 6 个用例）修复前为红；已知集合检查突变为红。
