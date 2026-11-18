@@ -13,6 +13,11 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 8 轮审阅修复（P0 + P2，一项一提交；行为测试先行）
+* **P0** `03029c2`：GPU 集成套件 `test_cache_server.py`（无 CUDA 时模块级 skip）不再阻塞无 GPU 构建。门禁 = 五个 CPU 文件（skipped==0）；GPU 套件仅在 `KVP_BUILD_GPU_TESTS=1`（--gpus all）时运行；`provenance.json` 记录 `gpu_regression_run`；门禁失败列出 `-rs` 的 SKIPPED 行。五个文件已核查：无 skipif/pytest.skip；仅 test_vllm_mp_adapter 有 `importorskip`（在 vLLM 镜像中可导入）。变异（套件回到门禁）为红。
+* **P2-1** `f78b7d0`：root 拥有的构建产物——`trap EXIT` 将 /usr/src/lmcache /kvp-wheels /kvp-work 归还 KVP_HOST_UID:GID（失败时也执行）；build-lmcache.sh 传递 host uid/gid。变异（去掉 trap）为红。
+* **P2-2** `29d51cd`：identity.env 中的 GPU_CC 对 shell 安全（`12.0`，而不是 bash 解析为数组的元组 `(12, 0)`）。变异（元组回来）为红。
+
 ### 第 6-7 轮审阅修复（P0 + P1，一项一提交；行为测试先行）
 * **A-1/A-3/A-4** `68f68c9`：容器内构建阶段从 stdin heredoc 迁移到挂载的**文件**（`scripts/_incontainer_build.sh`）。在操作员机器上复现：`docker run` 没有 `-i` 时 `bash -s` 的 stdin 是**空的**，阶段悄悄消失，脚本在空输出中报「no wheel produced」。docker 桩现在与真正的 docker 行为一致（仅 `-i` 时附带 stdin；argv 中的挂载文件才是真正执行的脚本），失败时输出 docker rc + 工作目录 + pytest-report.txt 最后 20 行。其他 stdin-heredoc 位置已审计（build-image.sh 在 A-2 修复；探测用 -c）。
 * **A-2** `9223306` + `6ebaa04`：build-image.sh 的 verify 阶段是挂载**文件**（`scripts/_verify_image.py`），并在记录任何内容**之前**严格校验标记：`KVP_CUDA_OPS_IMPORT=OK`、`KVP_PY_IMPORTS=OK`、`KVP_IDENTITY_FILE=OK`、`KVP_GPU_SMOKE_OK_COUNT == KVP_GPU_COUNT > 0`——旧 heredoc 产生空的 verify.txt 和**虚假成功**。

@@ -20,6 +20,19 @@
 `scripts/build-lmcache.sh` 验证基线修订及 #6551 为其祖先，确定性地应用两个
 补丁（补丁无法应用或已被意外应用时响亮失败），运行 #4136 与 #5972 的聚焦
 上游回归测试，用 `--no-build-isolation` 针对镜像内已安装的 PyTorch 构建
+
+### 构建期回归门禁与 GPU 回归（r8 P0）
+
+构建容器不带 `--gpus` 运行，因此强制回归门禁仅限五个 CPU 测试文件
+（要求 0 skipped）：`test_lmcache_mp_connector`、`test_vllm_mp_adapter`、
+`test_lmcache_driven_transfer_skip`、`test_native_state_lookup`、
+`test_l1_owner_completion`。构建期**不**检查的部分：
+`tests/v1/multiprocess/test_cache_server.py` —— GPU 集成套件（LMCache
+服务器 + CUDA IPC），无 CUDA 时在模块级 skip。仅当 `KVP_BUILD_GPU_TESTS=1`
+时作为单独步骤运行（此时容器需以 `--gpus all` 启动）；`provenance.json`
+记录 `gpu_regression_run: true|false`。构建期的 GPU 覆盖来自
+`scripts/build-image.sh` 的 GPU-smoke（在构建镜像上每卡运行一个原生内核）。
+
 wheel，并将完整源码身份与 wheel SHA-256 写入
 `live/lmcache-build/provenance.json`。
 

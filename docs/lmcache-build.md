@@ -22,6 +22,20 @@ checked out every build. `scripts/build-lmcache.sh` verifies the base revision,
 verifies #6551 is an ancestor of it, applies the two patches deterministically
 (fails loudly if a patch does not apply or is already applied), runs the
 focused upstream regression suites for #4136 and #5972, builds the wheel with
+### Build-time regression gate vs GPU regression (r8 P0)
+
+The build container runs WITHOUT `--gpus`, so the mandatory regression gate
+is limited to the FIVE CPU test files (0 skipped required):
+`test_lmcache_mp_connector`, `test_vllm_mp_adapter`,
+`test_lmcache_driven_transfer_skip`, `test_native_state_lookup`,
+`test_l1_owner_completion`. What is NOT checked at build time:
+`tests/v1/multiprocess/test_cache_server.py` -- it is a GPU-integration suite
+(LMCache server + CUDA IPC) that skips at module level without CUDA. It runs
+as a separate step when `KVP_BUILD_GPU_TESTS=1` (the container must then be
+launched with `--gpus all`); `provenance.json` records
+`gpu_regression_run: true|false`. GPU coverage at build time is the GPU-smoke
+in `scripts/build-image.sh` (one native kernel per GPU on the built image).
+
 `--no-build-isolation` against the pinned image's installed PyTorch, and writes
 `live/lmcache-build/provenance.json` with the full source identity and the
 wheel SHA-256.

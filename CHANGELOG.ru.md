@@ -14,6 +14,11 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
 
+### Правки ревью раунда 8 (P0 + P2, по коммиту на пункт; поведенческие тесты вперёд)
+* **P0** `03029c2`: GPU-интеграционный набор `test_cache_server.py` (модульный skip без CUDA) больше не блокирует сборку без GPU. Гейт = ПЯТЬ CPU-файлов (skipped==0); GPU-набор запускается только при `KVP_BUILD_GPU_TESTS=1` (--gpus all); `provenance.json` пишет `gpu_regression_run`; отказ гейта перечисляет SKIPPED-строки из `-rs`. Пять файлов проверены: нет skipif/pytest.skip; только `importorskip` в test_vllm_mp_adapter (импортируется в образе vLLM). Мутация (набор обратно в гейт) красная.
+* **P2-1** `f78b7d0`: артефакты сборки принадлежали root -- `trap EXIT` возвращает владельца /usr/src/lmcache /kvp-wheels /kvp-work на KVP_HOST_UID:GID (также при ошибке); build-lmcache.sh передаёт host uid/gid. Мутация (убрать trap) красная.
+* **P2-2** `29d51cd`: GPU_CC в identity.env совместим с shell (`12.0`, а не кортеж `(12, 0)`, который bash читает как массив). Мутация (кортеж обратно) красная.
+
 ### Правки ревью раундов 6-7 (P0 + P1, по коммиту на пункт; поведенческие тесты вперёд)
 * **A-1/A-3/A-4** `68f68c9`: in-container фаза сборки перенесена из stdin-heredoc в смонтированный ФАЙЛ (`scripts/_incontainer_build.sh`). Воспроизведено на машине оператора: `docker run` БЕЗ `-i` оставил `bash -s` ПУСТЫЙ stdin, фаза молча исчезла, скрипт падал 'no wheel produced' в пустой вывод. Заглушка docker теперь ведёт себя как настоящая (stdin только с `-i`; смонтированный файл в argv — это и есть запуск), отказ несёт docker rc + рабочий каталог + последние 20 строк pytest-report.txt. Прочие stdin-heredoc места проверены (build-image.sh исправлен в A-2; пробы используют -c).
 * **A-2** `9223306` + `6ebaa04`: verify-фаза build-image.sh — смонтированный ФАЙЛ (`scripts/_verify_image.py`) плюс СТРОГИЙ gate маркеров: `KVP_CUDA_OPS_IMPORT=OK`, `KVP_PY_IMPORTS=OK`, `KVP_IDENTITY_FILE=OK`, `KVP_GPU_SMOKE_OK_COUNT == KVP_GPU_COUNT > 0` ДО записи чего-либо -- старый heredoc давал пустой verify.txt и ЛОЖНЫЙ успех.

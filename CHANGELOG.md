@@ -13,6 +13,21 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 8 review fixes (P0 + P2, one commit per item -- behavioral tests first)
+* **P0** `03029c2`: the GPU-integration suite `test_cache_server.py` (module
+  skip without CUDA) no longer gates the GPU-less build. Gate = FIVE CPU
+  files (skipped==0); the GPU suite runs only with `KVP_BUILD_GPU_TESTS=1`
+  (--gpus all); `provenance.json` records `gpu_regression_run`; gate failure
+  lists the SKIPPED rows from `-rs`. Checked the five files: no skipif /
+  pytest.skip; only `importorskip` in test_vllm_mp_adapter (importable in the
+  vLLM image). Mutation (suite back in the gate) red.
+* **P2-1** `f78b7d0`: root-owned build artifacts -- `trap EXIT` chowns
+  /usr/src/lmcache /kvp-wheels /kvp-work back to KVP_HOST_UID:GID (also on
+  failure); build-lmcache.sh forwards the host uid/gid. Mutation (trap
+  removed) red.
+* **P2-2** `29d51cd`: GPU_CC in identity.env is shell-safe (`12.0`, not the
+  tuple `(12, 0)` that bash parses as an array). Mutation (tuple back) red.
+
 ### Round 6-7 review fixes (P0 + P1, one commit per item -- behavioral tests first)
 * **A-1/A-3/A-4** `68f68c9`: in-container build phase moved from the stdin
   heredoc to a mounted FILE (`scripts/_incontainer_build.sh`). Reproduced on
