@@ -142,7 +142,7 @@ docker run --rm --gpus all -v "$HERE":/kvp-scripts:ro \
 
 # r6-7 A-2 gate: every success marker must be present BEFORE anything is
 # recorded. An empty or partial verify.txt means the verification never ran.
-for _marker in KVP_CUDA_OPS_IMPORT=OK KVP_PY_IMPORTS=OK KVP_IDENTITY_FILE=OK; do
+for _marker in KVP_CUDA_OPS_IMPORT=OK KVP_NATIVE_IMPORT=OK KVP_PY_IMPORTS=OK KVP_IDENTITY_FILE=OK; do
   grep -q "^${_marker}$" "$TMPD/verify.txt" 2>/dev/null \
     || die "verify FAILED (docker run rc=$VERIFY_RC) -- marker '${_marker}' missing in verify.txt:
 $(tail -n 20 "$TMPD/verify.txt" 2>/dev/null)"

@@ -24,6 +24,10 @@ print("KVP_TRANSFER_MODULE=" + str(t.__file__))
 # native kernel per GPU (a PATH-only grep proves nothing).
 import lmcache.cuda_ops  # noqa: F401
 print("KVP_CUDA_OPS_IMPORT=OK")
+# r10 P0-2: without lmcache_native LMCache drops to CLI-only mode (no compute
+# backend). Require it explicitly and emit the strict-gate marker.
+import lmcache.lmcache_native  # noqa: F401
+print("KVP_NATIVE_IMPORT=OK")
 _smoke_ok = []
 for _i in range(torch.cuda.device_count()):
     with torch.cuda.device(_i):
