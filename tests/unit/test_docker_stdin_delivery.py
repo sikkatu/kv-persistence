@@ -100,6 +100,7 @@ def _run_build_lmcache(tmp_path: pathlib.Path):
                KVP_OUT_DIR=str(out_dir),
                KVP_BUILD_DIR=str(build_dir),
                KVP_PATCH_DIR=str(pdir),
+               KVP_PIN_FILE=str(ROOT / "vendor" / "pinned-base-image.env"),
                IMAGE="vllm/vllm-openai:nightly-test@sha256:" + "1" * 64,
                KVP_BUILD_SKIP_TESTS="1")
     r = subprocess.run(["bash", str(BUILD_LMC)], capture_output=True,
@@ -192,6 +193,7 @@ def _run_build_image(tmp_path: pathlib.Path, run_mode: str = "good"):
                KVP_TEST_DOCKER_LOG=str(log_dir),
                KVP_BUILD_DIR=str(build_dir),
                KVP_PATCH_DIR=str(patch_dir),
+               KVP_PIN_FILE=str(ROOT / "vendor" / "pinned-base-image.env"),
                KVP_IDENTITY_OUT=str(out_dir / "image-identity.env"),
                KVP_OUT_DIR=str(out_dir),
                IMAGE="vllm/vllm-openai:nightly-test@sha256:" + "1" * 64)

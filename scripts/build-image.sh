@@ -37,8 +37,31 @@ PATCH_DIR="${KVP_PATCH_DIR:-$ROOT/vendor/patches/lmcache}"
 [ -f "$BUILD_INFO" ] || die "provenance.json not found ($BUILD_INFO) -- run scripts/build-lmcache.sh first"
 WHEEL="$(find "$WHEEL_DIR" -name '*.whl' | head -1)"
 [ -n "$WHEEL" ] || die "no wheel in $WHEEL_DIR -- run scripts/build-lmcache.sh first"
-BASE_IMAGE="${IMAGE:-${KVP_LMC_IMAGE:-}}"
-[ -n "$BASE_IMAGE" ] || die "IMAGE (pinned vLLM image) is not set -- export IMAGE=<pinned vLLM image>@sha256:... before building"
+# r6-7 B-1: resolve the BASE vLLM image from ONE pin file. Order:
+#   1. KVP_BASE_IMAGE (explicit override from the environment),
+#   2. KVP_BASE_IMAGE_DEFAULT in the pin file.
+# IMAGE / KVP_LMC_IMAGE are NOT read here: in the launch chain IMAGE means
+# the CUSTOM derivative image (live/image), a different thing -- an old
+# `export IMAGE=<custom>` must never become the build base.
+KVP_PIN_FILE="${KVP_PIN_FILE:-$ROOT/vendor/pinned-base-image.env}"
+[ -f "$KVP_PIN_FILE" ] || die "pin file not found: $KVP_PIN_FILE"
+# shellcheck disable=SC1090
+KVP_BASE_IMAGE_DEFAULT=""
+. "$KVP_PIN_FILE" || die "cannot read pin file: $KVP_PIN_FILE"
+BASE_IMAGE="${KVP_BASE_IMAGE:-${KVP_BASE_IMAGE_DEFAULT:-}}"
+if [ -n "${IMAGE:-}" ] && [ "$IMAGE" != "$BASE_IMAGE" ]; then
+  echo "WARNING(build): IMAGE is ignored by the build scripts -- use KVP_BASE_IMAGE." >&2
+  echo "  IMAGE (in the launch chain) is the CUSTOM runtime image (live/image);" >&2
+  echo "  the build BASE image is $BASE_IMAGE (from $KVP_PIN_FILE)." >&2
+fi
+[ -n "$BASE_IMAGE" ] || die "no base image resolved -- set KVP_BASE_IMAGE or add KVP_BASE_IMAGE_DEFAULT to $KVP_PIN_FILE"
+case "$BASE_IMAGE" in
+  *@sha256:*) : ;;
+  *) die "base image must be pinned by digest (repo:tag@sha256:<64 hex>) -- got '$BASE_IMAGE' (a floating tag is refused); fix $KVP_PIN_FILE or KVP_BASE_IMAGE" ;;
+esac
+_hex="${BASE_IMAGE##*@sha256:}"
+[ "${#_hex}" = "64" ] && [ -z "${_hex//[0-9a-f]/}" ] \
+  || die "digest in the base image must be 64 hex -- got '${_hex}' in '$BASE_IMAGE' ($KVP_PIN_FILE)"
 OUT_IMAGE="${KVP_OUT_IMAGE:-kvp-lmcache:latest}"
 IDENTITY="${KVP_IDENTITY_OUT:-$ROOT/live/image-identity.env}"
 

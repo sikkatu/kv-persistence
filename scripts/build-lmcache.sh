@@ -53,8 +53,32 @@ PATCH_5972="$PATCH_DIR/5972-incomplete-kv-objects.patch"
 # Base image: the pinned vLLM runtime. Ideally this is the CUSTOM derivative
 # (vLLM base + custom LMCache) recorded by build-image, but building from the
 # raw pinned vLLM digimage is also supported for the first build.
-IMAGE="${IMAGE:-${KVP_LMC_IMAGE:-}}"
-[ -n "$IMAGE" ] || die "IMAGE is not set -- export IMAGE=<pinned vLLM image>@sha256:... before building"
+# r6-7 B-1: resolve the BASE vLLM image from ONE pin file. Order:
+#   1. KVP_BASE_IMAGE (explicit override from the environment),
+#   2. KVP_BASE_IMAGE_DEFAULT in the pin file.
+# IMAGE / KVP_LMC_IMAGE are NOT read here: in the launch chain IMAGE means
+# the CUSTOM derivative image (live/image), a different thing -- an old
+# `export IMAGE=<custom>` must never become the build base.
+KVP_PIN_FILE="${KVP_PIN_FILE:-$ROOT/vendor/pinned-base-image.env}"
+[ -f "$KVP_PIN_FILE" ] || die "pin file not found: $KVP_PIN_FILE"
+# shellcheck disable=SC1090
+KVP_BASE_IMAGE_DEFAULT=""
+. "$KVP_PIN_FILE" || die "cannot read pin file: $KVP_PIN_FILE"
+BASE_IMAGE="${KVP_BASE_IMAGE:-${KVP_BASE_IMAGE_DEFAULT:-}}"
+if [ -n "${IMAGE:-}" ] && [ "$IMAGE" != "$BASE_IMAGE" ]; then
+  echo "WARNING(build): IMAGE is ignored by the build scripts -- use KVP_BASE_IMAGE." >&2
+  echo "  IMAGE (in the launch chain) is the CUSTOM runtime image (live/image);" >&2
+  echo "  the build BASE image is $BASE_IMAGE (from $KVP_PIN_FILE)." >&2
+fi
+[ -n "$BASE_IMAGE" ] || die "no base image resolved -- set KVP_BASE_IMAGE or add KVP_BASE_IMAGE_DEFAULT to $KVP_PIN_FILE"
+case "$BASE_IMAGE" in
+  *@sha256:*) : ;;
+  *) die "base image must be pinned by digest (repo:tag@sha256:<64 hex>) -- got '$BASE_IMAGE' (a floating tag is refused); fix $KVP_PIN_FILE or KVP_BASE_IMAGE" ;;
+esac
+_hex="${BASE_IMAGE##*@sha256:}"
+[ "${#_hex}" = "64" ] && [ -z "${_hex//[0-9a-f]/}" ] \
+  || die "digest in the base image must be 64 hex -- got '${_hex}' in '$BASE_IMAGE' ($KVP_PIN_FILE)"
+IMAGE="$BASE_IMAGE"  # legacy name used by the docker run below
 
 WORK_DIR="${KVP_BUILD_DIR:-$(mktemp -d /tmp/kvp-lmc-build.XXXXXX)}"
 OUT_DIR="${KVP_OUT_DIR:-$ROOT/live/lmcache-build}"
