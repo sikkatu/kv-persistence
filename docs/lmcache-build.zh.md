@@ -21,6 +21,16 @@
 补丁（补丁无法应用或已被意外应用时响亮失败），运行 #4136 与 #5972 的聚焦
 上游回归测试，用 `--no-build-isolation` 针对镜像内已安装的 PyTorch 构建
 
+构建步骤顺序（r10）：apt/git → 构建依赖（含 proto 桩生成器所需的
+`grpcio-tools==1.78.0`）→ `pip wheel` → wheel 内容检查（git ls-files +
+两个原生扩展）→ `pip install --no-deps --force-reinstall` → 从
+site-packages 做 import-check（`python3 -P`，三条 `__file__` 证明行）→
+pytest（五个 CPU 文件，skipped == 0）→ identity/provenance。架构列表取自
+`KVP_TORCH_CUDA_ARCH_LIST`（默认 12.0；镜像值仅为回退），且构建出的
+`cuda_ops*.so` 必须含 sm_120（cuobjdump）。`provenance.json` 从
+identity.env 读取 `torch_cuda_arch_list`、`cuda_ops_archs` 和
+`native_extensions`——它反映真实构建内容。
+
 ### 构建期回归门禁与 GPU 回归（r8 P0）
 
 构建容器不带 `--gpus` 运行，因此强制回归门禁仅限五个 CPU 测试文件

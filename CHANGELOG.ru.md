@@ -14,6 +14,16 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
 
+### Правки ревью раунда 10 (P0 + P1, по коммиту на пункт; поведенческие тесты вперёд)
+* **P0-1** `425adec`: in-container фаза теперь сначала строит wheel (build-зависимости, включая grpcio-tools==1.78.0 -> `pip wheel` -> проверки wheel -> `pip install --no-deps --force-reinstall` -> import-check ИЗ site-packages через `python3 -P` с тремя строками-доказательствами `__file__` -> pytest). Старый порядок импортировал lmcache из PYTHONPATH=$LMC_SRC ДО сборки -- но нативные модули и gRPC-стабы существуют только после неё, из-за чего фаза всегда падала ModuleNotFoundError("lmcache.lmcache_native"). Мутации (import до сборки / PYTHONPATH на исходники) красные.
+* **P0-2** `c0efd97`: гейты wheel и образа требуют ОБА нативных расширения (cuda_ops*.so И lmcache_native*.so -- без последнего LMCache уходит в CLI-only режим); опциональные redis/fs пишутся в `native_extensions`; новый маркер KVP_NATIVE_IMPORT=OK в строгом gate build-image.sh. Мутация (только cuda_ops) красная.
+* **P1** `425adec`: TORCH_CUDA_ARCH_LIST берётся из переменной проекта KVP_TORCH_CUDA_ARCH_LIST (значение образа -- только fallback, переопределение именуется в логе); identity.env пишет TORCH_CUDA_ARCH_LIST_USED + cuda_ops_archs (cuobjdump --list-elf обязан показать sm_120, иначе BUILD REFUSED); provenance.json берёт torch_cuda_arch_list / cuda_ops_archs / native_extensions из identity.env -- теперь отражает реальную сборку. Мутация (старый fallback на образ) красная.
+* **Доп. тесты** `d52ba18`: фикстуры r8/build-image/live-image последовали за новым порядком фаз.
+
+Прогоны обоих репозиториев (итог раунда 10):
+* kv-persistence: 549 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
+
 ### Правки ревью раунда 9 (P0 + P1, по коммиту на пункт; поведенческие тесты вперёд)
 * **P0** `20fafcf`: в образе vLLM нет git -- in-container фаза падала rc=127 на первой строке (`git config`). Исправлено: `apt-get install git` сразу после обязательного `apt-get update` (громкий отказ, хвост apt виден), строка `git config` safe.directory перенесена ниже установки, после `pip wheel` состав `lmcache/` в wheel сверяется с `git ls-files lmcache` (без .py и .so) -- без git setuptools_scm file-finder молча теряет данные пакета. Таблица аудита внешних программ в коммите. Мутация (git config выше установки) красная.
 * **P1-1** `0ad1f2d`: KVP_BUILD_GPU_TESTS=1 теперь передаёт `--gpus all` (массив аргументов) с пре-флайтом nvidia-runtime ДО docker run; GPU-шаг требует torch.cuda.is_available() и разбирает сводку pytest как CPU-гейт -- модульный skip НЕ равен прохождению (skipped != 0 или passed == 0 -> REGRESSION FAILURE со SKIPPED-строками). GPU_REGRESSION_RUN=true только после реального прохождения. Мутации (убрать проверку skip / убрать --gpus) красные.

@@ -22,6 +22,17 @@ checked out every build. `scripts/build-lmcache.sh` verifies the base revision,
 verifies #6551 is an ancestor of it, applies the two patches deterministically
 (fails loudly if a patch does not apply or is already applied), runs the
 focused upstream regression suites for #4136 and #5972, builds the wheel with
+Build step order (r10): apt/git -> build deps (incl. `grpcio-tools==1.78.0`
+for the proto stub generator) -> `pip wheel` -> wheel content checks
+(git ls-files + both native extensions) -> `pip install --no-deps
+--force-reinstall` -> import-check FROM site-packages (`python3 -P`, three
+`__file__` proof lines) -> pytest (five CPU files, skipped == 0) ->
+identity/provenance. The arch list comes from `KVP_TORCH_CUDA_ARCH_LIST`
+(default 12.0; the image value is only a fallback) and the built
+`cuda_ops*.so` must list sm_120 (cuobjdump). `provenance.json` records
+`torch_cuda_arch_list`, `cuda_ops_archs` and `native_extensions` from
+identity.env -- it reflects what was really built.
+
 ### Build-time regression gate vs GPU regression (r8 P0)
 
 The build container runs WITHOUT `--gpus`, so the mandatory regression gate

@@ -23,6 +23,17 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 применяет оба патча (громко завершается, если патч не применился или уже
 применён), гоняет узкие регрессионные наборы тестов для #4136 и #5972, собирает
 
+Порядок шагов сборки (r10): apt/git -> build-зависимости (включая
+`grpcio-tools==1.78.0` для генератора proto-стабов) -> `pip wheel` ->
+проверки состава wheel (git ls-files + оба нативных расширения) ->
+`pip install --no-deps --force-reinstall` -> import-check ИЗ site-packages
+(`python3 -P`, три строки-доказательства `__file__`) -> pytest (пять
+CPU-файлов, skipped == 0) -> identity/provenance. Список архитектур берётся
+из `KVP_TORCH_CUDA_ARCH_LIST` (по умолчанию 12.0; значение образа -- только
+fallback), и собранный `cuda_ops*.so` обязан содержать sm_120 (cuobjdump).
+`provenance.json` пишет `torch_cuda_arch_list`, `cuda_ops_archs` и
+`native_extensions` из identity.env -- он отражает реальную сборку.
+
 ### Регрессионный гейт сборки против GPU-регрессии (r8 P0)
 
 Сборочный контейнер запускается БЕЗ `--gpus`, поэтому обязательный

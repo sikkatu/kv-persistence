@@ -13,6 +13,34 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 10 review fixes (P0 + P1, one commit per item -- behavioral tests first)
+* **P0-1** `425adec`: the in-container phase now builds the wheel FIRST
+  (build deps incl. grpcio-tools==1.78.0 -> `pip wheel` -> wheel checks ->
+  `pip install --no-deps --force-reinstall` -> import-check FROM site-packages
+  via `python3 -P` with three `__file__` proof lines -> pytest). The old order
+  imported lmcache from PYTHONPATH=$LMC_SRC BEFORE the build -- but the
+  native modules and gRPC stubs only exist afterwards, so the phase always
+  died ModuleNotFoundError("lmcache.lmcache_native"). Mutations (pre-build
+  import / PYTHONPATH to source) red.
+* **P0-2** `c0efd97`: wheel + image gates require BOTH native extensions
+  (cuda_ops*.so AND lmcache_native*.so -- without the latter LMCache drops to
+  CLI-only mode); optional redis/fs recorded as `native_extensions`; new
+  KVP_NATIVE_IMPORT=OK marker in the strict build-image gate. Mutation
+  (cuda_ops-only) red.
+* **P1** `425adec`: TORCH_CUDA_ARCH_LIST comes from the project variable
+  KVP_TORCH_CUDA_ARCH_LIST (image value is only the fallback, override named
+  in the log); identity.env records TORCH_CUDA_ARCH_LIST_USED + cuda_ops_archs
+  (cuobjdump --list-elf must list sm_120 or BUILD REFUSED); provenance.json
+  takes torch_cuda_arch_list / cuda_ops_archs / native_extensions from
+  identity.env -- it now reflects what was really built. Mutation (old
+  image-fallback) red.
+* **Tests follow-up** `d52ba18`: r8/build-image/live-image fixtures follow
+  the new phase order.
+
+Full suite runs (both repositories, round 10 final):
+* kv-persistence: 549 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
+
 ### Round 9 review fixes (P0 + P1, one commit per item -- behavioral tests first)
 * **P0** `20fafcf`: the vLLM image ships NO git -- the in-container phase died
   rc=127 on its first line (`git config`). Fix: `apt-get install git` right

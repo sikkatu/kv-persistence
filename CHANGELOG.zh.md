@@ -13,6 +13,16 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 10 轮审阅修复（P0 + P1，一项一提交；行为测试先行）
+* **P0-1** `425adec`：容器内阶段现在**先构建 wheel**（构建依赖含 grpcio-tools==1.78.0 → `pip wheel` → wheel 检查 → `pip install --no-deps --force-reinstall` → 通过 `python3 -P` 从 site-packages 做 import-check，打印三条 `__file__` 证明 → pytest）。旧顺序在构建**之前**从 PYTHONPATH=$LMC_SRC 导入 lmcache——但原生模块和 gRPC 桩只在构建后存在，因此阶段总是死于 ModuleNotFoundError("lmcache.lmcache_native")。变异（构建前导入 / PYTHONPATH 指向源码树）为红。
+* **P0-2** `c0efd97`：wheel 与镜像门禁要求**两个**原生扩展（cuda_ops*.so **和** lmcache_native*.so——缺后者 LMCache 退化为 CLI-only 模式）；可选的 redis/fs 记入 `native_extensions`；严格 gate 新增 KVP_NATIVE_IMPORT=OK 标记。变异（仅 cuda_ops）为红。
+* **P1** `425adec`：TORCH_CUDA_ARCH_LIST 取自项目变量 KVP_TORCH_CUDA_ARCH_LIST（镜像值仅为回退，日志点名覆盖）；identity.env 记录 TORCH_CUDA_ARCH_LIST_USED + cuda_ops_archs（cuobjdump --list-elf 必须含 sm_120，否则 BUILD REFUSED）；provenance.json 从 identity.env 读取 torch_cuda_arch_list / cuda_ops_archs / native_extensions——现在反映真实构建内容。变异（旧的镜像回退）为红。
+* **测试补充** `d52ba18`：r8/build-image/live-image 的固定装置适配新的阶段顺序。
+
+两个仓库的全套测试（第 10 轮最终）：
+* kv-persistence：549 passed，26 skipped
+* recipes：        443 passed，5 skipped
+
 ### 第 9 轮审阅修复（P0 + P1，一项一提交；行为测试先行）
 * **P0** `20fafcf`：vLLM 镜像没有 git——容器内阶段在第一行（`git config`）以 rc=127 崩溃。修复：在强制 `apt-get update` 后立即 `apt-get install git`（响亮拒绝，apt 尾部可见），`git config` safe.directory 行移到安装之后，`pip wheel` 后用 `git ls-files lmcache`（不含 .py 和 .so）核对 wheel 中 `lmcache/` 的内容——没有 git 时 setuptools_scm file-finder 会静默丢失包数据。外部程序审计表在提交信息中。变异（git config 在安装之上）为红。
 * **P1-1** `0ad1f2d`：KVP_BUILD_GPU_TESTS=1 现在传递 `--gpus all`（数组参数）并在 docker run 之前预检 nvidia-runtime；GPU 步骤要求 torch.cuda.is_available() 并像 CPU 门禁一样解析 pytest 摘要——模块级 skip **不**等于通过（skipped != 0 或 passed == 0 → REGRESSION FAILURE 并列出 SKIPPED 行）。仅在真正通过后设置 GPU_REGRESSION_RUN=true。变异（移除 skip 检查 / 移除 --gpus）为红。
