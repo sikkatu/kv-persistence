@@ -111,7 +111,14 @@ def _run(tmp_path: pathlib.Path, skip_tests: str, mutate_on: str):
         '  exit 0\n',
         'fi\n',
         f'if [ "$1" = "-m" ] && [ "$2" = "kvpersist.check_wheel_native" ]; then shift 2; PYTHONPATH={IMPL} exec /usr/bin/python3 -m kvpersist.check_wheel_native "$@"; fi\n',
-        'if [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then echo "5 passed in 0.05s"; exit 0; fi\n',
+        'if [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then\n',
+        # r16 P1: the C12 gate counts from the --junitxml report -- the stub
+        # must produce one (5 passed) like the real pytest does
+        '  _xml=""\n',
+        '  for _a in "$@"; do case "$_a" in --junitxml=*) _xml="${_a#--junitxml=}" ;; esac; done\n',
+        '  if [ -n "$_xml" ]; then printf \'<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="stub" tests="5" failures="0" errors="0" skipped="0"></testsuite></testsuites>\\n\' > "$_xml"; fi\n',
+        '  echo "5 passed in 0.05s"; exit 0\n',
+        'fi\n',
         'if [ "$1" = "-m" ]; then exit 0; fi\n',
         'if [ "$1" = "-c" ]; then\n  case "$2" in\n',
         '    *torch.version.cuda*) echo \'13.0\' ;;\n',

@@ -274,13 +274,16 @@ def test_engine_freeze_diff_refuses_changed_torch(tmp_path):
     """The C14 diff logic is real python code in the script -- exercise the
     same logic against a changed torch pin and require refusal."""
     checker = INCONTAINER.read_text()
-    start = checker.index("import re, sys\ndef engine_pins(path):")
+    # r16: the C14 python block now starts with the PEP 503 helper; keep the
+    # extraction on a stable marker (the block ends at the heredoc terminator)
+    start = checker.index("import re, sys\n\ndef _norm(name):")
     end = checker.index("PY\n", start)
     code = checker[start:end]
     before = tmp_path / "before.txt"
     after = tmp_path / "after.txt"
-    before.write_text("torch==2.14.0+cu130\nnumpy==2.1.0\n")
-    after.write_text("torch==2.15.0\nnumpy==2.1.0\n")
+    # r16 P2: the gate now REQUIRES torch and vllm in the baseline freeze
+    before.write_text("torch==2.14.0+cu130\nvllm @ file:///opt/vllm\nnumpy==2.1.0\n")
+    after.write_text("torch==2.15.0\nvllm @ file:///opt/vllm\nnumpy==2.1.0\n")
     r = subprocess.run(
         [PY, "-c", code, str(before), str(after)],
         capture_output=True, text=True, timeout=30,
@@ -288,7 +291,7 @@ def test_engine_freeze_diff_refuses_changed_torch(tmp_path):
     assert r.returncode != 0, "changed torch must be refused"
     assert "BUILD REFUSED" in r.stderr, f"refusal must say BUILD REFUSED:\n{r.stderr}"
     # unchanged -> pass
-    after.write_text("torch==2.14.0+cu130\nnumpy==2.1.0\n")
+    after.write_text("torch==2.14.0+cu130\nvllm @ file:///opt/vllm\nnumpy==2.1.0\n")
     r2 = subprocess.run(
         [PY, "-c", code, str(before), str(after)],
         capture_output=True, text=True, timeout=30,

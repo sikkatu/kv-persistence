@@ -362,22 +362,53 @@ fi
 pip freeze > "$KVP_WORK/image-freeze.after.txt" 2>/dev/null || true
 python3 - "$KVP_WORK/image-freeze.before.txt" "$KVP_WORK/image-freeze.after.txt" <<'PY' || exit 1
 import re, sys
+
+def _norm(name):
+    # PEP 503 normalisation: lowercase, runs of -_. -> -
+    return re.sub(r"[-_.]+", "-", name.strip().lower())
+
 def engine_pins(path):
+    """Both freeze formats: `name==ver` and `name @ url` (direct reference).
+    r16 P2: a bare `vllm @ file:///...` line silently emptied the old
+    `name==ver`-only parser and the check passed blind (both sides empty)."""
     out = {}
     for ln in open(path):
-        m = re.match(r"^(torch|vllm|numpy|triton)([A-Za-z0-9_.-]*)==(\S+)", ln.strip())
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        m = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^]]*\])?\s*==\s*(\S+)", ln)
         if m:
-            out[m.group(1) + m.group(2)] = m.group(3)
+            out[_norm(m.group(1))] = (m.group(1), m.group(2))
+            continue
+        m = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^]]*\])?\s*@\s*(\S+)", ln)
+        if m:
+            # direct reference: version not in the freeze line -- report the
+            # URL as the marker; the diff still detects a changed reference
+            out[_norm(m.group(1))] = (m.group(1), "ref:" + m.group(2))
     return out
+
 before = engine_pins(sys.argv[1])
 after = engine_pins(sys.argv[2])
+# r16 P2: the gate must SEE the engine -- otherwise it is blind
+missing = [n for n in ("torch", "vllm") if n not in before]
+if missing:
+    print("BUILD REFUSED: engine pins not found in baseline freeze (format not "
+          f"recognised): missing {', '.join(missing)}", file=sys.stderr)
+    print("  first 20 lines of the baseline freeze:", file=sys.stderr)
+    try:
+        for ln in open(sys.argv[1]).read().splitlines()[:20]:
+            print("    " + ln, file=sys.stderr)
+    except OSError as e:
+        print(f"    (cannot read baseline: {e})", file=sys.stderr)
+    raise SystemExit(1)
 changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
 if changed:
     print("BUILD REFUSED: engine packages changed during the build:", file=sys.stderr)
     for k in sorted(changed):
-        print(f"  {k}: {before.get(k, '(absent)')} -> {after.get(k, '(absent)')}", file=sys.stderr)
+        print(f"  {k}: {before.get(k, ('?', '(absent)'))[1]} -> {after.get(k, ('?', '(absent)'))[1]}", file=sys.stderr)
     raise SystemExit(1)
-print(f"[in-container] engine identity OK ({len(before)} engine pins unchanged)")
+pins = " ".join(f"{v[0]}=={v[1]}" for k, v in sorted(before.items()))
+print(f"[in-container] engine identity OK ({pins})")
 PY
 
 # ---- C15: identity.env (exported vars, single-quoted JSON) -------------------
