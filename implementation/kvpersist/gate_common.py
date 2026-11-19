@@ -30,18 +30,22 @@ def prod_hash(src: str) -> str:
     except tests/ and docs/). The tree is expected to be staged (`git add
     -A`); the hash covers the sorted per-file SHA-256 of the index content.
     r17 B3: shared by build-lmcache.sh and rerun-lmcache-gate.sh so the
-    recorded and the compared hash cannot drift apart."""
+    recorded and the compared hash cannot drift apart.
+    r18 G3.2: filenames are read with -z / NUL separation and
+    core.quotepath=off -- a filename with a space (or non-ASCII, which git
+    quotes) must not split into bogus paths and produce a wrong hash."""
     import hashlib
     import subprocess
 
     def _git(*args: str) -> bytes:
-        return subprocess.run(["git", "-C", src, *args],
-                              capture_output=True, check=True).stdout
+        return subprocess.run(
+            ["git", "-C", src, "-c", "core.quotepath=off", *args],
+            capture_output=True, check=True).stdout
 
     _git("add", "-A")
-    files = _git("diff", "--cached", "--name-only").decode().split()
+    files = _git("diff", "--cached", "--name-only", "-z").decode().split("\0")
     prod = sorted(f for f in files
-                  if not f.startswith("tests/") and not f.startswith("docs/"))
+                  if f and not f.startswith("tests/") and not f.startswith("docs/"))
     h = hashlib.sha256()
     for f in prod:
         content = _git("show", f":{f}")

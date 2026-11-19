@@ -410,13 +410,6 @@ cat > "$PROV" <<EOF
   "gpu_compute_capability": "${GPU_CC:-unknown}",
   "tests_skipped": "${KVP_BUILD_SKIP_TESTS:-0}",
   "gpu_regression_run": $GPU_REGRESSION_RUN_VALUE,
-  "torch_version": "${TORCH_VERSION:-unknown}",
-  "torch_cuda": "${TORCH_CUDA:-unknown}",
-  "python_version": "${PYTHON_VERSION:-unknown}",
-  "cuda_available": "${CUDA_AVAILABLE:-unknown}",
-  "gpu_count": "${GPU_COUNT:-unknown}",
-  "gpu_compute_capability": "${GPU_CC:-unknown}",
-  "tests_skipped": "${KVP_BUILD_SKIP_TESTS:-0}",
   "wheel": "$WHEEL_NAME",
   "wheel_sha256": "$WHEEL_SHA"
 }

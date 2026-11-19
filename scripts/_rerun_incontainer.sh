@@ -21,6 +21,20 @@ KVP_IMPL="${KVP_IMPL_DIR:-/kvp-impl}"
 note() { echo "[rerun-incontainer] $*"; }
 die()  { echo "REGRESSION FAILURE: $*" >&2; exit 1; }
 
+# r18 G3.3: the container runs as root and used to leave the work dirs
+# root-owned (undeletable without sudo on the host). Return ownership to the
+# host user on EXIT -- via trap so it runs even when die() aborted a gate.
+_kvp_chown_back() {
+  _uid="${KVP_HOST_UID:-}"
+  _gid="${KVP_HOST_GID:-}"
+  [ -n "$_uid" ] && [ -n "$_gid" ] || return 0
+  # LMC_SRC is mounted rw (the gate may touch it) and KVP_WORK holds the
+  # reports/testroot -- both come back to the host user
+  chown -R "$_uid:$_gid" "$LMC_SRC" "$KVP_WORK" 2>/dev/null || true
+  echo "[rerun-incontainer] ownership returned to $_uid:$_gid"
+}
+trap _kvp_chown_back EXIT
+
 # ---------------------------------------------------------------------------
 # C7-lite: install the already built wheel
 # ---------------------------------------------------------------------------

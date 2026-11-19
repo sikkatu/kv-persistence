@@ -233,6 +233,8 @@ docker run --rm \
   -v "$RERUN_WORK":/kvp-work:rw \
   -v "$WHEELS":/kvp-wheels:ro \
   -e PYTHONUNBUFFERED=1 \
+  -e KVP_HOST_UID="$(id -u)" \
+  -e KVP_HOST_GID="$(id -g)" \
   -e KVP_LMC_SRC=/usr/src/lmcache \
   -e KVP_SCRIPTS_DIR=/kvp-scripts \
   -e KVP_IMPL_DIR=/kvp-impl \
