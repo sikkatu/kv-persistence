@@ -336,6 +336,8 @@ pip freeze > "$KVP_WORK/image-freeze.after.txt" 2>/dev/null || true
 python3 - "$KVP_WORK/image-freeze.before.txt" "$KVP_WORK/image-freeze.after.txt" <<'PY' || exit 1
 import re, sys
 
+ENGINE_PREFIXES = ("torch", "vllm", "numpy", "triton")
+
 def _norm(name):
     # PEP 503 normalisation: lowercase, runs of -_. -> -
     return re.sub(r"[-_.]+", "-", name.strip().lower())
@@ -343,18 +345,24 @@ def _norm(name):
 def engine_pins(path):
     """Both freeze formats: `name==ver` and `name @ url` (direct reference).
     r16 P2: a bare `vllm @ file:///...` line silently emptied the old
-    `name==ver`-only parser and the check passed blind (both sides empty)."""
+    `name==ver`-only parser and the check passed blind (both sides empty).
+    r17 B2: only ENGINE packages are compared (r12 filter restored, applied
+    AFTER PEP 503 normalisation, same prefix semantics as the C4 grep:
+    torch*, vllm*, numpy*, triton* -- e.g. torchvision, vllm-flash-attn,
+    triton-kernels). The build itself changes the freeze (C7 installs a new
+    lmcache, C9 pytest+pluggy+iniconfig, C4 setuptools-scm etc.) -- those are
+    NOT engine changes and must not refuse the build."""
     out = {}
     for ln in open(path):
         ln = ln.strip()
         if not ln or ln.startswith("#"):
             continue
         m = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^]]*\])?\s*==\s*(\S+)", ln)
-        if m:
+        if m and _norm(m.group(1)).startswith(ENGINE_PREFIXES):
             out[_norm(m.group(1))] = (m.group(1), m.group(2))
             continue
         m = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^]]*\])?\s*@\s*(\S+)", ln)
-        if m:
+        if m and _norm(m.group(1)).startswith(ENGINE_PREFIXES):
             # direct reference: version not in the freeze line -- report the
             # URL as the marker; the diff still detects a changed reference
             out[_norm(m.group(1))] = (m.group(1), "ref:" + m.group(2))

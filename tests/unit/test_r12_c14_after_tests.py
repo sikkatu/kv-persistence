@@ -52,7 +52,15 @@ def _run(tmp_path: pathlib.Path, skip_tests: str, mutate_on: str):
         "cuda = _C()\n__version__ = '2.4.0'\nclass version:\n    cuda = '13.0'\n")
 
     freeze_state = tmp_path / "freeze-state.json"
-    freeze_state.write_text(json.dumps({"numpy": "2.1.0"}))
+    freeze_state.write_text(json.dumps({
+        "numpy": "2.1.0",
+        # r17 B2: the real build MUTATES the freeze with non-engine
+        # packages too -- C7 reinstalls lmcache, C9 installs pytest
+        # (+pluggy/iniconfig), C4 installs build deps. The stateful shim
+        # mirrors that: installs APPEND to 'extra', the freeze case prints
+        # engine pins + every extra line.
+        "extra": ["lmcache==0.5.7", "aiohttp==3.9.5", "setuptools==75.1.0"],
+    }))
 
     # layout dirs + wheel fixture BEFORE the shims (the pip shim recreates
     # the wheel after C5's rm and must know its path)
@@ -84,9 +92,14 @@ def _run(tmp_path: pathlib.Path, skip_tests: str, mutate_on: str):
         # its name under pytest -- generic masks matched EVERY install):
         # C7 wheel install uses --force-reinstall; C9 installs the spec
         # 'pytest>=7.0,<9.1' (mask: pytest AND 9.1 -- unique to that call).
-        f"  *force-reinstall*) [ \"{mutate_on}\" = \"wheel-install\" ] && /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); d['numpy']='2.2.0'; json.dump(d, open(sys.argv[1],'w'))\" \"$state\" ;;\n",
-        f"  *pytest*9.1*) [ \"{mutate_on}\" = \"pytest\" ] && /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); d['numpy']='2.2.0'; json.dump(d, open(sys.argv[1],'w'))\" \"$state\" ;;\n",
-        "  *freeze*) /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); print('torch==2.14.0+cu130'); print('numpy=='+d['numpy']); print('vllm==0.9.1'); print('triton==3.4.0')\" \"$state\" ;;\n",
+        # r17 B2: the stateful shim mirrors the REAL build's freeze churn:
+        # C7 replaces lmcache with the freshly built wheel version, C9 adds
+        # pytest+pluggy+iniconfig, C4 adds build deps (setuptools-scm). Only
+        # the MUTATION cases (mutate_on) touch the ENGINE (numpy).
+        f"  *force-reinstall*) /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); d['extra']=[x for x in d['extra'] if not x.startswith('lmcache')]+['lmcache==0.5.8rc1.post48+kvp.5554e8befbc2']; json.dump(d, open(sys.argv[1],'w'))\" \"$state\"; [ \"{mutate_on}\" = \"wheel-install\" ] && /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); d['numpy']='2.2.0'; json.dump(d, open(sys.argv[1],'w'))\" \"$state\" ;;\n",
+        f"  *pytest*9.1*) /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); d['extra']+=['pytest==8.4.2','pluggy==1.6.0','iniconfig==2.1.0']; json.dump(d, open(sys.argv[1],'w'))\" \"$state\"; [ \"{mutate_on}\" = \"pytest\" ] && /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); d['numpy']='2.2.0'; json.dump(d, open(sys.argv[1],'w'))\" \"$state\" ;;\n",
+        "  *requirements/build.txt*) /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); d['extra']+=['setuptools-scm==9.2.0']; json.dump(d, open(sys.argv[1],'w'))\" \"$state\" ;;\n",
+        "  *freeze*) /usr/bin/python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); print('torch==2.14.0+cu130'); print('numpy=='+d['numpy']); print('vllm==0.9.1'); print('triton==3.4.0'); [print(x) for x in d['extra']]\" \"$state\" ;;\n",
         # C5 runs `rm -f *.whl` first -- the shim recreates the wheel like the
         # real `pip wheel` would (r11 fixtures do the same). The wheel case is
         # LAST: the kvp-wheels path also contains 'wheel' (install must not
