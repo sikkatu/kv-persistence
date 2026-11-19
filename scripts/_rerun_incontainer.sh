@@ -62,7 +62,7 @@ note "test staging: $TESTROOT (no lmcache/ dir)"
 # ---------------------------------------------------------------------------
 note "running CPU gate: 5 regression files (skipped==0)"
 set +e
-(cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
+(cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
   --junitxml="$KVP_WORK/pytest-report.xml" \
   tests/v1/test_lmcache_mp_connector.py \
   tests/v1/test_vllm_mp_adapter.py \

@@ -83,6 +83,7 @@ def _harness(tmp_path: pathlib.Path, wheel_has_native: bool = True,
     (bin_dir / "pip").write_text(
         "#!/usr/bin/env bash\n"
         f'echo "pip|$*|PP=${{PYTHONPATH:-}}" >> "{call_log}"\n'
+        "case \"$*\" in *freeze*) printf 'torch==2.14.0+cu130\\nvllm==0.9.1\\nnumpy==2.1.0\\ntriton==3.4.0\\naiohttp==3.9.5\\n' ;; esac\n"
         "exit 0\n")
     (bin_dir / "pip").chmod(0o755)
     for tool, body in [

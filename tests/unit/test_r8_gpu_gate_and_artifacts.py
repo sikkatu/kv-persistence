@@ -127,7 +127,9 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
     for tool, body in [
         ("git", "#!/usr/bin/env bash\nexit 0\n"),
         ("apt-get", "#!/usr/bin/env bash\nexit 0\n"),
-        ("pip", "#!/usr/bin/env bash\nexit 0\n"),
+        ("pip", "#!/usr/bin/env bash\n"
+               "case \"$*\" in *freeze*) printf 'torch==2.14.0+cu130\\nvllm==0.9.1\\nnumpy==2.1.0\\ntriton==3.4.0\\naiohttp==3.9.5\\n' ;; esac\n"
+               "exit 0\n"),
         ("nvcc", "#!/usr/bin/env bash\necho 'Cuda compilation tools, release 13.0, V13.0.61'\n"),
         ("g++", "#!/usr/bin/env bash\necho g++\n"),
         ("ninja", "#!/usr/bin/env bash\necho ninja\n"),

@@ -54,7 +54,8 @@ def test_pip_wheel_runs_exactly_once(tmp_path):
     rec = tmp_path / "pip-wheel-calls.log"
     (bin_dir / "pip").write_text(
         "#!/usr/bin/env bash\n"
-        f'case "$*" in *wheel*) echo "$*" >> "{rec}" ;; esac\n'
+        f'case "$*" in *wheel*) echo "$*" >> "{rec}" ;; '
+        "*freeze*) printf 'torch==2.14.0+cu130\\nvllm==0.9.1\\nnumpy==2.1.0\\ntriton==3.4.0\\naiohttp==3.9.5\\n' ;; esac\n"
         "exit 0\n")
     (bin_dir / "pip").chmod(0o755)
     # the python3 shim delegates everything real except torch probes + heredocs
@@ -213,6 +214,9 @@ def test_provenance_json_fields(tmp_path):
             z.writestr("lmcache/lmcache_native_stub.so", b"\x00")
     (bin_dir / "python3").write_text(
         "#!/usr/bin/env bash\n"
+        # r17 B3: the shared gate module (prod-hash etc.) must run for real --
+        # build-lmcache.sh calls it on the host phase
+        "if [ \"${1:-}\" = \"-m\" ] && [ \"${2:-}\" = \"kvpersist.gate_common\" ]; then exec /usr/bin/python3 \"$@\"; fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "if [ \"$1\" = \"-c\" ]; then\n  case \"$2\" in\n"
         "    *'import torch'*|*torch*) PYTHONPATH=" + str(ts) + " exec /usr/bin/python3 \"$@\" ;;\n"
@@ -274,9 +278,10 @@ def test_engine_freeze_diff_refuses_changed_torch(tmp_path):
     """The C14 diff logic is real python code in the script -- exercise the
     same logic against a changed torch pin and require refusal."""
     checker = INCONTAINER.read_text()
-    # r16: the C14 python block now starts with the PEP 503 helper; keep the
-    # extraction on a stable marker (the block ends at the heredoc terminator)
-    start = checker.index("import re, sys\n\ndef _norm(name):")
+    # r17 B2: the C14 python block now starts with the PEP 503 helper and the
+    # engine-prefix tuple; keep the extraction on a stable marker (the block
+    # ends at the heredoc terminator)
+    start = checker.index("import re, sys\n")
     end = checker.index("PY\n", start)
     code = checker[start:end]
     before = tmp_path / "before.txt"

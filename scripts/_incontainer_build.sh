@@ -242,7 +242,7 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
   # C11: run the five CPU gate files with the real plugin + -P.
   echo "[in-container] running CPU gate: 5 regression files (skipped==0)"
   set +e
-  (cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
+  (cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
     --junitxml="$KVP_WORK/pytest-report.xml" \
     tests/v1/test_lmcache_mp_connector.py \
     tests/v1/test_vllm_mp_adapter.py \
@@ -300,7 +300,7 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
       exit 1
     fi
     set +e
-    (cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
+    (cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
       --junitxml="$KVP_WORK/pytest-gpu-report.xml" \
       tests/v1/multiprocess/test_cache_server.py \
       > "$KVP_WORK/pytest-gpu-report.txt" 2>&1)

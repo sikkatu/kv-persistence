@@ -105,6 +105,7 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
         f'echo "pip|$*|PP=${{PYTHONPATH:-}}" >> "{apt_log}"\n'
         "  case \"$*\" in *wheel*)\n"
         f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.8rc1.post48+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        "  *freeze*) printf 'torch==2.14.0+cu130\\nvllm==0.9.1\\nnumpy==2.1.0\\ntriton==3.4.0\\naiohttp==3.9.5\\n' ;;\n"
         "  esac\n"
         "exit 0\n")
     (bin_dir / "pip").chmod(0o755)

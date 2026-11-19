@@ -210,7 +210,9 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         ("g++", "#!/usr/bin/env bash\necho g++\n"),
         ("ninja", "#!/usr/bin/env bash\necho ninja\n"),
         ("cuobjdump", "#!/usr/bin/env bash\necho 'Fatbin elf code:\n  arch = sm_120'\n"),
-        ("pip", "#!/usr/bin/env bash\nexit 0\n"),
+        ("pip", "#!/usr/bin/env bash\n"
+               "case \"$*\" in *freeze*) printf 'torch==2.14.0+cu130\\nvllm==0.9.1\\nnumpy==2.1.0\\ntriton==3.4.0\\naiohttp==3.9.5\\n' ;; esac\n"
+               "exit 0\n"),
         ("chown", "#!/usr/bin/env bash\nexit 0\n"),
     ]:
         p = bin_dir / tool
