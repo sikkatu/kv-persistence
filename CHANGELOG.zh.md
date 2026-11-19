@@ -13,6 +13,16 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 15 轮（C11 过时补丁导入 + 静态导入门禁 + r14 遗留项）
+* `279f17e` **P0**（硬件日志 19.11 14:57）：C0-C8 通过，随后 C11（测试收集）以 rc=2 死亡——`ImportError: cannot import name 'IPCCacheServerKey' from 'lmcache.v1.multiprocess.custom_types'`。5972 补丁取自 PR head（10 月 27 日）；上游 c4fb19dd 在该 head **之后**把类移到了 `lmcache.v1.common.custom_types`——补丁能干净应用（fuzz）但**语义上已过时**（「能干净应用」≠「是最新的」）。修复：从真实补丁树**重新生成**补丁（应用到 pin、修正导入、用 git diff 重新导出——未手工编辑 hunk）；SOURCES.md 中 Patch SHA-256 已更新；我们自己 `tests/integration/lmc_protocol_client.py` 中同样的过时导入已修复（它在 try/except 下默默禁用了协议客户端）。**新**测试（test_r15_patch_porting.py）：无任何添加（`^+`）行携带过时路径，5972 携带修正后的路径，SOURCES.md 中每个 Patch SHA-256 与实际字节一致。4136 补丁以同样方式审计：下面的门禁对两个补丁报告 0 个问题。
+* `5c54612` **P1**：补丁树静态导入门禁——`implementation/kvpersist/check_patched_imports.py`（审阅中的参考实现，纯 AST，无需 torch/vllm）接入 build-lmcache.sh，紧跟补丁/fingerprint 之后、docker 阶段**之前**。范围：补丁触及的文件 ∪ 五个 CPU 门禁测试 ∪ 其传递性 `tests/...` 导入；**空**范围即拒绝。拒绝消息为 `BUILD REFUSED (stale patch/test import): <file>:<line>: ...`。**新**测试（test_r15_patched_import_gate.py，离线、真实 Python、合成迷你树）：(a) 过时导入 → 拒绝 rc=1，(b) 修正导入 → rc=0，(c) try/except ImportError 中的 fallback 不标记，(d) PEP 420 命名空间包通过，(e) `_proto_gen` / `lmcache.lmcache_*` 豁免，(f) 空文件列表 → 拒绝，+ 接线检查（门禁在 docker 之前被**调用**——注释中的提及不算）。在真实 pin 克隆上验证：修正树 0 问题，旧 5972 恰好 1 个问题。夹具（test_docker_stdin_delivery / test_r9_gpu_step_honesty / test_r11_gates_real_programs）已适配门禁。变异：删除门禁调用 → 接线测试红。
+* `ca1d449` **P2**（r14 审阅遗留）：C11/C13 向插件传递 `KVP_LMC_SRC="$LMC_SRC"`（source-tree 防护此前比 C8 弱），并补充缺失的防护测试：分发根目录位于 source_roots **内**（editable 类似场景）→ BUILD REFUSED，通过 assert_installed 和真实 pytest 中的插件（exit 4）验证。变异：禁用防护 → 两个测试都红。
+诚实限制（按 ТЗ）：门禁捕获过时的导入**路径/名称**，不捕获行为漂移——失败的补丁测试意味着移植**补丁**，绝不取消选择/跳过/xfail。
+硬件验证状态（新措辞，文档 x3）：
+「implemented, unit-tested; hardware validation: C0-C8 passed on the operator's host; C9-C16 pending」。
+两个仓库的全套测试（第 15 轮最终）：
+* kv-persistence：593 passed，26 skipped
+* recipes：        443 passed，5 skipped
 ### 第 14 轮（C8 误拒绝：dist-packages 布局 vs site-packages 子串）
 * `d15c5fc` **P0**（硬件日志 19.11 12:52）：C0-C7 通过（r13 在硬件上确认），随后 C8 **错误地**拒绝了正确安装的 wheel——`BUILD REFUSED: lmcache imported from /usr/local/lib/python3.12/dist-packages/lmcache/__init__.py, not site-packages`。vLLM 镜像是 Debian/Ubuntu 布局，pip 安装到 dist-packages；配方启动脚本知道这一点，构建脚本不知道（r11 夹具用了 site-packages 路径，所以测试一直是绿的）。修复：判据按**实质**——scripts/kvp_assert_installed.py 中新的共享 `assert_installed(mods, source_roots)` 通过 importlib.metadata 定位已安装 lmcache 分发根目录，要求每个模块文件位于其**下**（任何布局：site-packages、dist-packages、…），且根目录不在源码树内（$KVP_LMC_SRC/cwd）；拒绝消息带两个路径（file、dist root）。C8 导入共享函数（PYTHONPATH=$KVP_SCRIPTS），pytest 插件使用同一个（惰性 `import pytest`，模块在安装测试依赖前也可用）。**新**测试（真实 python3 -P + 真实插件，带 dist-info/METADATA 的假已安装分发）：(a) site-packages 通过，(b) dist-packages 通过（修复前红：子串拒绝——精确复现硬件日志），(c) 源码树 → BUILD REFUSED，(d) 元数据/模块不匹配 → BUILD REFUSED；同样通过插件（exit 4）。r11 布局测试增加 dist-packages 变体。静态门禁：子串判据已清除（grep 干净），C8 使用共享函数。变异：恢复子串检查 → (b) x3 + lint 红，已验证。
 硬件验证状态（按 ТЗ 保留）：

@@ -16,6 +16,16 @@ Chinese mirror: `lmcache-build.zh.md`.
 | PR #5972 source revision (patch) | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
 | Patch directory | `vendor/patches/lmcache/` |
 | Patch detail + checksums | `vendor/patches/lmcache/SOURCES.md` |
+**Porting rule (r15):** a patch taken from a PR head MUST pass the static
+import gate (`implementation/kvpersist/check_patched_imports.py`, run by
+`build-lmcache.sh` right after the patches, before the docker phase) on the
+pinned base. **"Applies cleanly" does NOT mean "semantically current"** --
+upstream moves/renames (like `IPCCacheServerKey` moving to
+`lmcache.v1.common.custom_types`) survive `git apply` fuzz and only fail at
+import time inside the 20-minute build (hardware log 19.11 14:57, C11). After
+every pin change, re-run the gate and port the patch to the new base (fix the
+stale names in the patch tree and re-export with `git diff` -- never hand-edit
+hunks); never weaken/skip the gate to make a stale patch pass.
 
 The mutable `nightly` tag is never used in production; the exact base commit is
 checked out every build. `scripts/build-lmcache.sh` verifies the base revision,
@@ -26,6 +36,7 @@ focused upstream regression suites for #4136 and #5972, builds the wheel with
 
 | Step | Gate | Real-program test |
 | --- | --- | --- |
+| patch imports | static import gate for the patched tree (before docker) | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker (test_r15_patched_import_gate.py) + test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files (test_r15_patch_porting.py) |
 | C0 | prologue: trap EXIT chown, baseline pip freeze | test_chown_runs_even_on_pytest_failure (test_r8_gpu_gate_and_artifacts.py) |
 | C1 | apt update -> git + cuda dev pkgs (fail-loud) | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly (test_r9_git_install.py, real bash+apt log) |
 | C2 | git safe.directory after install | same r9 test (order asserted from the apt/git logs) |
@@ -40,7 +51,7 @@ focused upstream regression suites for #4136 and #5972, builds the wheel with
 | C14 | engine freeze diff (after the tests, before C15; runs at KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (real python on freeze files) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, REAL whole script, stateful pip shim) |
 | C9 | minimal test deps (pytest only) | wiring in the real-run fixtures |
 | C10 | staging without lmcache/ | test_layout_run_sees_installed_not_source (staging copy asserted) |
-| C11 | staged pytest run + kvp_assert_installed | test_script_runs_the_exact_command (every invocation staged form) + plugin tests |
+| C11 | staged pytest run + kvp_assert_installed (KVP_LMC_SRC passed, source-tree guard active) | test_script_runs_the_exact_command (every invocation staged form) + plugin tests + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots (r15 P2.2) |
 | C12 | summary gate (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
 | C13 | GPU step (skip != 0 refused) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
 | C15 | identity.env single-quoted, sourced strictly | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (REAL bash/json) + test_c6b_identity_provenance_chain_delivers_valid_json (r12 end-to-end) |
@@ -210,13 +221,14 @@ the NVMe mount itself.
   old C2 guard pairing warning is obsolete: the retrieve/abort race is handled
   inside the custom build (downstream port of PR #4136), so no local guard
   exists to conflict. **Status (honest): implemented, unit-tested; hardware
-  validation: C0-C7 passed on the operator's host; C8-C16 pending.** The race
+  validation: C0-C8 passed on the operator's host; C9-C16 pending.** The race
   fix, the custom build and the native cuda_ops extension are unit-tested in
-  this repo; the reference build pipeline passed C0-C7 on the operator's host
-  (wheel built, cuda_ops carries sm_120, four native extensions, install OK)
-  and stopped on a C7 SIGPIPE defect (now fixed) -- C8-C16 still need to run:
-  see section 5b "Implementation stages" for the remaining operator-stand
-  validation plan (import-check -> tests -> identity/provenance -> build-image
+  this repo; the reference build pipeline passed C0-C8 on the operator's host
+  (wheel built, cuda_ops carries sm_120, four native extensions, install OK,
+  import-check OK from the installed distribution) and stopped on a stale
+  patch import at C11 (now fixed + a static import gate added) -- C9-C16
+  still need to run: see section 5b "Implementation stages" for the remaining
+  operator-stand validation plan (tests -> identity/provenance -> build-image
   -> engine + cache-server startup -> parallel load with aborts).
 
 ## 5b. Implementation stages (hardware validation plan)

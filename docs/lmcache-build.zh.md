@@ -15,6 +15,14 @@
 | PR #5972 源码修订（补丁） | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
 | 补丁目录 | `vendor/patches/lmcache/` |
 | 补丁细节与校验和 | `vendor/patches/lmcache/SOURCES.md` |
+**移植规则（r15）：**取自 PR head 的补丁必须在固定基线上通过静态导入门禁
+（`implementation/kvpersist/check_patched_imports.py`，由 `build-lmcache.sh`
+在补丁应用后、docker 阶段之前运行）。**「能干净应用」≠「语义上是最新的」**——
+上游的移动/重命名（如 `IPCCacheServerKey` 移至
+`lmcache.v1.common.custom_types`）能通过 `git apply` 的 fuzz 匹配，却只在
+20 分钟构建内的导入阶段失败（硬件日志 19.11 14:57，C11）。每次更换 pin 后
+重新运行门禁并把补丁移植到新基线（在补丁树中修正过时名称后用 `git diff`
+重新导出——不要手工编辑 hunk）；绝不为了放过过时补丁而削弱/跳过门禁。
 
 可变的 `nightly` 标签从不用于生产；每次构建都检出精确基线提交。
 `scripts/build-lmcache.sh` 验证基线修订及 #6551 为其祖先，确定性地应用两个
@@ -25,6 +33,7 @@
 
 | 步骤 | 门禁 | 真实程序测试 |
 | --- | --- | --- |
+| 补丁导入 | 补丁树静态导入门禁（docker 之前） | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker（test_r15_patched_import_gate.py）+ test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files（test_r15_patch_porting.py） |
 | C0 | 前导：trap EXIT chown、baseline pip freeze | test_chown_runs_even_on_pytest_failure（test_r8_gpu_gate_and_artifacts.py） |
 | C1 | apt update -> git + cuda dev pkgs（响亮拒绝） | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly（test_r9_git_install.py，真实 bash+apt 日志） |
 | C2 | git safe.directory 在安装之后 | 同 r9 测试（顺序由 apt/git 日志断言） |
@@ -39,7 +48,7 @@
 | C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim） |
 | C9 | 最小测试依赖（仅 pytest） | 真实运行夹具的接线 |
 | C10 | staging 不含 lmcache/ | test_layout_run_sees_installed_not_source（staging 拷贝被断言） |
-| C11 | staged pytest + kvp_assert_installed | test_script_runs_the_exact_command（每个调用都须 staged 形式）+ 插件测试 |
+| C11 | staged pytest + kvp_assert_installed（传入 KVP_LMC_SRC，source-tree 防护生效） | test_script_runs_the_exact_command（每个调用都须 staged 形式）+ 插件测试 + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots（r15 P2.2） |
 | C12 | 摘要门禁（skipped==0，passed>0） | test_skip_in_five_cpu_files_still_aborts（test_r8_gpu_gate_and_artifacts.py） |
 | C13 | GPU 步骤（skip != 0 => 拒绝） | test_gpu_step_skip_is_not_success（test_r9_gpu_step_honesty.py） |
 | C15 | identity.env 单引号、严格 source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields（真实 bash/json）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12 端到端） |
@@ -183,12 +192,13 @@ touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
 * `KVP_LOAD_FAILURE_POLICY` 仍为实验性（默认 `fail`）。旧的 C2 保护配对
   警告已过时：retrieve/abort 竞态已在自定义构建内处理（PR #4136 的下游移植），
   不存在可能冲突的本地保护。**状态（诚实）：implemented, unit-tested;
-  hardware validation: C0-C7 passed on the operator's host; C8-C16 pending.**
+  hardware validation: C0-C8 passed on the operator's host; C9-C16 pending.**
   竞态修复、自定义构建和 cuda_ops 原生扩展已在本仓库通过单元测试
   （implemented, unit-tested）；参考构建流水线已在操作员主机上通过
-  C0-C7（wheel 已构建，cuda_ops 含 sm_120，四个原生扩展，安装成功），
-  并在 C7 的 SIGPIPE 缺陷处中止（现已修复）——C8-C16 尚待执行：
-  参见 5b 节「实施阶段」剩余的工位验证计划（import-check → 测试 →
+  C0-C8（wheel 已构建，cuda_ops 含 sm_120，四个原生扩展，安装成功，
+  import-check 从已安装分发位置 OK），并在 C11 的过时补丁导入处中止
+  （现已修复 + 已添加静态导入门禁）——C9-C16 尚待执行：
+  参见 5b 节「实施阶段」剩余的工位验证计划（测试 →
   identity/provenance → build-image → 启动引擎和缓存服务器 →
   含中止的并行负载）。
 

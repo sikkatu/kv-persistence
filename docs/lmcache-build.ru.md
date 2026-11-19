@@ -16,6 +16,17 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 | Исходная ревизия PR #5972 (патч) | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
 | Каталог патчей | `vendor/patches/lmcache/` |
 | Детали и контрольные суммы патчей | `vendor/patches/lmcache/SOURCES.md` |
+**Правило портирования (r15):** патч, взятый с головы PR, ОБЯЗАН проходить
+статический гейт импортов (`implementation/kvpersist/check_patched_imports.py`,
+запускается `build-lmcache.sh` сразу после патчей, до docker-фазы) на
+закреплённой базе. **«Применяется чисто» ≠ «семантически актуально»** —
+апстримовские переносы/переименования (как перенос `IPCCacheServerKey` в
+`lmcache.v1.common.custom_types`) переживают fuzz `git apply` и падают только
+на импорте внутри 20-минутной сборки (лог оператора 19.11 14:57, C11). После
+каждой смены пина заново прогонять гейт и портировать патч на новую базу
+(править устаревшие имена в патченом дереве и пересобрать через `git diff` —
+не редактировать хунки руками); никогда не ослаблять и не пропускать гейт,
+чтобы протащить устаревший патч.
 
 Изменяемый тег `nightly` в продакшене никогда не используется: при каждой
 сборке проверяется точный базовый коммит. `scripts/build-lmcache.sh`
@@ -27,6 +38,7 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 
 | Шаг | Гейт | Тест с настоящей программой |
 | --- | --- | --- |
+| импорты патчей | статический гейт импортов патченого дерева (до docker) | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker (test_r15_patched_import_gate.py) + test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files (test_r15_patch_porting.py) |
 | C0 | пролог: trap EXIT chown, baseline pip freeze | test_chown_runs_even_on_pytest_failure (test_r8_gpu_gate_and_artifacts.py) |
 | C1 | apt update -> git + cuda dev pkgs (громкий отказ) | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly (test_r9_git_install.py, реальный bash+лог apt) |
 | C2 | git safe.directory после установки | тот же r9-тест (порядок из логов apt/git) |
@@ -41,7 +53,7 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 | C14 | diff engine freeze (после тестов, перед C15; выполняется и при KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (реальный python на freeze-файлах) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, РЕАЛЬНЫЙ весь скрипт, stateful pip shim) |
 | C9 | минимальные тестовые зависимости (только pytest) | проводка в фикстурах реального прогона |
 | C10 | staging без lmcache/ | test_layout_run_sees_installed_not_source (копирование staging проверяется) |
-| C11 | staged pytest + kvp_assert_installed | test_script_runs_the_exact_command (каждый вызов в staged-форме) + тесты плагина |
+| C11 | staged pytest + kvp_assert_installed (KVP_LMC_SRC передаётся, защита source-tree активна) | test_script_runs_the_exact_command (каждый вызов в staged-форме) + тесты плагина + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots (r15 P2.2) |
 | C12 | гейт сводки (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
 | C13 | GPU-шаг (skip != 0 => отказ) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
 | C15 | identity.env в одинарных кавычках, строгий source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (РЕАЛЬНЫЙ bash/json) + test_c6b_identity_provenance_chain_delivers_valid_json (r12 сквозной) |
@@ -211,15 +223,16 @@ touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
   Старое предупреждение о паре с защитой C2 устарело: гонка retrieve/abort
   обрабатывается внутри кастомной сборки (downstream-порт PR #4136), локальной
   защиты для конфликта больше нет. **Статус (честно): implemented, unit-tested;
-  hardware validation: C0-C7 passed on the operator's host; C8-C16 pending.**
+  hardware validation: C0-C8 passed on the operator's host; C9-C16 pending.**
   Фикс гонки, кастомная сборка и нативное расширение cuda_ops проверены
-  юнит-тестами в этом репозитории; эталонный пайплайн сборки прошёл C0-C7 на
+  юнит-тестами в этом репозитории; эталонный пайплайн сборки прошёл C0-C8 на
   стенде оператора (wheel собран, cuda_ops содержит sm_120, четыре нативных
-  расширения, установка прошла) и остановился на дефекте SIGPIPE в C7 (теперь
-  исправлен) — C8-C16 ещё предстоит выполнить: см. оставшийся план стендовой
-  валидации в разделе 5b «Этапы внедрения» (import-check → тесты →
-  identity/provenance → build-image → запуск движка и кэш-сервера →
-  параллельная нагрузка с аборт-ами).
+  расширения, установка прошла, import-check OK из установленного
+  дистрибутива) и остановился на устаревшем импорте патча в C11 (теперь
+  исправлено + добавлен статический гейт импортов) — C9-C16 ещё предстоит
+  выполнить: см. оставшийся план стендовой валидации в разделе 5b «Этапы
+  внедрения» (тесты → identity/provenance → build-image → запуск движка и
+  кэш-сервера → параллельная нагрузка с аборт-ами).
 
 ## 6. Будущая миграция в апстрим (когда #4136 и #5972 сольют)
 

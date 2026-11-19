@@ -13,6 +13,52 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 15 (stale patch import at C11 + static import gate + r14 add-ons)
+* `279f17e` **P0** (hardware log 19.11 14:57): C0-C8 passed, then C11 (test
+  collection) died rc=2 -- `ImportError: cannot import name
+  'IPCCacheServerKey' from 'lmcache.v1.multiprocess.custom_types'`. The 5972
+  patch was made from the PR head (Oct 27); upstream c4fb19dd moved the class
+  to `lmcache.v1.common.custom_types` AFTER that head -- the patch applied
+  cleanly (fuzz) but was SEMANTICALLY stale ("applies cleanly" != "current").
+  Fix: the patch is REBUILT from the real patched tree (apply to the pin, fix
+  the import, re-export with git diff -- hunks not hand-edited); SOURCES.md
+  Patch SHA-256 updated; the same stale import in our own
+  tests/integration/lmc_protocol_client.py fixed (it silently disabled the
+  protocol client under try/except). NEW tests (test_r15_patch_porting.py):
+  no added (`^+`) line carries the stale path, 5972 carries the fixed path,
+  every Patch SHA-256 in SOURCES.md matches the real bytes. Patch 4136
+  audited the same way: the gate below reports 0 problems on both patches.
+* `5c54612` **P1**: static import gate for the patched tree --
+  `implementation/kvpersist/check_patched_imports.py` (the reviewed reference
+  implementation, AST only, no torch/vllm) wired into build-lmcache.sh right
+  after the patches/fingerprint, BEFORE the docker phase. Scope: files
+  touched by the patches UNION the five CPU-gate tests UNION their transitive
+  tests/... imports; an EMPTY scope refuses. Refusals say
+  `BUILD REFUSED (stale patch/test import): <file>:<line>: ...`. NEW tests
+  (test_r15_patched_import_gate.py, offline, real Python, synthetic
+  mini-trees): (a) stale import refused rc=1, (b) fixed import rc=0,
+  (c) try/except ImportError fallback not flagged, (d) PEP 420 namespace
+  package accepted, (e) _proto_gen / lmcache.lmcache_* exempt, (f) empty
+  file list refused, + the wiring check (the gate is CALLED in code before
+  docker -- comment mentions do not count). Verified on the real pinned
+  clone: 0 problems on the fixed tree, exactly 1 on the old 5972. Fixtures
+  (test_docker_stdin_delivery / test_r9_gpu_step_honesty /
+  test_r11_gates_real_programs) adapted to the gate. Mutation: removing the
+  gate call -> wiring test RED.
+* `ca1d449` **P2** (r14 review add-ons): C11/C13 pass KVP_LMC_SRC="$LMC_SRC"
+  to the plugin (the source-tree guard was weaker than in C8), and the
+  missing guard tests added: a distribution root INSIDE source_roots
+  (editable-like) -> BUILD REFUSED, via assert_installed and via the plugin
+  in real pytest (exit 4). Mutation: disabling the guard -> both RED.
+Honest limit (per the spec): the gate catches stale import PATHS/NAMEs, not
+behavioral drift -- a failing patched test means the PATCH gets ported, never
+deselected/skipped/xfailed.
+Hardware validation status (new wording, x3 docs):
+"implemented, unit-tested; hardware validation: C0-C8 passed on the
+operator's host; C9-C16 pending".
+Full suite runs (both repositories, round 15 final):
+* kv-persistence: 593 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Round 14 (C8 false refusal: dist-packages layout vs "site-packages" substring)
 * `d15c5fc` **P0** (hardware log 19.11 12:52): C0-C7 passed (r13 confirmed on
   hardware), then C8 FALSELY refused a correctly installed wheel --
