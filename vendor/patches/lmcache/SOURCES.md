@@ -95,7 +95,7 @@ substantive new code, not just a rebase: 17 files, +409/−117 vs the old
 8-file patch.
 
 Verified on the pinned base: 4136 applies cleanly, then this 5972 applies
-cleanly (20 files touched together); the r15 P1 static import gate reports
+cleanly (22 files touched together); the r15 P1 static import gate reports
 0 problems over the patched tree + the five CPU-gate files. The new diff does
 NOT apply to the PREVIOUS pin (planning.py and test_rocm_host_event_wait.py
 did not exist there), which is why the pin moved forward to `07f1c6bb6`.
@@ -104,15 +104,14 @@ Moves the block-availability check after window downsampling so an object whose
 retained geometry still contains a `null_block_id` (markers `0` or `-1`) is
 rejected instead of being persisted as complete. Preserves independently
 complete objects in other groups, merged/separate object groups, compressed and
-uncompressed layouts. Includes upstream regression tests. Rebased manually onto
-the pinned base (the PR head is far behind `dev`); docs-only upstream changes
-were not carried over — project docs describe the behaviour instead.
+uncompressed layouts. Includes upstream regression tests. The patch is the
+EXACT PR diff on the pinned base (docs included).
 
 ## Patch file scope
-
 * `4136-mp-retrieve-abort.patch` touches only `lmcache/integration/vllm/*` and
   `tests/v1/*` (vLLM MP integration layer).
-* `5972-incomplete-kv-objects.patch` touches only `lmcache/v1/multiprocess/*`
-  and `tests/v1/multiprocess/*` (MP cache-engine layer).
-
+* `5972-incomplete-kv-objects.patch` touches `lmcache/v1/multiprocess/*`,
+  `lmcache/v1/client/worker_transfer.py`, `lmcache/v1/common/attn_window.py`
+  and `tests/v1/multiprocess/*` plus 5 docs files (the exact PR diff).
 The two patches share **no files**, so each is independently removable.
+Together they touch 22 files (5 + 17, no overlap).
