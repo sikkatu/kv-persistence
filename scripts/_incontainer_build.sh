@@ -82,6 +82,20 @@ echo "$NVCC_VERSION" > "$KVP_WORK/nvcc-version.txt"
 # triton) so pip cannot touch the engine stack.
 grep -iE '^(torch|vllm|numpy|triton)' "$KVP_WORK/image-freeze.before.txt" \
   > "$KVP_WORK/build-constraints.txt" 2>/dev/null || true
+# r17 B4.2: an EMPTY constraints file lets pip freely touch the engine stack
+# during the build-deps install (only C14 would notice, 10 minutes later).
+# Refuse up front, with the same baseline-head diagnostic as C14, and print
+# the pins actually used (on hardware this also shows the real freeze format
+# of the image -- it has never been in the log).
+_constraints_count="$(wc -l < "$KVP_WORK/build-constraints.txt" 2>/dev/null || echo 0)"
+echo "[in-container] build constraints ($_constraints_count lines):"
+cat "$KVP_WORK/build-constraints.txt" 2>/dev/null || true
+if [ "${_constraints_count:-0}" -eq 0 ] 2>/dev/null; then
+  echo "BUILD REFUSED: no engine pins found in baseline freeze (build dependencies would be free to change the engine stack)" >&2
+  echo "  first 20 lines of the baseline freeze:" >&2
+  head -n 20 "$KVP_WORK/image-freeze.before.txt" >&2 || true
+  exit 1
+fi
 if ! pip install --no-cache-dir -q -c "$KVP_WORK/build-constraints.txt" \
      -r "$LMC_SRC/requirements/build.txt"; then
   echo "BUILD REFUSED: build dependencies cannot be installed (see pip output above)." >&2

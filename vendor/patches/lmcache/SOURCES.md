@@ -44,10 +44,12 @@ fix is already in the pinned base. **Do not add a local duplicate.** This fix
 corrects LRU recency ordering for prefetched keys only; it does **not** make
 whole-prefix eviction atomic.
 ## PR #6608 — KVCacheGroup in the MP connector (already merged, included in base)
+
 | Item | Value |
 | --- | --- |
 | URL | https://github.com/LMCache/LMCache/pull/6608 |
 | Merge commit | `bcafb031401d404a5dabae4853f5e23bf9e5685c` |
+
 Verified: `git merge-base --is-ancestor bcafb0314... 07f1c6bb6...` → true. The
 r15 P0' upgrade keeps the same ancestor gate as #6551 in `build-lmcache.sh`.
 
@@ -60,6 +62,7 @@ r15 P0' upgrade keeps the same ancestor gate as #6551 in `build-lmcache.sh`.
 | Upstream PR head (source revision) | `b10588bd46288192e01ab06da3c3fa923ad0401a` |
 | Patch file | `4136-mp-retrieve-abort.patch` |
 | Patch SHA-256 | `1f79f3fb8d98c10fe84e03f6abcd4d657fe6a5f5109497405880e670565de637` |
+
 Implements the explicit `LOADING` retrieve lifecycle
 (`PREFETCHING → WAITING_FOR_LOAD → LOADING → READY`), scheduler-confirmed abort
 propagation to workers, suppression of invalid store completions and abort-ID
@@ -77,6 +80,7 @@ lazy-offload manager API. **Production part of the patch unchanged** -- only
 `tests/v1/test_lmcache_mp_connector.py` fixtures.
 
 ## PR #5972 — incomplete KV-cache objects (temporary downstream patch)
+
 | Item | Value |
 | --- | --- |
 | Title | Prevent storing incomplete KV-cache objects (+ unify retained-block validation across MP store paths) |
@@ -108,6 +112,7 @@ uncompressed layouts. Includes upstream regression tests. The patch is the
 EXACT PR diff on the pinned base (docs included).
 
 ## Patch file scope
+
 * `4136-mp-retrieve-abort.patch` touches only `lmcache/integration/vllm/*` and
   `tests/v1/*` (vLLM MP integration layer).
 * `5972-incomplete-kv-objects.patch` touches `lmcache/v1/multiprocess/*`,
