@@ -13,6 +13,45 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 15 addendum (P0': move to the rebased PR #5972 base)
+* `18e8cde` **P0'** (replaces the round-15 P0 above -- that fix stays in git
+  history as the documented ROLLBACK variant: previous pin + old 5972 + the
+  one-line import fix; history is not rewritten). The PR #5972 developer
+  rebuilt the PR on `dev` by our request: the import is now
+  `lmcache.v1.common.custom_types` and the last commit ("Unify retained-block
+  validation across MP store paths") is substantive new code (17 files,
+  +409/−117). Pinned: base `07f1c6bb6` (28 commits ahead of the previous
+  pin, `dev` #6659), PR head `bd79d4c6` by exact SHA (head-moves rule in
+  SOURCES.md). The patch is the EXACT `git diff 07f1c6bb6..bd79d4c6a` (not
+  hand-edited). Verified on the real clone: 4136 + 5972 apply cleanly on the
+  new base (20 files together), the r15 P1 import gate reports 0 problems;
+  the new diff does NOT apply to the previous pin. Version label
+  `0.5.8rc1.post48+kvp.<fp12>` (= `git rev-list --count v0.5.8rc1..<pin>` =
+  48, PEP 440, not below the real base). #6608 (`bcafb0314`) gets the same
+  ancestor gate as #6551. NEW tests (test_lmcache_pin_consistency.py): one
+  pin everywhere, 40-hex, label tracks the pin base, patch order
+  4136-before-5972, old pin/label gone outside historical CHANGELOG.
+  Mutation: restoring the old SHA in one file -> 2 tests RED, verified.
+  **Dashboard metrics re-check (numbers per the spec):** 117 `lmcache_*`
+  metric names appear in the Grafana dashboards' PromQL (the reviewer's "108"
+  could not be reproduced with a documented method -- the exact counting
+  method was never fixed in the repo, so both counts are recorded honestly
+  here). Source-side name literals in `lmcache/`: 223 (old pin) vs 224 (new
+  base) -- 0 removed, 1 added (the `lmcache_nixl.` prefix of the new NIXL
+  connector, out of `lmcache/` packaging scope anyway). Cross-check of every
+  dashboard name against the source names + the coordinator's prefix
+  concatenations: matched 80 / static-method-missing 37 -- IDENTICAL on both
+  bases, so **lost by migration: 0**. The 37 static misses are a limit of the
+  name-reconstruction method (composite names/suffixes), not a migration
+  regression -- the canonical OTel→Prometheus mapping (METRICS.md, 90
+  exported names) exists unchanged on the new base. The dashboards' `vllm:*`
+  families come from vLLM itself, not from the LMCache pin.
+Hardware validation status (new wording, x3 docs):
+"implemented, unit-tested; hardware validation: C0-C8 passed on the
+operator's host (old base); new base 07f1c6bb6 pending".
+Full suite runs (both repositories, round 15 addendum final):
+* kv-persistence: 598 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Round 15 (stale patch import at C11 + static import gate + r14 add-ons)
 * `279f17e` **P0** (hardware log 19.11 14:57): C0-C8 passed, then C11 (test
   collection) died rc=2 -- `ImportError: cannot import name
