@@ -178,10 +178,10 @@ def test_every_refusal_scenario_prints_a_message(tmp_path):
             '    *device_count*) echo \'0\' ;;\n',
             '    *__version__*) echo \'2.4.0\' ;;\n',
             '    *get_device_capability*) echo \'(12, 0)\' ;;\n',
-            f'    *importlib*|*md.version*|*re.search*) PYTHONPATH={ts} exec /usr/bin/python3 "$@" ;;\n',
+            f'    *importlib*|*md.version*|*re.search*) PYTHONPATH={ts.parent} exec /usr/bin/python3 "$@" ;;\n',
             '    *) echo \'\' ;;\n  esac\n  exit 0\nfi\n',
-            f'if [ "$1" = "-" ] || [ "$1" = "-P" ]; then PYTHONPATH={ts} exec /usr/bin/python3 "$@"; fi\n',
-            f'PYTHONPATH={ts} exec /usr/bin/python3 "$@"\n',
+            f'if [ "$1" = "-" ] || [ "$1" = "-P" ]; then PYTHONPATH={ts.parent} exec /usr/bin/python3 "$@"; fi\n',
+            f'PYTHONPATH={ts.parent} exec /usr/bin/python3 "$@"\n',
         ])
 
     # helper: run the whole script and return (rc, stderr)

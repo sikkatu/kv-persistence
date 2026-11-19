@@ -199,28 +199,6 @@ print("lmcache.lmcache_native.__file__ =", sys.modules["lmcache.lmcache_native"]
 print("[in-container] import-check OK (all native modules from site-packages)")
 PY
 
-# ---- C14: engine identity (pip freeze diff) ---------------------------------
-pip freeze > "$KVP_WORK/image-freeze.after.txt" 2>/dev/null || true
-python3 - "$KVP_WORK/image-freeze.before.txt" "$KVP_WORK/image-freeze.after.txt" <<'PY' || exit 1
-import re, sys
-def engine_pins(path):
-    out = {}
-    for ln in open(path):
-        m = re.match(r"^(torch|vllm|numpy|triton)([A-Za-z0-9_.-]*)==(\S+)", ln.strip())
-        if m:
-            out[m.group(1) + m.group(2)] = m.group(3)
-    return out
-before = engine_pins(sys.argv[1])
-after = engine_pins(sys.argv[2])
-changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
-if changed:
-    print("BUILD REFUSED: engine packages changed during the build:", file=sys.stderr)
-    for k in sorted(changed):
-        print(f"  {k}: {before.get(k, '(absent)')} -> {after.get(k, '(absent)')}", file=sys.stderr)
-    raise SystemExit(1)
-print(f"[in-container] engine identity OK ({len(before)} engine pins unchanged)")
-PY
-
 # ---- C9-C13: tests (CPU gate + optional GPU step) ---------------------------
 if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
   # C9: minimal test deps -- pytest only, constrained to the engine pins.
@@ -317,6 +295,31 @@ else
   export GPU_REGRESSION_RUN=false
   echo "[in-container] KVP_BUILD_SKIP_TESTS=1 -- tests skipped (not production-acceptable)"
 fi
+
+# ---- C14: engine identity (pip freeze diff) ---------------------------------
+# r12 P2: runs AFTER C9-C13 (the pytest install must be covered by the diff)
+# and also when KVP_BUILD_SKIP_TESTS=1 -- the engine stack must not change
+# during ANY step of the build.
+pip freeze > "$KVP_WORK/image-freeze.after.txt" 2>/dev/null || true
+python3 - "$KVP_WORK/image-freeze.before.txt" "$KVP_WORK/image-freeze.after.txt" <<'PY' || exit 1
+import re, sys
+def engine_pins(path):
+    out = {}
+    for ln in open(path):
+        m = re.match(r"^(torch|vllm|numpy|triton)([A-Za-z0-9_.-]*)==(\S+)", ln.strip())
+        if m:
+            out[m.group(1) + m.group(2)] = m.group(3)
+    return out
+before = engine_pins(sys.argv[1])
+after = engine_pins(sys.argv[2])
+changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+if changed:
+    print("BUILD REFUSED: engine packages changed during the build:", file=sys.stderr)
+    for k in sorted(changed):
+        print(f"  {k}: {before.get(k, '(absent)')} -> {after.get(k, '(absent)')}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"[in-container] engine identity OK ({len(before)} engine pins unchanged)")
+PY
 
 # ---- C15: identity.env (exported vars, single-quoted JSON) -------------------
 python3 - <<'PY' > "$KVP_WORK/identity.env"
