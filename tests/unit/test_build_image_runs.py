@@ -35,7 +35,10 @@ def _sha256(path: pathlib.Path) -> str:
 
 
 def make_fixture(tmp_path: pathlib.Path):
-    """Fixture patch dir + wheel + provenance + live output dir, all under tmp."""
+    """Fixture patch dir + wheel + provenance + live output dir, all under tmp.
+    r18 G2: the provenance is written like the REAL build-lmcache.sh writes it
+    (wheel_sha256 + both patch SHAs + tests_skipped) so the new integrity
+    checks pass on the consistent pair."""
     patch_dir = tmp_path / "patches"
     patch_dir.mkdir()
     p4136 = patch_dir / "4136-mp-retrieve-abort.patch"
@@ -49,8 +52,14 @@ def make_fixture(tmp_path: pathlib.Path):
     whl = wheels / "lmcache-0.5.8rc1.post48-cp312-cp312-linux_x86_64.whl"
     whl.write_bytes(b"PK\x05\x06fake-wheel-content")
     (build_dir / "provenance.json").write_text(json.dumps({
+        "module": "custom-lmcache-build",
         "lmcache_source_commit": "07f1c6bb642f4772606a36eab730ae009ddce08f",
+        "wheel": whl.name,
         "wheel_version": "0.5.8rc1.post48+kvp.0123456789ab",
+        "wheel_sha256": _sha256(whl),
+        "pr4136_patch_sha256": _sha256(p4136),
+        "pr5972_patch_sha256": _sha256(p5972),
+        "tests_skipped": "0",
     }))
 
     out_dir = tmp_path / "out"

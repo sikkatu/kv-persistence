@@ -38,8 +38,21 @@ WHEEL_DIR="$BUILD_DIR/wheels"
 PATCH_DIR="${KVP_PATCH_DIR:-$ROOT/vendor/patches/lmcache}"
 [ -d "$PATCH_DIR" ] || die "patch dir not found: $PATCH_DIR"
 [ -f "$BUILD_INFO" ] || die "provenance.json not found ($BUILD_INFO) -- run scripts/build-lmcache.sh first"
-WHEEL="$(find "$WHEEL_DIR" -name '*.whl' | head -1)"
-[ -n "$WHEEL" ] || die "no wheel in $WHEEL_DIR -- run scripts/build-lmcache.sh first"
+# r18 G2: EXACTLY one wheel, and it must be the wheel provenance describes.
+# `find | head -1` picked an arbitrary one of several and never checked the
+# provenance -- an untested or foreign wheel could be baked into the image.
+_wheel_list=("$WHEEL_DIR"/*.whl)
+if [ ! -e "${_wheel_list[0]:-}" ]; then
+  echo "BUILD REFUSED: no wheel in $WHEEL_DIR -- run scripts/build-lmcache.sh first" >&2
+  exit 1
+fi
+if [ "${#_wheel_list[@]}" != "1" ]; then
+  echo "BUILD REFUSED: expected exactly one wheel in $WHEEL_DIR, found ${#_wheel_list[@]}:" >&2
+  for _w in "${_wheel_list[@]}"; do echo "  $_w" >&2; done
+  echo "  refuse to pick one arbitrarily (clean the dir and run scripts/build-lmcache.sh)" >&2
+  exit 1
+fi
+WHEEL="${_wheel_list[0]}"
 # r6-7 B-1: resolve the BASE vLLM image from ONE pin file. Order:
 #   1. KVP_BASE_IMAGE (explicit override from the environment),
 #   2. KVP_BASE_IMAGE_DEFAULT in the pin file.
@@ -87,6 +100,52 @@ PR4136_SHA="$(sha256sum "$PATCH_DIR/4136-mp-retrieve-abort.patch" | awk '{print 
 PR5972_SHA="$(sha256sum "$PATCH_DIR/5972-incomplete-kv-objects.patch" | awk '{print $1}')"
 WHEEL_SHA_ID="$(sha256sum "$WHEEL" | awk '{print $1}')"
 
+# ---------------------------------------------------------------------------
+# r18 G2: the wheel and the patches must match provenance.json BEFORE any
+# image is baked. provenance.json is written at the end of a FULL build; if
+# the wheel was swapped or a patch edited afterwards, the identity label
+# would LIE about the image content.
+# ---------------------------------------------------------------------------
+prov_wheel_sha="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("wheel_sha256",""))' "$BUILD_INFO" 2>/dev/null || echo "")"
+if [ "$prov_wheel_sha" != "$WHEEL_SHA_ID" ]; then
+  echo "BUILD REFUSED: wheel does not match provenance.json (rebuild: bash scripts/build-lmcache.sh)" >&2
+  echo "  wheel    : $WHEEL" >&2
+  echo "  wheel sha: $WHEEL_SHA_ID" >&2
+  echo "  provenance wheel_sha256: ${prov_wheel_sha:-<missing>}" >&2
+  exit 1
+fi
+for _pair in "pr4136_patch_sha256:$PR4136_SHA:4136-mp-retrieve-abort.patch" \
+             "pr5972_patch_sha256:$PR5972_SHA:5972-incomplete-kv-objects.patch"; do
+  _key="${_pair%%:*}"
+  _rest="${_pair#*:}"
+  _cur="${_rest%%:*}"
+  _file="${_rest#*:}"
+  _prov="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$BUILD_INFO" "$_key" 2>/dev/null || echo "")"
+  if [ "$_prov" != "$_cur" ]; then
+    echo "BUILD REFUSED: patches changed since the wheel was built: full rebuild required" >&2
+    echo "  $_file ($_key): current=$_cur provenance=${_prov:-<missing>}" >&2
+    exit 1
+  fi
+done
+# r18 G2: a wheel built with KVP_BUILD_SKIP_TESTS=1 must never become an
+# image silently -- provenance records tests_skipped.
+_prov_tests_skipped="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("tests_skipped","unknown"))' "$BUILD_INFO" 2>/dev/null || echo unknown)"
+if [ "$_prov_tests_skipped" != "0" ]; then
+  if [ "${KVP_ALLOW_UNTESTED_WHEEL:-0}" = "1" ]; then
+    echo "WARNING(build-image): KVP_ALLOW_UNTESTED_WHEEL=1 -- proceeding with an UNTESTED wheel." >&2
+    echo "  provenance tests_skipped=$_prov_tests_skipped (the build skipped its test gates)" >&2
+    echo "  the image identity will be marked 'untested-wheel'." >&2
+    UNTESTED_WHEEL_MARK="untested-wheel"
+  else
+    echo "BUILD REFUSED: the wheel was built WITHOUT its tests (provenance tests_skipped=$_prov_tests_skipped)." >&2
+    echo "  rebuild with tests: bash scripts/build-lmcache.sh" >&2
+    echo "  (or set KVP_ALLOW_UNTESTED_WHEEL=1 to bake an explicitly untested wheel)" >&2
+    exit 1
+  fi
+else
+  UNTESTED_WHEEL_MARK=""
+fi
+
 cat > "$TMPD/Dockerfile" <<EOF
 # Custom derivative of the pinned vLLM runtime.
 # Adds ONLY the custom LMCache wheel (built in-image by build-lmcache.sh).
@@ -105,6 +164,10 @@ EOF
 # r2 P1-2: bake the build identity INTO the image (local scheme = no local
 # version, so wheel version alone cannot tell our build from upstream nightly).
 # verify-engine-identity.sh consults this file for server AND every worker.
+# r18 G2: the patch SHAs come from PROVENANCE.json (the source of truth for
+# what the wheel was built with), not from the current patch files -- after
+# the checks above they are equal, but one source of truth stays. An
+# explicitly untested wheel (KVP_ALLOW_UNTESTED_WHEEL=1) is marked.
 cat > "$TMPD/kvp-lmcache-identity.json" <<EOF
 {
   "module": "kvp-custom-lmcache-identity",
@@ -113,12 +176,14 @@ cat > "$TMPD/kvp-lmcache-identity.json" <<EOF
   "pr6551_merge_commit": "${PR6551_MERGE:-61faa902a81462177d40d74f8c64bb9df02163c4}",
   "pr6551_status": "in-base",
   "pr4136_source_revision": "b10588bd46288192e01ab06da3c3fa923ad0401a",
-  "pr4136_patch_sha256": "$PR4136_SHA",
+  "pr4136_patch_sha256": "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("pr4136_patch_sha256"))' "$BUILD_INFO")",
   "pr5972_source_revision": "bd79d4c6acf6096061b5092517698239440cb93b",
-  "pr5972_patch_sha256": "$PR5972_SHA",
+  "pr5972_patch_sha256": "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("pr5972_patch_sha256"))' "$BUILD_INFO")",
   "wheel": "$(basename "$WHEEL")",
   "wheel_sha256": "$WHEEL_SHA_ID",
   "wheel_version": "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("wheel_version","unknown"))' "$BUILD_INFO" 2>/dev/null || echo unknown)",
+  "tests_skipped": "$_prov_tests_skipped",
+  "untested_wheel": "${UNTESTED_WHEEL_MARK:-}",
   "base_image": "$BASE_IMAGE"
 }
 EOF
