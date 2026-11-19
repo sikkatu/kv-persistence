@@ -89,6 +89,13 @@ mkdir -p "$OUT_DIR"
 # r17 B3: never leave a stale production hash from a previous build around
 # -- the file is rewritten below, BEFORE the docker run
 rm -f "$OUT_DIR/rerun-prod-hash.txt"
+# r18 G1: provenance.json exists ONLY for a build that passed every gate.
+# The wheel lands in $OUT_DIR/wheels at C5 (long before gates C8-C14), so a
+# build that fails at any gate would otherwise leave a NEW untested wheel
+# next to the OLD provenance.json -- and build-image.sh would bake an image
+# from that mismatched pair. Remove the stale provenance up front; it is
+# rewritten at the very end of a fully successful build.
+rm -f "$OUT_DIR/provenance.json"
 
 note "patch dir : $PATCH_DIR"
 note "work dir  : $WORK_DIR"
