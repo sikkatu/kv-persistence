@@ -8,6 +8,16 @@ migration) — do not keep them as permanent technical debt.
 
 Each patch is derived from the **latest upstream PR head reviewed for this
 spec** and is applied to the pinned base commit, not to the PR's older base.
+**Porting rule (r15):** a patch taken from a PR head MUST pass the static
+import gate (`implementation/kvpersist/check_patched_imports.py`, run by
+`build-lmcache.sh` right after the patches) on the pinned base before the
+build. **"Applies cleanly" does NOT mean "semantically current"** -- upstream
+moves/renames (like `IPCCacheServerKey` moving to
+`lmcache.v1.common.custom_types`) survive `git apply` fuzz and only fail at
+import time inside the 20-minute build. After every pin change, re-run the
+gate and port the patch to the new base (fix the stale names in the patch
+tree and re-export it with `git diff` -- never hand-edit hunks); never
+weaken/skip the gate to make a stale patch pass.
 
 ## Pinned base
 
@@ -60,7 +70,7 @@ manager) with the upstream fix. Includes upstream regression tests.
 | URL | https://github.com/LMCache/LMCache/pull/5972 |
 | Upstream PR head (source revision) | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
 | Patch file | `5972-incomplete-kv-objects.patch` |
-| Patch SHA-256 | `b660bac1124098c3273e9d8e7566a4616e03400c804e7bd83a1f00224045e6ba` |
+| Patch SHA-256 | `b80d20c13c8e9e38cbfdfebc5e6005f471adbddd7e58a701e9b815a677472e33` |
 
 Moves the block-availability check after window downsampling so an object whose
 retained geometry still contains a `null_block_id` (markers `0` or `-1`) is

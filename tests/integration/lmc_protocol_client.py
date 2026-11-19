@@ -25,7 +25,7 @@ try:  # pragma: no cover - import guard for machines without lmcache
     import zmq
     from lmcache.cli.commands.bench.server_bench import helpers as _H
     from lmcache.v1.kv_layer_groups import parse_kvcache_shape_spec
-    from lmcache.v1.multiprocess.custom_types import IPCCacheServerKey
+    from lmcache.v1.common.custom_types import IPCCacheServerKey
     from lmcache.v1.multiprocess.group_view import EngineGroupInfo
     from lmcache.v1.multiprocess.mq import MessageQueueClient
     from lmcache.v1.multiprocess.posix_shm import shm_open_pool_as_mmap

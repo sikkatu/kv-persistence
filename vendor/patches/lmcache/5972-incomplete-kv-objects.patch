@@ -181,7 +181,7 @@ index 9a04e1a3..5779baac 100644
      )
      entry = SimpleNamespace(
 diff --git a/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py b/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py
-index e1be7cad..e82cb319 100644
+index e1be7cad..86c48615 100644
 --- a/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py
 +++ b/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py
 @@ -1,9 +1,8 @@
@@ -205,7 +205,7 @@ index e1be7cad..e82cb319 100644
  # First Party
 -from lmcache.v1.kv_layer_groups import ObjectGroupInfo
 +from lmcache.v1.kv_layer_groups import KVLayerGroupsManager, ObjectGroupInfo
-+from lmcache.v1.multiprocess.custom_types import IPCCacheServerKey
++from lmcache.v1.common.custom_types import IPCCacheServerKey
 +from lmcache.v1.multiprocess.group_view import EngineGroupInfo
  from lmcache.v1.multiprocess.modules import lmcache_driven_transfer as mod
  from lmcache.v1.multiprocess.modules.lmcache_driven_transfer import (
