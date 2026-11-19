@@ -119,8 +119,13 @@ PY
 NATIVE_OUT="$(PYTHONPATH="$KVP_IMPL" python3 -m kvpersist.check_wheel_native "$WHEEL_FILE")" \
   || { echo "BUILD REFUSED: the wheel lacks required native extensions (see above)." >&2; exit 1; }
 echo "$NATIVE_OUT"
+# r12 P0: the old brace-default parameter expansion (literal `:`, `-`, `{`,
+# then a closing brace) closed at the first `}` -- the second brace became a
+# literal and a non-empty JSON got a stray `}` appended (garbage in
+# identity.env / provenance.json). Default is assigned on its own line.
 NATIVE_EXTENSIONS_JSON="$(printf '%s\n' "$NATIVE_OUT" | sed -n 's/^native_extensions=//p' | tail -1)"
-export NATIVE_EXTENSIONS_JSON="${NATIVE_EXTENSIONS_JSON:-{}}"
+[ -n "$NATIVE_EXTENSIONS_JSON" ] || NATIVE_EXTENSIONS_JSON='{}'
+export NATIVE_EXTENSIONS_JSON
 
 # ---- C6c: cuobjdump arch check (sm_120 required) ---------------------------
 CUDA_OPS_ARCHS="unknown"

@@ -271,8 +271,9 @@ else
   echo "WARNING(build-lmcache): identity.env not found -- provenance will use defaults" >&2
 fi
 
-# r11: default values assigned separately before the heredoc (no ${...:-{}})
-# which appends '}' when the value is non-empty.
+# r12 P0: default values assigned separately before the heredoc -- the old
+# brace-default form appended a stray '}' to non-empty values (bash closes the
+# parameter expansion at the first closing brace).
 TORCH_CUDA_ARCH_LIST_USED_VALUE="${TORCH_CUDA_ARCH_LIST_USED:-}"
 CUDA_OPS_ARCHS_VALUE="${CUDA_OPS_ARCHS:-}"
 NATIVE_EXTENSIONS_JSON_VALUE="${NATIVE_EXTENSIONS_JSON:-}"
