@@ -36,7 +36,7 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 | C6a | состав wheel против git ls-files | покрыто фикстурами реального прогона (пропавший файл = отказ) |
 | C6b | оба нативных расширения | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (реальный zipfile+CLI) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: РЕАЛЬНЫЙ check_wheel_native -> C6b -> C15 -> provenance, json.loads) |
 | C6c | cuobjdump sm_120, без тихих падений | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly (r12, РЕАЛЬНЫЙ bash на извлечённом блоке C6c) + test_every_refusal_scenario_prints_a_message (обходчик приёмки) + путь отказа по архитектурам в фикстурах test_r10_build_order.py |
-| C7 | установка wheel + pip show до/после | фикстуры реального прогона доходят до import-check только через установку |
+| C7 | установка wheel + pip show до/после (без SIGPIPE) | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install (r13, РЕАЛЬНЫЙ bash, pip-стаб 200 КБ) + test_no_head_pipeline_outside_fail_soft_substitutions (lint) |
 | C8 | import-check из site-packages | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (РЕАЛЬНЫЙ pytest + плагин) |
 | C14 | diff engine freeze (после тестов, перед C15; выполняется и при KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (реальный python на freeze-файлах) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, РЕАЛЬНЫЙ весь скрипт, stateful pip shim) |
 | C9 | минимальные тестовые зависимости (только pytest) | проводка в фикстурах реального прогона |
@@ -210,13 +210,16 @@ touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
 * `KVP_LOAD_FAILURE_POLICY` остаётся ЭКСПЕРИМЕНТАЛЬНЫМ (дефолт `fail`).
   Старое предупреждение о паре с защитой C2 устарело: гонка retrieve/abort
   обрабатывается внутри кастомной сборки (downstream-порт PR #4136), локальной
-  защиты для конфликта больше нет. **Статус (честно): implemented, unit-tested; hardware
-  validation pending.** Фикс гонки, кастомная сборка и нативное расширение
-  cuda_ops проверены юнит-тестами в этом репозитории, но еще НЕ подтверждены
-  работой на реальном железе (4× RTX PRO 6000 + NVMe) — см. план стендовой
-  валидации в разделе 5b «Этапы внедрения» (build-lmcache.sh → build-image.sh →
-  verify-image-custom.sh → запуск движка и кэш-сервера → параллельная нагрузка
-  с аборт-ами).
+  защиты для конфликта больше нет. **Статус (честно): implemented, unit-tested;
+  hardware validation: C0-C7 passed on the operator's host; C8-C16 pending.**
+  Фикс гонки, кастомная сборка и нативное расширение cuda_ops проверены
+  юнит-тестами в этом репозитории; эталонный пайплайн сборки прошёл C0-C7 на
+  стенде оператора (wheel собран, cuda_ops содержит sm_120, четыре нативных
+  расширения, установка прошла) и остановился на дефекте SIGPIPE в C7 (теперь
+  исправлен) — C8-C16 ещё предстоит выполнить: см. оставшийся план стендовой
+  валидации в разделе 5b «Этапы внедрения» (import-check → тесты →
+  identity/provenance → build-image → запуск движка и кэш-сервера →
+  параллельная нагрузка с аборт-ами).
 
 ## 6. Будущая миграция в апстрим (когда #4136 и #5972 сольют)
 

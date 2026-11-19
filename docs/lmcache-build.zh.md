@@ -34,7 +34,7 @@
 | C6a | wheel 文件清单对比 git ls-files | 真实运行夹具覆盖（缺文件 = 拒绝） |
 | C6b | 两个原生扩展 | test_wheel_without_lmcache_native_refused（test_r10_build_order.py）+ test_check_wheel_native.py（真实 zipfile+CLI）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12：真实 check_wheel_native -> C6b -> C15 -> provenance，json.loads） |
 | C6c | cuobjdump sm_120，无静默失败 | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly（r12，对提取出的 C6c 块运行真实 bash）+ test_every_refusal_scenario_prints_a_message（验收遍历）+ test_r10_build_order.py 夹具的架构拒绝路径 |
-| C7 | wheel 安装 + pip show 前后 | 真实运行夹具只有经安装才能到 import-check |
+| C7 | wheel 安装 + pip show 前后（SIGPIPE 安全） | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install（r13，真实 bash，200 KB pip 桩）+ test_no_head_pipeline_outside_fail_soft_substitutions（lint） |
 | C8 | 从 site-packages import-check | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件） |
 | C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim） |
 | C9 | 最小测试依赖（仅 pytest） | 真实运行夹具的接线 |
@@ -183,11 +183,14 @@ touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
 * `KVP_LOAD_FAILURE_POLICY` 仍为实验性（默认 `fail`）。旧的 C2 保护配对
   警告已过时：retrieve/abort 竞态已在自定义构建内处理（PR #4136 的下游移植），
   不存在可能冲突的本地保护。**状态（诚实）：implemented, unit-tested;
-  hardware validation pending.** 竞态修复、自定义构建和 cuda_ops 原生
-  扩展已在本仓库通过单元测试（implemented, unit-tested），但尚未在真实
-  硬件（4× RTX PRO 6000 + NVMe）上验证（hardware validation pending）——
-  参见 5b 节「实施阶段」的工位验证计划（build-lmcache.sh → build-image.sh →
-  verify-image-custom.sh → 启动引擎和缓存服务器 → 含中止的并行负载）。
+  hardware validation: C0-C7 passed on the operator's host; C8-C16 pending.**
+  竞态修复、自定义构建和 cuda_ops 原生扩展已在本仓库通过单元测试
+  （implemented, unit-tested）；参考构建流水线已在操作员主机上通过
+  C0-C7（wheel 已构建，cuda_ops 含 sm_120，四个原生扩展，安装成功），
+  并在 C7 的 SIGPIPE 缺陷处中止（现已修复）——C8-C16 尚待执行：
+  参见 5b 节「实施阶段」剩余的工位验证计划（import-check → 测试 →
+  identity/provenance → build-image → 启动引擎和缓存服务器 →
+  含中止的并行负载）。
 
 ## 6. 未来上游迁移（#4136 与 #5972 合并后）
 

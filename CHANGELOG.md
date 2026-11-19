@@ -13,6 +13,32 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 13 (SIGPIPE in C7: `pip show | head -3` = silent rc=120)
+* `7bda1bc` **P0** (first hardware run, 19.11 11:42): the build passed C0-C7
+  (wheel built, cuda_ops has only sm_120, four native extensions, `pip
+  install` OK) and then died SILENTLY with `docker run rc=120` before C8.
+  Cause: `pip show lmcache | head -3` -- `head` closes the pipe, `pip show`
+  writes to the closed stdout and exits 120 (SIGPIPE, `ERROR: Pipe to stdout
+  was broken`), which under `pipefail` ends the script with no message (the
+  line WITHOUT `||`). The BEFORE line also printed a FALSE `(not installed)`
+  for an installed package. Same defect class as r12 but OUTSIDE `$(...)` --
+  the r12 audit and the message-walker missed plain pipelines. Fix: both
+  lines use `sed -n '1,3p'` (reads the whole output), and `(not installed)`
+  is printed only when `pip show` really fails. NEW tests (real bash, real
+  C7 block extracted by markers, python pip stub writing >=200 KB and
+  exiting 120 on a closed stdout): the block must reach the after-marker
+  (RED before: rc=120 -- exact hardware reproduction), no false `(not
+  installed)`, real failure DOES print it. Acceptance lint: no unprotected
+  `| head` pipeline in _incontainer_build.sh. Mutation: restoring `| head -3`
+  -> RED, verified. All `| head` / `| grep -q` / `sed q` pipelines audited
+  across scripts/ + implementation/ -- every occurrence is fail-soft
+  (`|| true`), guarded, or a bounded diagnostics dump.
+Hardware validation status (new wording, x3 docs):
+"implemented, unit-tested; hardware validation: C0-C7 passed on the
+operator's host; C8-C16 pending".
+Full suite runs (both repositories, round 13 final):
+* kv-persistence: 570 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Round 12 (provenance JSON, C6c silent deaths, C14 order)
 * `125b571` **P0**: the brace-default literal ( `${VAR:-{}}` form ) appended a
   stray `}` to a NON-EMPTY JSON -- bash closes the parameter expansion at the

@@ -35,7 +35,7 @@ focused upstream regression suites for #4136 and #5972, builds the wheel with
 | C6a | wheel file-list vs git ls-files | covered inside the real-run fixtures (missing file = refusal) |
 | C6b | both native extensions | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (real zipfile+CLI) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: REAL check_wheel_native -> C6b -> C15 -> provenance, json.loads) |
 | C6c | cuobjdump sm_120, no silent death | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly (r12, REAL bash on the extracted C6c block) + test_every_refusal_scenario_prints_a_message (acceptance walker) + arch refusal path in test_r10_build_order.py fixtures |
-| C7 | wheel install + pip show before/after | real-run fixtures reach import-check only through the install |
+| C7 | wheel install + pip show before/after (SIGPIPE-safe) | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install (r13, REAL bash, 200 KB pip stub) + test_no_head_pipeline_outside_fail_soft_substitutions (lint) |
 | C8 | import-check from site-packages | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (REAL pytest + plugin) |
 | C14 | engine freeze diff (after the tests, before C15; runs at KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (real python on freeze files) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, REAL whole script, stateful pip shim) |
 | C9 | minimal test deps (pytest only) | wiring in the real-run fixtures |
@@ -210,12 +210,14 @@ the NVMe mount itself.
   old C2 guard pairing warning is obsolete: the retrieve/abort race is handled
   inside the custom build (downstream port of PR #4136), so no local guard
   exists to conflict. **Status (honest): implemented, unit-tested; hardware
-  validation pending.** The race fix, the custom build and the native cuda_ops
-  extension are unit-tested in this repo but NOT yet validated on real hardware
-  (4x RTX PRO 6000 + NVMe) -- see section 5b "Implementation stages" for the
-  pending operator-stand validation plan (build-lmcache.sh -> build-image.sh ->
-  verify-image-custom.sh -> engine + cache-server startup -> parallel load with
-  aborts).
+  validation: C0-C7 passed on the operator's host; C8-C16 pending.** The race
+  fix, the custom build and the native cuda_ops extension are unit-tested in
+  this repo; the reference build pipeline passed C0-C7 on the operator's host
+  (wheel built, cuda_ops carries sm_120, four native extensions, install OK)
+  and stopped on a C7 SIGPIPE defect (now fixed) -- C8-C16 still need to run:
+  see section 5b "Implementation stages" for the remaining operator-stand
+  validation plan (import-check -> tests -> identity/provenance -> build-image
+  -> engine + cache-server startup -> parallel load with aborts).
 
 ## 5b. Implementation stages (hardware validation plan)
 

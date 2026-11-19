@@ -13,6 +13,13 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 13 轮（C7 的 SIGPIPE：`pip show | head -3` = 静默 rc=120）
+* `7bda1bc` **P0**（首次硬件运行，19.11 11:42）：构建通过 C0-C7（wheel 已构建，cuda_ops 仅含 sm_120，四个原生扩展，`pip install` 成功），随后在 C8 之前**静默**死亡（`docker run rc=120`）。原因：`pip show lmcache | head -3`——`head` 关闭管道，`pip show` 写入已关闭的 stdout 并以 120 退出（SIGPIPE，`ERROR: Pipe to stdout was broken`），`pipefail` 下脚本无消息终止（该行**没有** `||`）。BEFORE 行还在已安装时错误地打印 `(not installed)`。与 r12 同类缺陷但在 `$(...)` 之外——r12 的审计和消息遍历器漏掉了普通管道。修复：两行都用 `sed -n '1,3p'`（读取全部输出），`(not installed)` 仅在 `pip show` 真正失败时打印。**新**测试（真实 bash、按标记提取的真实 C7 块、python pip 桩写 ≥200 KB 且在 stdout 关闭时退出 120）：块必须到达 C7 后的标记（修复前红：rc=120——精确复现硬件日志），无错误的 `(not installed)`，真正失败时打印它。验收 lint：_incontainer_build.sh 中无未保护的 `| head` 管道。变异：恢复 `| head -3` → 红，已验证。scripts/ + implementation/ 中所有 `| head` / `| grep -q` / `sed q` 管道已审计——每处均为 fail-soft（`|| true`）、受保护或有界的诊断输出。
+硬件验证状态（新措辞，文档 x3）：
+「implemented, unit-tested; hardware validation: C0-C7 passed on the operator's host; C8-C16 pending」。
+两个仓库的全套测试（第 13 轮最终）：
+* kv-persistence：570 passed，26 skipped
+* recipes：        443 passed，5 skipped
 ### 第 12 轮（provenance JSON、C6c 静默失败、C14 顺序）
 * `125b571` **P0**：brace 默认值字面量（`${VAR:-{}}` 形式）会给**非空** JSON 多写一个 `}`——bash 在第一个右花括号处就结束参数替换，第二个花括号成了字面量。垃圾数据经 identity.env 流入 provenance.json（`native_extensions` 变成非法 JSON），build-image.sh 在已经成功完成的漫长构建之后崩溃。修复：默认值单独一行赋值（`[ -n "$X" ] || X='{}'`）；此类字面量已全部清除（`grep -rn ':-{' scripts implementation` 为空）。**新**端到端测试（真实程序，无手动替换）：真实 `kvpersist.check_wheel_native` 对含 3 个原生 .so 的假 wheel → 按标记从 _incontainer_build.sh 提取的 C6b 块 → C15 块 → identity.env → 从 build-lmcache.sh 提取的 provenance 块 → `json.loads(provenance.json)`；`native_extensions` 必须是含 lmcache/cuda_ops、lmcache/lmcache_native、lmcache/lmcache_redis 的 JSON 对象。变异：恢复旧行 → 红（JSONDecodeError: Extra data）。
 * `6bbc68e` **P1**：`set -Eeuo pipefail` 下 C6c 的静默失败。`.so` 查找用 `unzip`（镜像中**没有**——rc=127 静默退出），cuobjdump 管道在空输出时静默死亡。修复：`.so` 用 python3 zipfile 定位并解压（不依赖 unzip），每个替换管道要么 fail-soft（`|| true`），要么以**明确**的 `BUILD REFUSED` 拒绝（cuobjdump 空输出 → `BUILD REFUSED: cuobjdump produced no architectures` + 原始 `cuobjdump --list-elf` 输出）。**新**测试在真实 bash 下运行真实 C6c 块（按标记提取）：(a) 无 unzip 也能工作（原先 rc=127 静默），(b) cuobjdump 空输出 → 明确拒绝，(c) 仅 sm_89 → `does NOT contain sm_120`。验收遍历器：真实完整脚本的 7 个拒绝场景——每个非零退出必须带 `BUILD REFUSED` / `REGRESSION FAILURE` 消息（它还抓到了 `nvcc --version | tail -1` 的静默死亡，同样已修复）。变异：恢复 unzip 版 C6c → (a)-(c) 红。
