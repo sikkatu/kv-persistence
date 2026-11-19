@@ -188,24 +188,33 @@ pip install --no-deps --force-reinstall "$WHEEL_FILE" || {
 echo "[in-container] pip show lmcache AFTER install:"
 pip show lmcache 2>/dev/null | sed -n '1,3p' || true
 
-# ---- C8: import-check from site-packages (python3 -P) -----------------------
-python3 -P - <<'PY' || exit 1
+# ---- C8: import-check from the installed distribution (python3 -P) ----------
+# r14 P0: the old substring check (looking for `site-packages` inside the
+# __file__ path) FALSELY refused
+# the vLLM image layout (Debian/Ubuntu: pip installs into
+# /usr/local/lib/python3.12/dist-packages). The criterion is now by substance:
+# assert_installed() (shared with the pytest plugin, imported via
+# PYTHONPATH=$KVP_SCRIPTS) checks that every module lives under the installed
+# lmcache distribution root (importlib.metadata), and that root is not inside
+# the source tree. Runs before the test-deps install, so the module must be
+# importable WITHOUT pytest (lazy `import pytest` inside the hook only).
+PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" python3 -P - <<'PY' || exit 1
 import sys
 import lmcache
 import lmcache.cuda_ops
 import lmcache.lmcache_native
 from lmcache.integration.vllm import lmcache_mp_connector
 from lmcache.v1.multiprocess.modules import lmcache_driven_transfer
-for mod in (lmcache, sys.modules["lmcache.cuda_ops"], sys.modules["lmcache.lmcache_native"]):
-    f = getattr(mod, "__file__", "")
-    if "site-packages" not in f:
-        print(f"BUILD REFUSED: {mod.__name__} imported from {f}, not site-packages",
-              file=sys.stderr)
-        raise SystemExit(1)
-print("lmcache.__file__ =", lmcache.__file__)
-print("lmcache.cuda_ops.__file__ =", sys.modules["lmcache.cuda_ops"].__file__)
-print("lmcache.lmcache_native.__file__ =", sys.modules["lmcache.lmcache_native"].__file__)
-print("[in-container] import-check OK (all native modules from site-packages)")
+from kvp_assert_installed import assert_installed
+mods = (lmcache, sys.modules["lmcache.cuda_ops"], sys.modules["lmcache.lmcache_native"])
+try:
+    assert_installed(mods, source_roots=[__import__("os").environ.get("KVP_LMC_SRC", ".")])
+except RuntimeError as e:
+    print(str(e), file=sys.stderr)
+    raise SystemExit(1)
+for mod in mods:
+    print(f"{mod.__name__}.__file__ =", mod.__file__)
+print("[in-container] import-check OK (all native modules under the installed distribution location)")
 PY
 
 # ---- C9-C13: tests (CPU gate + optional GPU step) ---------------------------

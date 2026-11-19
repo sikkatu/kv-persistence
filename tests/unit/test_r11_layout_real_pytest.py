@@ -31,17 +31,26 @@ def pytest_cmd(testroot: pathlib.Path, files: list[str]) -> list[str]:
             "-q", "-rs", *files]
 
 
-def _layout(tmp_path: pathlib.Path) -> tuple:
-    """Toy layout: src/lmcache = SOURCE (no native), site-packages/lmcache =
-    INSTALLED (with cuda_ops + lmcache_native), src/tests = package tests."""
+def _layout(tmp_path: pathlib.Path, site_name: str = "site-packages") -> tuple:
+    """Toy layout: src/lmcache = SOURCE (no native), <site_name>/lmcache =
+    INSTALLED (with cuda_ops + lmcache_native), src/tests = package tests.
+    r14: `site_name` may be `dist-packages` (the vLLM image layout -- Debian
+    pip installs into /usr/local/lib/python3.12/dist-packages)."""
     src = tmp_path / "src"
-    site = tmp_path / "site-packages"
+    site = tmp_path / site_name
     (src / "lmcache").mkdir(parents=True)
     (src / "lmcache" / "__init__.py").write_text("MARK = 'SOURCE'\n")
     (site / "lmcache").mkdir(parents=True)
     (site / "lmcache" / "__init__.py").write_text("MARK = 'INSTALLED'\n")
     (site / "lmcache" / "cuda_ops.py").write_text("X = 1\n")
     (site / "lmcache" / "lmcache_native.py").write_text("Y = 1\n")
+    # r14: the shared assert_installed() locates the installed distribution
+    # via importlib.metadata -- the toy layout needs real dist-info
+    dinfo = site / "lmcache-0.5.7.dev428.dist-info"
+    dinfo.mkdir()
+    (dinfo / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.7.dev428\n")
+    (dinfo / "RECORD").write_text("")
     (src / "tests" / "v1").mkdir(parents=True)
     for pkg in (src / "tests", src / "tests" / "v1"):
         (pkg / "__init__.py").write_text("")
@@ -72,7 +81,27 @@ def test_layout_run_sees_installed_not_source(tmp_path):
     assert r.returncode == 0, (
         f"shipped command must see INSTALLED:\n{r.stdout}\n{r.stderr}"
     )
-    assert "site-packages" in r.stdout, "plugin must print the site-packages __file__"
+    assert "kvp_assert_installed" in r.stdout, "plugin must print the module __file__"
+
+
+def test_layout_run_sees_installed_dist_packages(tmp_path):
+    """r14: the vLLM image layout (Debian: pip installs into
+    /usr/local/lib/python3.12/dist-packages) must work exactly like
+    site-packages (RED before r14: the substring check refused it)."""
+    src, site = _layout(tmp_path, site_name="dist-packages")
+    testroot = tmp_path / "testroot"
+    testroot.mkdir()
+    shutil.copytree(src / "tests", testroot / "tests")
+    shutil.copy(src / "pytest.ini", testroot / "pytest.ini")
+    env = dict(os.environ, PYTHONPATH=f"{SCRIPTS}:{site}",
+               KVP_LMC_SRC=str(src))
+    r = subprocess.run(
+        pytest_cmd(testroot, ["tests/v1/test_mark.py"]),
+        capture_output=True, text=True, timeout=60, env=env, cwd=str(testroot),
+    )
+    assert r.returncode == 0, (
+        f"shipped command must accept the dist-packages layout:\n{r.stdout}\n{r.stderr}"
+    )
 
 
 def test_plugin_refuses_source_tree_with_exit4(tmp_path):
