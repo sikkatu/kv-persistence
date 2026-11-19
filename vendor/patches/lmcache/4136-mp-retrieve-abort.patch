@@ -141,7 +141,7 @@ index 04d71963..b019effa 100644
      def add_request_metadata(self, request_metadata: LMCacheMPRequestMetadata):
          self.requests.append(request_metadata)
 diff --git a/lmcache/integration/vllm/vllm_multi_process_adapter.py b/lmcache/integration/vllm/vllm_multi_process_adapter.py
-index 750ec207..ae74a006 100644
+index dd5d7b12..1896aba0 100644
 --- a/lmcache/integration/vllm/vllm_multi_process_adapter.py
 +++ b/lmcache/integration/vllm/vllm_multi_process_adapter.py
 @@ -1371,6 +1371,11 @@ class LMCacheMPWorkerAdapter:
@@ -222,10 +222,10 @@ index 750ec207..ae74a006 100644
          # these requests' KV caches are already fully stored.
 diff --git a/tests/v1/test_lmcache_mp_connector.py b/tests/v1/test_lmcache_mp_connector.py
 new file mode 100644
-index 00000000..d729e202
+index 00000000..3454808e
 --- /dev/null
 +++ b/tests/v1/test_lmcache_mp_connector.py
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,163 @@
 +# SPDX-License-Identifier: Apache-2.0
 +
 +# Standard
@@ -260,6 +260,10 @@ index 00000000..d729e202
 +    tracker.state = state
 +    connector.request_trackers = {"req": tracker}
 +    connector._aborted_retrieve_req_ids = set()
++    connector._delay_free_req_ids = set()
++    connector._can_store = True
++    connector._pinned_boundary_state_blocks = {}
++    connector._lazy_offload_manager = MagicMock()
 +    connector.scheduler_adapter = MagicMock()
 +    connector.scheduler_adapter.lmcache_tokens_per_chunk = 256
 +    connector._group_tokens_per_block = [16]
@@ -291,7 +295,7 @@ index 00000000..d729e202
 +    connector, tracker = _make_scheduler_connector(LMCacheMPRequestState.LOADING)
 +    metadata = LMCacheMPConnectorMetadata()
 +    scheduler_output = SimpleNamespace(
-+        scheduled_new_reqs=[SimpleNamespace(req_id="req")],
++        scheduled_new_reqs=[SimpleNamespace(req_id="req", num_computed_tokens=0)],
 +        num_scheduled_tokens={"req": 32},
 +        total_num_scheduled_tokens=0,
 +    )
@@ -299,6 +303,7 @@ index 00000000..d729e202
 +    connector._process_new_requests(scheduler_output, metadata)
 +
 +    tracker.increase_num_scheduled_tokens.assert_called_once_with(32)
++    tracker.update_num_engine_computed_tokens.assert_called_once_with(0, 32)
 +    assert len(metadata) == 0
 +
 +
@@ -310,6 +315,7 @@ index 00000000..d729e202
 +            req_ids=["req"],
 +            new_block_ids=[[]],
 +            resumed_req_ids=set(),
++            num_computed_tokens=[0],
 +        ),
 +        num_scheduled_tokens={"req": 32},
 +        total_num_scheduled_tokens=0,
@@ -318,6 +324,7 @@ index 00000000..d729e202
 +    connector._process_cached_requests(scheduler_output, metadata)
 +
 +    tracker.increase_num_scheduled_tokens.assert_called_once_with(32)
++    tracker.update_num_engine_computed_tokens.assert_called_once_with(0, 32)
 +    assert len(metadata) == 0
 +
 +
@@ -339,7 +346,9 @@ index 00000000..d729e202
 +def test_lazy_offload_abort_does_not_finish_nonexistent_store() -> None:
 +    connector, _tracker = _make_scheduler_connector(LMCacheMPRequestState.LOADING)
 +    connector.lazy_offload = True
-+    connector._pending_store = MagicMock()
++    connector._lazy_offload_manager.on_request_finished.return_value = SimpleNamespace(
++        sessions_to_end=[]
++    )
 +    request = SimpleNamespace(request_id="req", kv_transfer_params=None)
 +
 +    delay_free, return_params = connector.request_finished(request, [])
@@ -347,7 +356,8 @@ index 00000000..d729e202
 +    assert delay_free is False
 +    assert return_params is None
 +    assert connector._aborted_retrieve_req_ids == set()
-+    connector._pending_store.mark_req_finished.assert_not_called()
++    connector._lazy_offload_manager.on_request_finished.assert_called_once_with("req")
++    connector.scheduler_adapter.end_session.assert_not_called()
 +
 +
 +def test_aborted_retrieve_marker_is_sent_once_in_metadata() -> None:
@@ -371,6 +381,7 @@ index 00000000..d729e202
 +    metadata = LMCacheMPConnectorMetadata()
 +    metadata.aborted_retrieve_req_ids = {"req"}
 +    connector._connector_metadata = metadata
++    connector._delay_free_req_ids = set()
 +    connector.worker_adapter = MagicMock()
 +    connector.lazy_offload = False
 +
@@ -379,7 +390,7 @@ index 00000000..d729e202
 +    connector.worker_adapter.mark_aborted_retrieves.assert_called_once_with({"req"})
 +    connector.worker_adapter.batched_submit_retrieve_requests.assert_not_called()
 diff --git a/tests/v1/test_vllm_mp_adapter.py b/tests/v1/test_vllm_mp_adapter.py
-index 1e0380c9..52571e66 100644
+index bfd8c4b9..b1fdc0cb 100644
 --- a/tests/v1/test_vllm_mp_adapter.py
 +++ b/tests/v1/test_vllm_mp_adapter.py
 @@ -1362,6 +1362,76 @@ def test_failed_full_retrieve_is_recomputed_instead_of_retried_remotely() -> Non

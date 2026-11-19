@@ -59,8 +59,7 @@ r15 P0' upgrade keeps the same ancestor gate as #6551 in `build-lmcache.sh`.
 | URL | https://github.com/LMCache/LMCache/pull/4136 |
 | Upstream PR head (source revision) | `b10588bd46288192e01ab06da3c3fa923ad0401a` |
 | Patch file | `4136-mp-retrieve-abort.patch` |
-| Patch SHA-256 | `1da52d7506ae2411984d8f6ee9402881adcc4710157e96a5e0c66003c18a3d0d` |
-
+| Patch SHA-256 | `1f79f3fb8d98c10fe84e03f6abcd4d657fe6a5f5109497405880e670565de637` |
 Implements the explicit `LOADING` retrieve lifecycle
 (`PREFETCHING → WAITING_FOR_LOAD → LOADING → READY`), scheduler-confirmed abort
 propagation to workers, suppression of invalid store completions and abort-ID
@@ -68,6 +67,14 @@ deduplication. Because the PR head was based on an older `dev` revision, the
 change was **rebased manually** onto the pinned base; the conflict resolution
 merges the newer base features (delay-free / boundary-state blocks, lazy-offload
 manager) with the upstream fix. Includes upstream regression tests.
+**Test fixtures adapted to the pinned base (r16):** the upstream tests were
+written against the August PR head and built the connector with only part of
+the current `__init__` attributes; the fixture helpers now set
+`_delay_free_req_ids` / `_can_store` / `_pinned_boundary_state_blocks` /
+`_lazy_offload_manager` and the request stubs carry `num_computed_tokens`;
+the obsolete `_pending_store` assertions were rewritten against the
+lazy-offload manager API. **Production part of the patch unchanged** -- only
+`tests/v1/test_lmcache_mp_connector.py` fixtures.
 
 ## PR #5972 — incomplete KV-cache objects (temporary downstream patch)
 | Item | Value |
