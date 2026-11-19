@@ -88,7 +88,9 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
         "    *__version__*) echo '2.4.0' ;;\n"
         "    *get_device_capability*) echo '(12, 0)' ;;\n"
         "    *md.version*) echo '0.5.7.dev428+kvp.abc' ;;\n"
-        "    *re.search*) exec /usr/bin/python3 \"$@\" ;;\n"
+        # r12: the C6c block discovers/extracts the cuda_ops .so via python3
+        # zipfile (no unzip dependency) -- these probes must run for real.
+        "    *re.search*|*zipfile*) exec /usr/bin/python3 \"$@\" ;;\n"
         "    *) echo '' ;;\n"
         "  esac\n"
         "  exit 0\n"
