@@ -14,6 +14,90 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
 
+### Раунд 16 (фикстуры 4136, junit-гейты, слепая зона engine-pin, быстрый перезапуск)
+* `c354ba9` **P0** (лог оператора 19.11 18:53: C0-C10 прошли на новой базе,
+  C11 = 150 passed / 5 failed): все пять падений в
+  `tests/v1/test_lmcache_mp_connector.py` (файле, который ДОБАВЛЯЕТ патч
+  4136) — апстрим-тесты написаны против августовской головы PR и строили
+  коннектор через `__new__`, задавая только часть текущих атрибутов `__init__`
+  (`_delay_free_req_ids`, `_can_store`, `_pinned_boundary_state_blocks`,
+  `_lazy_offload_manager`); в заглушках запросов не было
+  `num_computed_tokens`; один тест проверял устаревший API `_pending_store`
+  (в продакшне его уже нет). Только фикстуры (продакшн не тронут, проверено
+  побайтово): хелпер задаёт четыре атрибута, заглушки несут
+  `num_computed_tokens=0` / `[0]` с усиленными проверками
+  `update_num_engine_computed_tokens(0, 32)`, lazy-offload-тест переписан
+  под API менеджера (`on_request_finished` -> `sessions_to_end=[]`,
+  `end_session` не вызывается). Патч переэкспортирован из реального
+  патченого дерева (git diff, хунки не правились руками); SOURCES.md
+  записана адаптация + новый SHA-256. Ожидаемый C11 на железе: 155 passed,
+  0 skipped. НОВЫЙ статический тест (test_r16_patch4136_fixtures.py):
+  атрибуты фикстур в добавленных строках, нет `_pending_store`, SOURCES.md
+  несёт актуальный хеш патча. Мутация: вернуть `_pending_store` → 2 теста
+  КРАСНЫЕ.
+* `b589b98` **P1** (скрытый дефект, проверен заранее): pytest.ini LMCache
+  содержит `log_cli = true`, и реальный pytest декорирует итоговую строку
+  символами `=` — старый `grep -E '^[0-9]+ (passed|...)'` не находил НИЧЕГО
+  на ЗЕЛЁНОМ прогоне → «pytest summary not found» на здоровом наборе
+  (стабы r11-r15 печатали недекорированную строку, поэтому тесты кодера этого
+  не видели). C12/C13 теперь считают по отчёту `--junitxml` через общий
+  модуль (tests/failures/errors/skipped суммируются по всем `<testsuite>`,
+  passed = tests - failures - errors - skipped; rc==0 И failures==0 И
+  errors==0 И skipped==0 И passed>0; отсутствующий/пустой/битый XML → явный
+  `REGRESSION FAILURE: junit report missing/unparsable`). Текстовый grep
+  убран; строку итога собирает сам скрипт (`CPU gate PASSED (155 passed,
+  0 failed, 0 errors, 0 skipped)`). НОВЫЕ тесты (test_r16_c12_junit_gate.py)
+  с РЕАЛЬНЫМ pytest в ОБЕИХ конфигурациях (с pytest.ini в стиле LMCache
+  log_cli и без): зелёный проходит, skip отвергается со строками SKIPPED,
+  падение отвергается, отсутствующий XML отвергается, плюс статический гейт
+  «нет текстового grep». Мутация: вернуть текстовый grep → 5 тестов КРАСНЫЕ.
+* `d43576e` **P2** (скрытый дефект): `engine_pins` матчил только строки
+  `name==ver` — строка прямой ссылки freeze (`vllm @ file:///...`) молча
+  опустошала обе стороны, и проверка «движок не изменился» проходила слепо.
+  C14 теперь разбирает ОБА формата freeze (`name==ver` + `name @ url`, имена
+  нормализуются по PEP 503, прямые ссылки пинуются как `ref:<url>`),
+  ТРЕБУЕТ torch и vllm в baseline freeze (иначе `BUILD REFUSED: engine pins
+  not found in baseline freeze (format not recognised)` + первые 20 строк
+  baseline), и печатает сравниваемые пины (`torch==... vllm==...`), а не
+  просто число. НОВЫЕ тесты (test_r16_c14_engine_pins.py, РЕАЛЬНЫЙ блок C14):
+  оба формата, нераспознанный baseline отвергается, смена torch отвергается
+  с именами+версиями, неизменный проходит с печатью пинов, PEP 503
+  нормализация имён. Мутация: убрать требование наличия → КРАСНЫЙ.
+  Фикстуры адаптированы (маркер извлечения r11 + строка vllm в freeze-фикстурах;
+  стаб pytest r12 пишет минимальный валидный junit-отчёт).
+* `6efc3cd` **P3**: `scripts/rerun-lmcache-gate.sh [WORK_DIR]` — быстрый
+  перезапуск CPU-гейта БЕЗ пересборки wheel (~2-минутные итерации: тесты
+  берутся из дерева исходников, не из wheel). Заново применяет патчи к
+  свежему checkout пина, прогоняет гейт импортов r15 P1, берёт уже
+  собранный wheel (аргумент или новейший /tmp/kvp-lmc-build.* с
+  wheels/*.whl) и запускает C8-C12 в закреплённом образе. Условия:
+  продакшн-часть патченого дерева (всё кроме tests/ и docs/) должна
+  совпадать с деревом, из которого собран wheel (хеш в
+  work_dir/rerun-prod-hash.txt → «Need a full build» при несовпадении);
+  конечный баннер `NOT production-acceptable: no provenance/identity
+  written` (ничего не пишется в live/lmcache-build); та же логика гейтов,
+  что в _incontainer_build.sh, через новый общий модуль
+  `kvpersist.gate_common` (junit-counts + check-imports), никогда не копия.
+  НОВЫЕ тесты (test_r16_rerun_gate.py) гоняют РЕАЛЬНЫЙ скрипт сквозь
+  ЛОКАЛЬНЫЙ мини-git-репозиторий с РЕАЛЬНЫМИ git-diff патчами (стаб только
+  docker): несовпадение хеша отвергается, отсутствие wheel отвергается,
+  баннер печатается, в live/ ничего нет, общий модуль используется везде.
+  Финальная приёмка — только полный build-lmcache.sh.
+* `58fceaf` **P4**: правки SOURCES.md (5972 также трогает worker_transfer.py /
+  attn_window.py / 5 файлов доков; «20 files together» → 22 проверено;
+  устаревшая фраза «rebased manually... docs-only changes were not carried
+  over» удалена — патч = точный PR-diff). НОВЫЕ тесты (test_r16_shell_gates.py)
+  извлекают РЕАЛЬНЫЕ блоки гейта-предка #6608 и отказа при пустом
+  GATE_SCOPE из build-lmcache.sh и гоняют их под настоящим bash:
+  не-предок PR6608 прерывает сборку, пустой scope отвергается с BUILD
+  REFUSED. Мутации `if false;` / `true || {` → КРАСНЫЕ.
+Статус аппаратной валидации (новая формулировка, доки x3):
+«implemented, unit-tested; hardware validation: C0-C10 passed on the
+operator's host (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16,
+C12-C16 pending».
+Полные прогоны обоих репозиториев (раунд 16, финал):
+* kv-persistence: 620 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Дополнение раунда 15 (P0′: переход на новую базу пересобранного PR #5972)
 * `18e8cde` **P0′** (заменяет P0 раунда 15 выше — тот фикс остаётся в истории
   git как задокументированный ВАРИАНТ ОТКАТА: прежний пин + старый 5972 +

@@ -38,7 +38,8 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 
 | Шаг | Гейт | Тест с настоящей программой |
 | --- | --- | --- |
-| импорты патчей | статический гейт импортов патченого дерева (до docker) | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker (test_r15_patched_import_gate.py) + test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files (test_r15_patch_porting.py) |
+| импорты патчей | статический гейт импортов патченого дерева (до docker) | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker (test_r15_patched_import_gate.py) + test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files (test_r15_patch_porting.py) + test_patch_test_fixtures_carry_the_adapted_attributes / test_no_pending_store_left_in_the_patch (test_r16_patch4136_fixtures.py, r16 P0: фикстуры 4136) + test_pr6608_ancestor_gate_dies_when_not_ancestor / test_empty_gate_scope_refused (test_r16_shell_gates.py, r16 P4.2) |
+| быстрый перезапуск | rerun-lmcache-gate.sh: сверка production-хеша + баннер NOT-production (без записи в live/) | test_production_hash_mismatch_refused / test_no_wheel_refused / test_success_path_prints_not_production_banner / test_nothing_written_to_live / test_shared_gate_module_used_everywhere (test_r16_rerun_gate.py, r16 P3) |
 | C0 | пролог: trap EXIT chown, baseline pip freeze | test_chown_runs_even_on_pytest_failure (test_r8_gpu_gate_and_artifacts.py) |
 | C1 | apt update -> git + cuda dev pkgs (громкий отказ) | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly (test_r9_git_install.py, реальный bash+лог apt) |
 | C2 | git safe.directory после установки | тот же r9-тест (порядок из логов apt/git) |
@@ -50,11 +51,11 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 | C6c | cuobjdump sm_120, без тихих падений | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly (r12, РЕАЛЬНЫЙ bash на извлечённом блоке C6c) + test_every_refusal_scenario_prints_a_message (обходчик приёмки) + путь отказа по архитектурам в фикстурах test_r10_build_order.py |
 | C7 | установка wheel + pip show до/после (без SIGPIPE) | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install (r13, РЕАЛЬНЫЙ bash, pip-стаб 200 КБ) + test_no_head_pipeline_outside_fail_soft_substitutions (lint) |
 | C8 | import-check из установленного дистрибутива (учитывает dist-packages) | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (РЕАЛЬНЫЙ pytest + плагин) + test_installed_dist_packages_layout_passes / test_source_tree_refused / test_metadata_and_module_mismatch_refused / test_plugin_passes_dist_packages_layout (r14: общий assert_installed, обе раскладки) |
-| C14 | diff engine freeze (после тестов, перед C15; выполняется и при KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (реальный python на freeze-файлах) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, РЕАЛЬНЫЙ весь скрипт, stateful pip shim) |
+| C14 | diff engine freeze (после тестов, перед C15; выполняется и при KVP_BUILD_SKIP_TESTS=1; требует torch+vllm в baseline, разбирает `name==ver` + `name @ url`) | test_engine_freeze_diff_refuses_changed_torch (реальный python на freeze-файлах) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, РЕАЛЬНЫЙ весь скрипт, stateful pip shim) + test_both_freeze_formats_are_parsed / test_unrecognised_baseline_is_refused / test_changed_torch_version_refused_with_names_and_versions / test_unchanged_passes_and_prints_pins / test_pep503_name_normalisation (test_r16_c14_engine_pins.py, r16 P2) |
 | C9 | минимальные тестовые зависимости (только pytest) | проводка в фикстурах реального прогона |
 | C10 | staging без lmcache/ | test_layout_run_sees_installed_not_source (копирование staging проверяется) |
-| C11 | staged pytest + kvp_assert_installed (KVP_LMC_SRC передаётся, защита source-tree активна) | test_script_runs_the_exact_command (каждый вызов в staged-форме) + тесты плагина + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots (r15 P2.2) |
-| C12 | гейт сводки (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
+| C11 | staged pytest + kvp_assert_installed (KVP_LMC_SRC передаётся, защита source-tree активна) | test_script_runs_the_exact_command (каждый вызов в staged-форме) + тесты плагина + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots (r15 P2.2) + 5 патченых тестов, исправленных в r16 P0 (адаптация фикстур: test_patch_test_fixtures_carry_the_adapted_attributes) |
+| C12 | гейт сводки (rc==0, junit: failures==0, errors==0, skipped==0, passed>0) | test_green_run_passes_with_log_cli / test_green_run_passes_without_log_cli / test_skip_is_refused_and_lists_skipped_rows / test_failure_is_refused / test_missing_junit_report_is_refused / test_no_text_summary_grep_left_in_the_gate (test_r16_c12_junit_gate.py, r16 P1: РЕАЛЬНЫЙ pytest в обеих конфигурациях log_cli) |
 | C13 | GPU-шаг (skip != 0 => отказ) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
 | C15 | identity.env в одинарных кавычках, строгий source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (РЕАЛЬНЫЙ bash/json) + test_c6b_identity_provenance_chain_delivers_valid_json (r12 сквозной) |
 | хост | поля provenance из identity.env | test_provenance_json_fields (реальный прогон build-lmcache.sh) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: json.loads поле native_extensions) |
@@ -223,17 +224,19 @@ touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
   Старое предупреждение о паре с защитой C2 устарело: гонка retrieve/abort
   обрабатывается внутри кастомной сборки (downstream-порт PR #4136), локальной
   защиты для конфликта больше нет. **Статус (честно): implemented, unit-tested;
-  hardware validation: C0-C8 passed on the operator's host (old base); new
-  base 07f1c6bb6 pending.**
+  hardware validation: C0-C10 passed on the operator's host (new base
+  07f1c6bb6), C11 (4136 test fixtures) fixed in r16, C12-C16 pending.**
   Фикс гонки, кастомная сборка и нативное расширение cuda_ops проверены
-  юнит-тестами в этом репозитории; эталонный пайплайн сборки прошёл C0-C8 на
-  стенде оператора (wheel собран, cuda_ops содержит sm_120, четыре нативных
-  расширения, установка прошла, import-check OK из установленного
-  дистрибутива) и остановился на устаревшем импорте патча в C11 (теперь
-  исправлено + добавлен статический гейт импортов) — C9-C16 ещё предстоит
-  выполнить: см. оставшийся план стендовой валидации в разделе 5b «Этапы
-  внедрения» (тесты → identity/provenance → build-image → запуск движка и
-  кэш-сервера → параллельная нагрузка с аборт-ами).
+  юнит-тестами в этом репозитории; эталонный пайплайн сборки прошёл C0-C10
+  на стенде оператора на новой базе (wheel собран, cuda_ops содержит sm_120,
+  четыре нативных расширения, установка прошла, import-check OK из
+  установленного дистрибутива, staging OK) и остановился на C11 на устаревших
+  фикстурах тестов 4136 (исправлено в r16: атрибуты фикстур + заглушки
+  num_computed_tokens, устаревший _pending_store переписан под API
+  lazy-offload менеджера) — C12-C16 ещё предстоит выполнить: см. оставшийся
+  план стендовой валидации в разделе 5b «Этапы внедрения» (тесты →
+  identity/provenance → build-image → запуск движка и кэш-сервера →
+  параллельная нагрузка с аборт-ами).
 
 ## 6. Будущая миграция в апстрим (когда #4136 и #5972 сольют)
 

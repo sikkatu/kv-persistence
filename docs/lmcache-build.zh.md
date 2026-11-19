@@ -33,7 +33,8 @@
 
 | 步骤 | 门禁 | 真实程序测试 |
 | --- | --- | --- |
-| 补丁导入 | 补丁树静态导入门禁（docker 之前） | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker（test_r15_patched_import_gate.py）+ test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files（test_r15_patch_porting.py） |
+| 补丁导入 | 补丁树静态导入门禁（docker 之前） | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker（test_r15_patched_import_gate.py）+ test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files（test_r15_patch_porting.py）+ test_patch_test_fixtures_carry_the_adapted_attributes / test_no_pending_store_left_in_the_patch（test_r16_patch4136_fixtures.py，r16 P0：4136 夹具适配）+ test_pr6608_ancestor_gate_dies_when_not_ancestor / test_empty_gate_scope_refused（test_r16_shell_gates.py，r16 P4.2） |
+| 快速重跑 | rerun-lmcache-gate.sh：production 哈希比对 + NOT-production 横幅（不写 live/） | test_production_hash_mismatch_refused / test_no_wheel_refused / test_success_path_prints_not_production_banner / test_nothing_written_to_live / test_shared_gate_module_used_everywhere（test_r16_rerun_gate.py，r16 P3） |
 | C0 | 前导：trap EXIT chown、baseline pip freeze | test_chown_runs_even_on_pytest_failure（test_r8_gpu_gate_and_artifacts.py） |
 | C1 | apt update -> git + cuda dev pkgs（响亮拒绝） | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly（test_r9_git_install.py，真实 bash+apt 日志） |
 | C2 | git safe.directory 在安装之后 | 同 r9 测试（顺序由 apt/git 日志断言） |
@@ -45,11 +46,11 @@
 | C6c | cuobjdump sm_120，无静默失败 | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly（r12，对提取出的 C6c 块运行真实 bash）+ test_every_refusal_scenario_prints_a_message（验收遍历）+ test_r10_build_order.py 夹具的架构拒绝路径 |
 | C7 | wheel 安装 + pip show 前后（SIGPIPE 安全） | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install（r13，真实 bash，200 KB pip 桩）+ test_no_head_pipeline_outside_fail_soft_substitutions（lint） |
 | C8 | 从已安装分发位置 import-check（支持 dist-packages） | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件）+ test_installed_dist_packages_layout_passes / test_source_tree_refused / test_metadata_and_module_mismatch_refused / test_plugin_passes_dist_packages_layout（r14：共享 assert_installed，两种布局） |
-| C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim） |
+| C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行；要求 baseline 含 torch+vllm，解析 `name==ver` + `name @ url`） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim）+ test_both_freeze_formats_are_parsed / test_unrecognised_baseline_is_refused / test_changed_torch_version_refused_with_names_and_versions / test_unchanged_passes_and_prints_pins / test_pep503_name_normalisation（test_r16_c14_engine_pins.py，r16 P2） |
 | C9 | 最小测试依赖（仅 pytest） | 真实运行夹具的接线 |
 | C10 | staging 不含 lmcache/ | test_layout_run_sees_installed_not_source（staging 拷贝被断言） |
-| C11 | staged pytest + kvp_assert_installed（传入 KVP_LMC_SRC，source-tree 防护生效） | test_script_runs_the_exact_command（每个调用都须 staged 形式）+ 插件测试 + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots（r15 P2.2） |
-| C12 | 摘要门禁（skipped==0，passed>0） | test_skip_in_five_cpu_files_still_aborts（test_r8_gpu_gate_and_artifacts.py） |
+| C11 | staged pytest + kvp_assert_installed（传入 KVP_LMC_SRC，source-tree 防护生效） | test_script_runs_the_exact_command（每个调用都须 staged 形式）+ 插件测试 + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots（r15 P2.2）+ r16 P0 修复的 5 个补丁测试（夹具适配：test_patch_test_fixtures_carry_the_adapted_attributes） |
+| C12 | 摘要门禁（rc==0，junit：failures==0，errors==0，skipped==0，passed>0） | test_green_run_passes_with_log_cli / test_green_run_passes_without_log_cli / test_skip_is_refused_and_lists_skipped_rows / test_failure_is_refused / test_missing_junit_report_is_refused / test_no_text_summary_grep_left_in_the_gate（test_r16_c12_junit_gate.py，r16 P1：两种 log_cli 配置下的真实 pytest） |
 | C13 | GPU 步骤（skip != 0 => 拒绝） | test_gpu_step_skip_is_not_success（test_r9_gpu_step_honesty.py） |
 | C15 | identity.env 单引号、严格 source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields（真实 bash/json）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12 端到端） |
 | 主机 | provenance 字段取自 identity.env | test_provenance_json_fields（真实运行 build-lmcache.sh）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12：native_extensions 的 json.loads） |
@@ -192,14 +193,15 @@ touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
 * `KVP_LOAD_FAILURE_POLICY` 仍为实验性（默认 `fail`）。旧的 C2 保护配对
   警告已过时：retrieve/abort 竞态已在自定义构建内处理（PR #4136 的下游移植），
   不存在可能冲突的本地保护。**状态（诚实）：implemented, unit-tested;
-  hardware validation: C0-C8 passed on the operator's host (old base); new
-  base 07f1c6bb6 pending.**
+  hardware validation: C0-C10 passed on the operator's host (new base
+  07f1c6bb6), C11 (4136 test fixtures) fixed in r16, C12-C16 pending.**
   竞态修复、自定义构建和 cuda_ops 原生扩展已在本仓库通过单元测试
-  （implemented, unit-tested）；参考构建流水线已在操作员主机上通过
-  C0-C8（wheel 已构建，cuda_ops 含 sm_120，四个原生扩展，安装成功，
-  import-check 从已安装分发位置 OK），并在 C11 的过时补丁导入处中止
-  （现已修复 + 已添加静态导入门禁）——C9-C16 尚待执行：
-  参见 5b 节「实施阶段」剩余的工位验证计划（测试 →
+  （implemented, unit-tested）；参考构建流水线已在新基线的操作员主机上通过
+  C0-C10（wheel 已构建，cuda_ops 含 sm_120，四个原生扩展，安装成功，
+  import-check 从已安装分发位置 OK，staging OK），并在 C11 因过时的 4136
+  测试夹具中止（r16 已修复：夹具属性 + num_computed_tokens 桩，
+  过时的 _pending_store 按 lazy-offload 管理器 API 重写）——C12-C16
+  尚待执行：参见 5b 节「实施阶段」剩余的工位验证计划（测试 →
   identity/provenance → build-image → 启动引擎和缓存服务器 →
   含中止的并行负载）。
 

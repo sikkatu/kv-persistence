@@ -13,6 +13,88 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 16 (4136 test fixtures, junit gates, engine-pin blind spot, fast rerun)
+* `c354ba9` **P0** (hardware log 19.11 18:53: C0-C10 passed on the new base,
+  C11 = 150 passed / 5 failed): all five failures in
+  `tests/v1/test_lmcache_mp_connector.py` (the file the 4136 patch ADDS) --
+  the upstream tests were written against the August PR head and built the
+  connector via `__new__` with only part of the current `__init__` attributes
+  (`_delay_free_req_ids`, `_can_store`, `_pinned_boundary_state_blocks`,
+  `_lazy_offload_manager`); the request stubs lacked `num_computed_tokens`;
+  one test asserted the obsolete `_pending_store` API (gone from production).
+  Fixtures ONLY (production untouched, verified byte-for-byte): the helper
+  sets the four attributes, stubs carry `num_computed_tokens=0` / `[0]` with
+  strengthened `update_num_engine_computed_tokens(0, 32)` checks, and the
+  lazy-offload test is rewritten against the manager API
+  (`on_request_finished` -> `sessions_to_end=[]`, `end_session` not called).
+  The patch was re-exported from the real patched tree (git diff, hunks not
+  hand-edited); SOURCES.md records the adaptation + the new SHA-256.
+  Expected C11 on hardware: 155 passed, 0 skipped. NEW static test
+  (test_r16_patch4136_fixtures.py): fixture attributes present in the added
+  lines, no `_pending_store`, SOURCES.md carries the current patch hash.
+  Mutation: restoring `_pending_store` -> 2 tests RED.
+* `b589b98` **P1** (hidden defect, prechecked): LMCache's pytest.ini has
+  `log_cli = true` and real pytest decorates the summary line with `=` --
+  the old `grep -E '^[0-9]+ (passed|...)'` matched NOTHING on a GREEN run ->
+  "pytest summary not found" on a healthy suite (the r11-r15 stubs printed an
+  undecorated summary, so coder tests never saw it). C12/C13 now count from
+  the `--junitxml` report via the shared module (tests/failures/errors/
+  skipped summed over all `<testsuite>`, passed = tests - failures - errors -
+  skipped; rc==0 AND failures==0 AND errors==0 AND skipped==0 AND passed>0;
+  missing/empty/broken XML -> explicit `REGRESSION FAILURE: junit report
+  missing/unparsable`). The text grep is gone; the summary line is built by
+  the script (`CPU gate PASSED (155 passed, 0 failed, 0 errors, 0 skipped)`).
+  NEW tests (test_r16_c12_junit_gate.py) with REAL pytest in BOTH
+  configurations (with the LMCache-style log_cli pytest.ini and without):
+  green passes, skip refused with SKIPPED rows, failure refused, missing XML
+  refused, plus a static no-text-grep gate. Mutation: restoring the text
+  grep -> 5 tests RED.
+* `d43576e` **P2** (hidden defect): `engine_pins` matched only `name==ver`
+  lines -- a direct-reference freeze line (`vllm @ file:///...`) silently
+  emptied both sides and the "engine unchanged" check passed blind. C14 now
+  parses BOTH freeze formats (`name==ver` + `name @ url`, names normalised
+  PEP 503, direct references pinned as `ref:<url>`), REQUIRES torch and vllm
+  in the baseline freeze (`BUILD REFUSED: engine pins not found in baseline
+  freeze (format not recognised)` + the first 20 baseline lines otherwise),
+  and prints the compared pins (`torch==... vllm==...`), not just a count.
+  NEW tests (test_r16_c14_engine_pins.py, the REAL C14 block): both formats,
+  unrecognised baseline refused, changed torch refused with names+versions,
+  unchanged passes with pins printed, PEP 503 name normalisation. Mutation:
+  dropping the presence requirement -> RED. Fixtures adapted (r11 extraction
+  marker + vllm line in the freeze fixtures; r12 pytest stub writes a minimal
+  valid junit report).
+* `6efc3cd` **P3**: `scripts/rerun-lmcache-gate.sh [WORK_DIR]` -- fast CPU-gate
+  rerun WITHOUT rebuilding the wheel (~2 min iterations: the tests come from
+  the source tree, not from the wheel). Re-applies the patches to a fresh
+  pinned checkout, runs the r15 P1 import gate, takes the already built wheel
+  (arg or the newest /tmp/kvp-lmc-build.* with wheels/*.whl) and runs C8-C12
+  in the pinned image. Conditions: the PRODUCTION part of the patched tree
+  (everything except tests/ and docs/) must match the tree the wheel was
+  built from (hash in work_dir/rerun-prod-hash.txt -> "Need a full build" on
+  mismatch); the end banner `NOT production-acceptable: no provenance/
+  identity written` (nothing written to live/lmcache-build); the SAME gate
+  logic as _incontainer_build.sh via the new shared module
+  `kvpersist.gate_common` (junit-counts + check-imports), never a copy.
+  NEW tests (test_r16_rerun_gate.py) run the REAL script end to end against
+  a LOCAL mini git repo with REAL git-diff patches (only docker stubbed):
+  hash mismatch refused, missing wheel refused, banner printed, nothing in
+  live/, shared module used everywhere. Final acceptance is still ONLY the
+  full build-lmcache.sh run.
+* `58fceaf` **P4**: SOURCES.md corrections (5972 also touches
+  worker_transfer.py / attn_window.py / 5 docs files; "20 files together" ->
+  22 verified; the stale "rebased manually... docs-only changes were not
+  carried over" wording is gone -- the patch is the exact PR diff). NEW tests
+  (test_r16_shell_gates.py) extract the REAL #6608-ancestor-gate and the
+  empty-GATE_SCOPE-refusal blocks from build-lmcache.sh and run them under
+  real bash: a non-ancestor PR6608 aborts the build, an empty scope is
+  refused with BUILD REFUSED. Mutations `if false;` / `true || {` -> RED.
+Hardware validation status (new wording, x3 docs):
+"implemented, unit-tested; hardware validation: C0-C10 passed on the
+operator's host (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16,
+C12-C16 pending".
+Full suite runs (both repositories, round 16 final):
+* kv-persistence: 620 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Round 15 addendum (P0': move to the rebased PR #5972 base)
 * `18e8cde` **P0'** (replaces the round-15 P0 above -- that fix stays in git
   history as the documented ROLLBACK variant: previous pin + old 5972 + the

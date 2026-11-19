@@ -58,6 +58,15 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
     (bin_dir / "apt-get").chmod(0o755)
     (bin_dir / "python3").write_text(
         "#!/usr/bin/env bash\n"
+        # r16 P3: the shared gate module runs for real EXCEPT check-imports
+        # (fixtures have no installed lmcache); junit-counts must run for real
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"kvpersist.gate_common\" ]; then\n"
+        "  shift 2\n"
+        "  if [ \"${1:-}\" = \"check-imports\" ]; then\n"
+        "    echo '[in-container] import-check OK (all native modules under the installed distribution location)'; exit 0\n"
+        "  fi\n"
+        f"  PYTHONPATH={ROOT / 'implementation'} exec /usr/bin/python3 -m kvpersist.gate_common \"$@\"\n"
+        "fi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
         f"  cat \"{py_out}\"; exit 0\nfi\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'Python 3.12.3'; exit 0; fi\n"
@@ -70,7 +79,13 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
         "    *md.version*) echo 'x' ;;\n"
         "    *re.search*|*zipfile*) exec /usr/bin/python3 \"$@\" ;;\n"
         "    *) echo '' ;;\n  esac\n  exit 0\nfi\n"
-        "if [ \"$1\" = \"-P\" ]; then case \"$*\" in *pytest*) cat \"" + str(py_out) + "\"; exit 0 ;; esac; cat > /dev/null; exit 0; fi\n"
+        # r16 P1: the C12 gate counts from the --junitxml report -- the stub
+        # writes a minimal valid one (counts derived from the canned text)
+        "if [ \"$1\" = \"-P\" ]; then case \"$*\" in *pytest*) "
+        "cat \"" + str(py_out) + "\"; "
+        "_xml=\"\"; for _a in \"$@\"; do case \"$_a\" in --junitxml=*) _xml=\"${_a#--junitxml=}\" ;; esac; done; "
+        "if [ -n \"$_xml\" ]; then /usr/bin/python3 -c \"import re,sys; t=open(sys.argv[1]).read(); g=lambda p: int(m.group(1)) if (m:=re.search(p,t)) else 0; s,f,p=g(r'(\\\\d+) skipped'),g(r'(\\\\d+) failed'),g(r'(\\\\d+) passed'); print('<?xml version=\\\"1.0\\\"?><testsuites><testsuite name=\\\"stub\\\" tests=\\\"%d\\\" failures=\\\"%d\\\" errors=\\\"0\\\" skipped=\\\"%d\\\"></testsuite></testsuites>' % (s+f+p,f,s))\" \"" + str(py_out) + "\" > \"$_xml\"; fi; "
+        "exit 0 ;; esac; cat > /dev/null; exit 0; fi\n"
         "if [ \"$1\" = \"-\" ]; then cat > /dev/null; exit 0; fi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then shift 2; exec pip \"$@\"; fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"

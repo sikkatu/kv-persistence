@@ -36,7 +36,8 @@ focused upstream regression suites for #4136 and #5972, builds the wheel with
 
 | Step | Gate | Real-program test |
 | --- | --- | --- |
-| patch imports | static import gate for the patched tree (before docker) | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker (test_r15_patched_import_gate.py) + test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files (test_r15_patch_porting.py) |
+| patch imports | static import gate for the patched tree (before docker) | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker (test_r15_patched_import_gate.py) + test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files (test_r15_patch_porting.py) + test_patch_test_fixtures_carry_the_adapted_attributes / test_no_pending_store_left_in_the_patch (test_r16_patch4136_fixtures.py, r16 P0: 4136 fixture adaptation) + test_pr6608_ancestor_gate_dies_when_not_ancestor / test_empty_gate_scope_refused (test_r16_shell_gates.py, r16 P4.2) |
+| fast rerun | rerun-lmcache-gate.sh: production-hash match + NOT-production banner (no live/ writes) | test_production_hash_mismatch_refused / test_no_wheel_refused / test_success_path_prints_not_production_banner / test_nothing_written_to_live / test_shared_gate_module_used_everywhere (test_r16_rerun_gate.py, r16 P3) |
 | C0 | prologue: trap EXIT chown, baseline pip freeze | test_chown_runs_even_on_pytest_failure (test_r8_gpu_gate_and_artifacts.py) |
 | C1 | apt update -> git + cuda dev pkgs (fail-loud) | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly (test_r9_git_install.py, real bash+apt log) |
 | C2 | git safe.directory after install | same r9 test (order asserted from the apt/git logs) |
@@ -48,11 +49,11 @@ focused upstream regression suites for #4136 and #5972, builds the wheel with
 | C6c | cuobjdump sm_120, no silent death | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly (r12, REAL bash on the extracted C6c block) + test_every_refusal_scenario_prints_a_message (acceptance walker) + arch refusal path in test_r10_build_order.py fixtures |
 | C7 | wheel install + pip show before/after (SIGPIPE-safe) | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install (r13, REAL bash, 200 KB pip stub) + test_no_head_pipeline_outside_fail_soft_substitutions (lint) |
 | C8 | import-check from the installed distribution (dist-packages aware) | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (REAL pytest + plugin) + test_installed_dist_packages_layout_passes / test_source_tree_refused / test_metadata_and_module_mismatch_refused / test_plugin_passes_dist_packages_layout (r14: shared assert_installed, both layouts) |
-| C14 | engine freeze diff (after the tests, before C15; runs at KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (real python on freeze files) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, REAL whole script, stateful pip shim) |
+| C14 | engine freeze diff (after the tests, before C15; runs at KVP_BUILD_SKIP_TESTS=1; requires torch+vllm in baseline, parses `name==ver` + `name @ url`) | test_engine_freeze_diff_refuses_changed_torch (real python on freeze files) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, REAL whole script, stateful pip shim) + test_both_freeze_formats_are_parsed / test_unrecognised_baseline_is_refused / test_changed_torch_version_refused_with_names_and_versions / test_unchanged_passes_and_prints_pins / test_pep503_name_normalisation (test_r16_c14_engine_pins.py, r16 P2) |
 | C9 | minimal test deps (pytest only) | wiring in the real-run fixtures |
 | C10 | staging without lmcache/ | test_layout_run_sees_installed_not_source (staging copy asserted) |
-| C11 | staged pytest run + kvp_assert_installed (KVP_LMC_SRC passed, source-tree guard active) | test_script_runs_the_exact_command (every invocation staged form) + plugin tests + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots (r15 P2.2) |
-| C12 | summary gate (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
+| C11 | staged pytest run + kvp_assert_installed (KVP_LMC_SRC passed, source-tree guard active) | test_script_runs_the_exact_command (every invocation staged form) + plugin tests + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots (r15 P2.2) + the 5 patched tests fixed in r16 P0 (fixture adaptation: test_patch_test_fixtures_carry_the_adapted_attributes) |
+| C12 | summary gate (rc==0, junit: failures==0, errors==0, skipped==0, passed>0) | test_green_run_passes_with_log_cli / test_green_run_passes_without_log_cli / test_skip_is_refused_and_lists_skipped_rows / test_failure_is_refused / test_missing_junit_report_is_refused / test_no_text_summary_grep_left_in_the_gate (test_r16_c12_junit_gate.py, r16 P1: REAL pytest in both log_cli configs) |
 | C13 | GPU step (skip != 0 refused) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
 | C15 | identity.env single-quoted, sourced strictly | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (REAL bash/json) + test_c6b_identity_provenance_chain_delivers_valid_json (r12 end-to-end) |
 | host | provenance fields from identity.env | test_provenance_json_fields (real build-lmcache.sh run) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: json.loads of native_extensions) |
@@ -221,14 +222,16 @@ the NVMe mount itself.
   old C2 guard pairing warning is obsolete: the retrieve/abort race is handled
   inside the custom build (downstream port of PR #4136), so no local guard
   exists to conflict. **Status (honest): implemented, unit-tested; hardware
-  validation: C0-C8 passed on the operator's host (old base); new base
-  07f1c6bb6 pending.** The race
+  validation: C0-C10 passed on the operator's host (new base 07f1c6bb6), C11
+  (4136 test fixtures) fixed in r16, C12-C16 pending.** The race
   fix, the custom build and the native cuda_ops extension are unit-tested in
-  this repo; the reference build pipeline passed C0-C8 on the operator's host
-  (wheel built, cuda_ops carries sm_120, four native extensions, install OK,
-  import-check OK from the installed distribution) and stopped on a stale
-  patch import at C11 (now fixed + a static import gate added) -- C9-C16
-  still need to run: see section 5b "Implementation stages" for the remaining
+  this repo; the reference build pipeline passed C0-C10 on the operator's
+  host on the new base (wheel built, cuda_ops carries sm_120, four native
+  extensions, install OK, import-check OK from the installed distribution,
+  staging OK) and stopped at C11 on stale 4136 test fixtures (fixed in r16:
+  fixture attributes + num_computed_tokens stubs, obsolete _pending_store
+  rewritten against the lazy-offload manager API) -- C12-C16 still need to
+  run: see section 5b "Implementation stages" for the remaining
   operator-stand validation plan (tests -> identity/provenance -> build-image
   -> engine + cache-server startup -> parallel load with aborts).
 
