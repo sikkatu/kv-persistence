@@ -570,7 +570,7 @@ else:
 PYEOF
 # ---------------------------------------------------------------------------
 # r2 P1-2: verify the CUSTOM LMCache build identity baked into the running
-# container. The wheel version alone (0.5.7.dev428) cannot distinguish our
+# container. The wheel version alone (0.5.8rc1.post48) cannot distinguish our
 # patched build from the upstream nightly, so build-image.sh writes
 # /etc/kvp-lmcache-identity.json (base commit + patch SHA-256 + wheel SHA-256).
 # The MP cache server and EVERY worker must carry the SAME file, and it must

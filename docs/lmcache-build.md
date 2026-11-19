@@ -9,11 +9,11 @@ Chinese mirror: `lmcache-build.zh.md`.
 | Item | Value |
 | --- | --- |
 | Upstream project | https://github.com/LMCache/LMCache |
-| Pinned source commit (base) | `03ee5b82418b6bd44e424cdd46932d9346f43eb2` |
-| Base release identity | `0.5.7.dev428` (nightly of 2026-11-16) |
+| Pinned source commit (base) | `07f1c6bb642f4772606a36eab730ae009ddce08f` |
+| Base release identity | `0.5.8rc1.post48` (= `git rev-list --count v0.5.8rc1..<pin>` = 48) |
 | PR #6551 merge commit (in base) | `61faa902a81462177d40d74f8c64bb9df02163c4` |
 | PR #4136 source revision (patch) | `b10588bd46288192e01ab06da3c3fa923ad0401a` |
-| PR #5972 source revision (patch) | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
+| PR #5972 source revision (patch) | `bd79d4c6acf6096061b5092517698239440cb93b` |
 | Patch directory | `vendor/patches/lmcache/` |
 | Patch detail + checksums | `vendor/patches/lmcache/SOURCES.md` |
 **Porting rule (r15):** a patch taken from a PR head MUST pass the static
@@ -111,7 +111,7 @@ extra package: the custom LMCache wheel. vLLM, PyTorch, CUDA and Python are
 preserved. The resulting image identity is written to
 `live/image-identity.env` AND baked into the image as
 `/etc/kvp-lmcache-identity.json` (base commit, patch SHA-256s, wheel SHA-256)
--- the wheel version alone (`0.5.7.dev428`) cannot tell our build from the
+-- the wheel version alone (`0.5.8rc1.post48`) cannot tell our build from the
 upstream nightly (`no-local-version`).
 
 **Deployment status (r2 P0-1 — live):** the cache server now defaults to
@@ -221,7 +221,8 @@ the NVMe mount itself.
   old C2 guard pairing warning is obsolete: the retrieve/abort race is handled
   inside the custom build (downstream port of PR #4136), so no local guard
   exists to conflict. **Status (honest): implemented, unit-tested; hardware
-  validation: C0-C8 passed on the operator's host; C9-C16 pending.** The race
+  validation: C0-C8 passed on the operator's host (old base); new base
+  07f1c6bb6 pending.** The race
   fix, the custom build and the native cuda_ops extension are unit-tested in
   this repo; the reference build pipeline passed C0-C8 on the operator's host
   (wheel built, cuda_ops carries sm_120, four native extensions, install OK,

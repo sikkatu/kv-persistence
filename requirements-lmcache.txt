@@ -2,8 +2,8 @@
 #
 # Two copies of LMCache exist per deployment and BOTH must carry the same
 # build identity (docs/lmcache-build.md):
-#   1. the PRODUCTION copy: the custom LMCache wheel (base 0.5.7.dev428 =
-#      commit 03ee5b82418b6bd44e424cdd46932d9346f43eb2 + downstream patches
+#   1. the PRODUCTION copy: the custom LMCache wheel (base 0.5.8rc1.post48 =
+#      commit 07f1c6bb642f4772606a36eab730ae009ddce08f + downstream patches
 #      4136-mp-retrieve-abort / 5972-incomplete-kv-objects, see
 #      vendor/patches/lmcache/SOURCES.md) baked into the custom derivative
 #      image by scripts/build-image.sh;
@@ -18,7 +18,7 @@
 # Never mix: same wheel, same torch, same CUDA on both sides.
 
 # The custom LMCache wheel itself is NOT pinned here (it is not on PyPI):
-#   pip install --no-deps live/lmcache-build/wheels/lmcache-0.5.7.dev428-*.whl
+#   pip install --no-deps live/lmcache-build/wheels/lmcache-0.5.8rc1.post48-*.whl
 # Its source identity lives in live/lmcache-build/provenance.json and is baked
 # into the image as /etc/kvp-lmcache-identity.json (P1-2 identity contract).
 

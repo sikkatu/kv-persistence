@@ -59,7 +59,7 @@ def _pip_stub(tmp_path: pathlib.Path, exit_code: int = 0) -> pathlib.Path:
         f"code = {exit_code}\n"
         "if 'show' in sys.argv:\n"
         "    try:\n"
-        "        out = ('Name: lmcache\\nVersion: 0.5.7.dev428+kvp.abc\\n'\n"
+        "        out = ('Name: lmcache\\nVersion: 0.5.8rc1.post48+kvp.abc\\n'\n"
         "               'Summary: fake\\n') + ('x' * 262144) + '\\n'\n"
         "        sys.stdout.write(out)\n"
         "        sys.stdout.flush()\n"
@@ -91,7 +91,7 @@ def _run_c7(tmp_path: pathlib.Path, pip_exit: int = 0) -> subprocess.CompletedPr
     driver = tmp_path / "c7-driver.sh"
     driver.write_text("".join([
         "set -Eeuo pipefail\n",
-        f'WHEEL_FILE="{tmp_path / "lmcache-0.5.7.dev428+kvp.abc.whl"}"\n',
+        f'WHEEL_FILE="{tmp_path / "lmcache-0.5.8rc1.post48+kvp.abc.whl"}"\n',
         "echo C7-BEGIN\n",
         c7 + "\n",
         "echo C7-AFTER\n",

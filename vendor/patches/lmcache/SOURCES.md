@@ -24,8 +24,8 @@ weaken/skip the gate to make a stale patch pass.
 | Item | Value |
 | --- | --- |
 | Upstream project | https://github.com/LMCache/LMCache |
-| Base source commit | `03ee5b82418b6bd44e424cdd46932d9346f43eb2` |
-| Base release identity | `0.5.7.dev428` (nightly of 2026-11-16) |
+| Base source commit | `07f1c6bb642f4772606a36eab730ae009ddce08f` |
+| Base release identity | `0.5.8rc1.post48` (= `git rev-list --count v0.5.8rc1..<pin>` = 48) |
 | Branch | `dev` |
 
 The `nightly` tag is mutable — production builds always check out the exact
@@ -39,10 +39,17 @@ commit SHA above, never the floating tag.
 | URL | https://github.com/LMCache/LMCache/pull/6551 |
 | Merge commit | `61faa902a81462177d40d74f8c64bb9df02163c4` |
 
-Verified: `git merge-base --is-ancestor 61faa902... 03ee5b82...` → true, so the
+Verified: `git merge-base --is-ancestor 61faa902... 07f1c6bb6...` → true, so the
 fix is already in the pinned base. **Do not add a local duplicate.** This fix
 corrects LRU recency ordering for prefetched keys only; it does **not** make
 whole-prefix eviction atomic.
+## PR #6608 — KVCacheGroup in the MP connector (already merged, included in base)
+| Item | Value |
+| --- | --- |
+| URL | https://github.com/LMCache/LMCache/pull/6608 |
+| Merge commit | `bcafb031401d404a5dabae4853f5e23bf9e5685c` |
+Verified: `git merge-base --is-ancestor bcafb0314... 07f1c6bb6...` → true. The
+r15 P0' upgrade keeps the same ancestor gate as #6551 in `build-lmcache.sh`.
 
 ## PR #4136 — retrieve/abort race (temporary downstream patch)
 
@@ -63,14 +70,28 @@ merges the newer base features (delay-free / boundary-state blocks, lazy-offload
 manager) with the upstream fix. Includes upstream regression tests.
 
 ## PR #5972 — incomplete KV-cache objects (temporary downstream patch)
-
 | Item | Value |
 | --- | --- |
-| Title | Prevent storing incomplete KV-cache objects |
+| Title | Prevent storing incomplete KV-cache objects (+ unify retained-block validation across MP store paths) |
 | URL | https://github.com/LMCache/LMCache/pull/5972 |
-| Upstream PR head (source revision) | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
+| PR base (source revision) | `07f1c6bb642f4772606a36eab730ae009ddce08f` (= the pinned base) |
+| PR head (pinned by SHA) | `bd79d4c6acf6096061b5092517698239440cb93b` (2026-11-19 14:43 +08) |
 | Patch file | `5972-incomplete-kv-objects.patch` |
-| Patch SHA-256 | `b80d20c13c8e9e38cbfdfebc5e6005f471adbddd7e58a701e9b815a677472e33` |
+| Patch SHA-256 | `0aa55d930edacc8919529ca3423ed3f7cfdbca8f714b5eb170399aafaddb0316` |
+
+**HEAD-MOVES RULE (r15 P0'):** the PR head may move at any time — the patch
+is pinned by EXACT SHA (`git diff 07f1c6bb6..bd79d4c6a`, the full 4-commit PR
+rebased on `dev`: `8d96611e5` `fccbeeee1` `0a373858f` `bd79d4c6a`). Never
+re-export from a floating head without re-verifying the SHAs above. The last
+commit ("Unify retained-block validation across MP store paths") is
+substantive new code, not just a rebase: 17 files, +409/−117 vs the old
+8-file patch.
+
+Verified on the pinned base: 4136 applies cleanly, then this 5972 applies
+cleanly (20 files touched together); the r15 P1 static import gate reports
+0 problems over the patched tree + the five CPU-gate files. The new diff does
+NOT apply to the PREVIOUS pin (planning.py and test_rocm_host_event_wait.py
+did not exist there), which is why the pin moved forward to `07f1c6bb6`.
 
 Moves the block-availability check after window downsampling so an object whose
 retained geometry still contains a `null_block_id` (markers `0` or `-1`) is

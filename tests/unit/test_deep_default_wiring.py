@@ -27,7 +27,7 @@ VERIFY_SH = ROOT / "scripts" / "verify-image-custom.sh"
 PY = sys.executable
 HEX64 = "0" * 64
 GOOD_SPEC = f"sha256:{HEX64}"
-WHEEL_VERSION = "0.5.7.dev428+kvp.deadbeefcafe"
+WHEEL_VERSION = "0.5.8rc1.post48+kvp.deadbeefcafe"
 
 
 def _sha256(p: pathlib.Path) -> str:
@@ -178,7 +178,7 @@ def test_deep_refuses_version_mismatch(tmp_path):
     refuse."""
     r = _run_verify_sh(tmp_path, labels=_good_labels(),
                        identity=_good_identity(),
-                       installed_version="0.5.7.dev428+kvp.000000000000")
+                       installed_version="0.5.8rc1.post48+kvp.000000000000")
     assert r.returncode != 0, (
         f"installed version != identity wheel_version must refuse, rc={r.returncode}"
     )
@@ -189,8 +189,8 @@ def test_deep_refuses_version_without_kvp_local_part(tmp_path):
     """A wheel_version WITHOUT the '+kvp.' local part is not a custom build:
     refuse even before comparing."""
     r = _run_verify_sh(tmp_path, labels=_good_labels(),
-                       identity=_good_identity(wheel_version="0.5.7.dev428"),
-                       installed_version="0.5.7.dev428")
+                       identity=_good_identity(wheel_version="0.5.8rc1.post48"),
+                       installed_version="0.5.8rc1.post48")
     assert r.returncode != 0, "version without '+kvp.' must be refused"
     assert "+kvp" in (r.stdout + r.stderr)
 

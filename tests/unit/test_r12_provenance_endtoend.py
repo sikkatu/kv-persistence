@@ -91,7 +91,7 @@ def test_c6b_identity_provenance_chain_delivers_valid_json(tmp_path):
     c15 = extract_c15(incontainer)
     prov = extract_provenance(build_lmc)
 
-    wheel = tmp_path / "lmcache-0.5.7.dev428+kvp.abc.whl"
+    wheel = tmp_path / "lmcache-0.5.8rc1.post48+kvp.abc.whl"
     import zipfile
     with zipfile.ZipFile(wheel, "w") as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
@@ -130,14 +130,14 @@ def test_c6b_identity_provenance_chain_delivers_valid_json(tmp_path):
         f'. "{work}/identity.env"\n',
         f'PROV="{prov_path}"\n',
         'LMCACHE_REPO_URL="https://github.com/LMCache/LMCache.git"\n',
-        'LMCACHE_SOURCE_COMMIT="03ee5b82418b6bd44e424cdd46932d9346f43eb2"\n',
+        'LMCACHE_SOURCE_COMMIT="07f1c6bb642f4772606a36eab730ae009ddce08f"\n',
         'PR6551_MERGE="61faa902a81462177d40d74f8c64bb9df02163c4"\n',
         f'PATCH_4136="{patch_dir}/4136-mp-retrieve-abort.patch"\n',
         f'PATCH_5972="{patch_dir}/5972-incomplete-kv-objects.patch"\n',
         'PATCHED_STATE="feedfacefeedfacefeedfacefeedface"\n',
         'IMAGE="nvcr.io/nvidia/vllm@sha256:' + "a" * 64 + '"\n',
         'NVCC_VERSION_REC="Cuda 13.0"\n',
-        'KVP_WHEEL_VERSION="0.5.7.dev428+kvp.feedfacefeed"\n',
+        'KVP_WHEEL_VERSION="0.5.8rc1.post48+kvp.feedfacefeed"\n',
         f'WHEEL_NAME="{wheel.name}"\n',
         'WHEEL_SHA="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"\n',
         # -- provenance block (verbatim from build-lmcache.sh) --

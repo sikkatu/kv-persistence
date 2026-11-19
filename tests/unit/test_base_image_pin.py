@@ -40,7 +40,7 @@ esac
 
 GIT_STUB = '''#!/usr/bin/env bash
 case "$*" in
-  *"rev-parse HEAD"*) echo 03ee5b82418b6bd44e424cdd46932d9346f43eb2 ;;
+  *"rev-parse HEAD"*) echo 07f1c6bb642f4772606a36eab730ae009ddce08f ;;
   *"merge-base --is-ancestor"*) exit 0 ;;
   *"apply --reverse --check"*) exit 1 ;;
   *"apply --check"*|*"apply "*) exit 0 ;;
@@ -72,9 +72,9 @@ def _fixture(tmp_path: pathlib.Path) -> dict:
     out_dir.mkdir()
     whl = build_dir / "wheels"
     whl.mkdir(parents=True)
-    (whl / "lmcache-0.5.7.dev428+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
+    (whl / "lmcache-0.5.8rc1.post48+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
     (build_dir / "provenance.json").write_text(json.dumps(
-        {"wheel_version": "0.5.7.dev428+kvp.deadbeefcafe",
+        {"wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe",
          "module": "custom-lmcache-build"}))
     return {"KVP_BUILD_DIR": str(build_dir), "KVP_PATCH_DIR": str(pdir),
             "KVP_OUT_DIR": str(out_dir),

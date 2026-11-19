@@ -27,7 +27,7 @@ sys.path.insert(0, str(IMPL))
 def _good_ident(**over) -> dict:
     ident = {
         "module": "kvp-custom-lmcache-identity",
-        "lmcache_source_commit": "03ee5b82418b6bd44e424cdd46932d9346f43eb2",
+        "lmcache_source_commit": "07f1c6bb642f4772606a36eab730ae009ddce08f",
         "pr6551_status": "in-base",
         "pr4136_patch_sha256": hashlib.sha256(
             (PATCH_DIR / "4136-mp-retrieve-abort.patch").read_bytes()
@@ -74,7 +74,7 @@ def test_base_drift_is_mismatch_when_expected():
     ok, msgs = verify_identity(
         _good_ident(lmcache_source_commit="f" * 40),
         PATCH_DIR,
-        expected_base="03ee5b82418b6bd44e424cdd46932d9346f43eb2",
+        expected_base="07f1c6bb642f4772606a36eab730ae009ddce08f",
     )
     assert not ok
     assert any("base" in m for m in msgs)

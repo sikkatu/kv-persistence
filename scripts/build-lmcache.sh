@@ -41,9 +41,12 @@ PATCH_DIR="${KVP_PATCH_DIR:-$ROOT/vendor/patches/lmcache}"
 # ---------------------------------------------------------------------------
 # Pinned identities (see vendor/patches/lmcache/SOURCES.md).
 # ---------------------------------------------------------------------------
-LMCACHE_SOURCE_COMMIT="${LMCACHE_SOURCE_COMMIT:-03ee5b82418b6bd44e424cdd46932d9346f43eb2}"
+LMCACHE_SOURCE_COMMIT="${LMCACHE_SOURCE_COMMIT:-07f1c6bb642f4772606a36eab730ae009ddce08f}"
 LMCACHE_REPO_URL="${LMCACHE_REPO_URL:-https://github.com/LMCache/LMCache.git}"
 PR6551_MERGE="${PR6551_MERGE:-61faa902a81462177d40d74f8c64bb9df02163c4}"
+# r15 P0': #6608 (KVCacheGroup in the MP connector) must also be an ancestor
+# of the pinned base -- same gate as #6551 below.
+PR6608_MERGE="${PR6608_MERGE:-bcafb031401d404a5dabae4853f5e23bf9e5685c}"
 
 PATCH_4136="$PATCH_DIR/4136-mp-retrieve-abort.patch"
 PATCH_5972="$PATCH_DIR/5972-incomplete-kv-objects.patch"
@@ -132,6 +135,11 @@ if ! git -C "$SRC" merge-base --is-ancestor "$PR6551_MERGE" "$LMCACHE_SOURCE_COM
   die "PR #6551 merge $PR6551_MERGE is NOT an ancestor of $LMCACHE_SOURCE_COMMIT -- wrong base?"
 fi
 note "PR #6551 ($PR6551_MERGE) confirmed present in base (no local duplicate)"
+# r15 P0': #6608 (KVCacheGroup in the MP connector) is required the same way.
+if ! git -C "$SRC" merge-base --is-ancestor "$PR6608_MERGE" "$LMCACHE_SOURCE_COMMIT"; then
+  die "PR #6608 merge $PR6608_MERGE is NOT an ancestor of $LMCACHE_SOURCE_COMMIT -- wrong base?"
+fi
+note "PR #6608 ($PR6608_MERGE) confirmed present in base"
 
 # ---------------------------------------------------------------------------
 # 4 - 7. Apply the two temporary downstream patches, deterministically.
@@ -185,6 +193,9 @@ while queue:
         missing.append(rel)
         continue
     seen.add(rel)
+    if not rel.endswith(".py"):
+        # docs/markdown/rst touched by a patch carry no imports to resolve
+        continue
     try:
         tree = ast.parse(p.read_text())
     except SyntaxError:
@@ -198,7 +209,7 @@ while queue:
             for cand in (mod_file, pkg_init):
                 if (root / cand).is_file() and cand not in seen:
                     queue.append(cand)
-print("\n".join(sorted(seen)))
+print("\n".join(sorted(f for f in seen if f.endswith(".py"))))
 PY
 )"
 [ -n "$GATE_SCOPE" ] || {
@@ -225,10 +236,16 @@ note "patched-tree import gate OK (${#GATE_FILES[@]} files)"
 # Also pin the version explicitly: pyproject has no setuptools_scm
 # fallback_version, so without this the wheel came out as 0.0.0 / 0.1.dev...
 # or the build died "unable to detect version". The +kvp.<12 hex> local part
-# makes this wheel distinguishable from the upstream nightly 0.5.7.dev428.
+# makes this wheel distinguishable from the upstream build.
+# r15 P0': the base label follows the PINNED BASE, not a nightly tag. The old
+# label (the nightly name of the old pin) was BELOW the real base of the new
+# pin; 0.5.8rc1.post48 matches `git rev-list --count
+# v0.5.8rc1..<pin>` (48 for 07f1c6bb6) -- PEP 440 valid and not below the real
+# base. The +kvp local part keeps the release-egg_info hook (setup.py) from
+# treating this as a release.
 # Written to SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE first (its literal value
 # must be visible here for the r3 P0-2 wiring test), then reused as-is.
-export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE=0.5.7.dev428+kvp.${PATCHED_STATE:0:12}
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE=0.5.8rc1.post48+kvp.${PATCHED_STATE:0:12}
 KVP_WHEEL_VERSION=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE
 note "wheel version pin: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LMCACHE=$KVP_WHEEL_VERSION"
 # ---------------------------------------------------------------------------
@@ -351,7 +368,7 @@ cat > "$PROV" <<EOF
   "pr4136_source_revision": "b10588bd46288192e01ab06da3c3fa923ad0401a",
   "pr4136_patch": "vendor/patches/lmcache/4136-mp-retrieve-abort.patch",
   "pr4136_patch_sha256": "$(sha256sum "$PATCH_4136" | awk '{print $1}')",
-  "pr5972_source_revision": "1ccd6f698794cc45d189c14223d339623abe6ec2",
+  "pr5972_source_revision": "bd79d4c6acf6096061b5092517698239440cb93b",
   "pr5972_patch": "vendor/patches/lmcache/5972-incomplete-kv-objects.patch",
   "pr5972_patch_sha256": "$(sha256sum "$PATCH_5972" | awk '{print $1}')",
   "patched_tree_fingerprint": "$PATCHED_STATE",

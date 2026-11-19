@@ -1,8 +1,301 @@
+diff --git a/docs/design/v1/multiprocess/modules/sparse_null_policy.md b/docs/design/v1/multiprocess/modules/sparse_null_policy.md
+index 2b89880b..b1db2ae1 100644
+--- a/docs/design/v1/multiprocess/modules/sparse_null_policy.md
++++ b/docs/design/v1/multiprocess/modules/sparse_null_policy.md
+@@ -35,17 +35,32 @@ With `--null-block-id -1`, LMCache keeps PAGE block `0`, skips the first three
+ STATE objects, and stores the STATE object at chunk 3. Python `None` is not a
+ sentinel value here; the configuration is always an integer.
+ 
+-PAGE and STATE must be separate object groups. Object presence is the lookup
+-signal, so putting dense PAGE data and sparse STATE data in one object would
+-make a PAGE hit incorrectly imply that STATE is present too. ATOM therefore
+-relies on object-group separation, which is enabled by default.
++PAGE and STATE are separate object groups by default, so complete PAGE data
++can be stored independently of a missing STATE checkpoint. If the groups are
++merged, a hit must cover both: an absent STATE slice prevents storing the
++otherwise complete PAGE data in the same object.
+ 
+ ## Store and retrieve behavior
+ 
+-`all_null_chunk_masks` compares every block ID against the configured global
+-sentinel. A chunk is skipped for an object group only when all block IDs in all
+-of that object's kernel groups equal the sentinel. Skipped objects are neither
+-reserved nor committed.
++`incomplete_chunk_masks` compares retained block IDs against the configured
++global sentinel. A chunk is skipped for an object group when any required block
++in any of that object's kernel groups equals the sentinel. Skipped objects are
++neither reserved nor committed.
++
++Presence is checked after per-chunk window downsampling, using the block IDs
++that will actually be transferred. For example, a recurrent group with a
++one-block window and two blocks per chunk must skip `[7, 0]` when `0` is the
++null marker: only the null tail block is transferred. A real block outside
++that window does not make the endpoint checkpoint valid. This also applies
++when PAGE and STATE are separate object groups. In a merged object, an absent
++STATE slice also prevents storing its attention pages; separation lets complete
++attention objects remain independently storable.
++
++The engine-driven multigroup STORE uses the same check over each gather's
++trailing window, before requesting shared-memory slots or gathering inline.
++For a partial final chunk on the LMCache-driven path, padding is excluded;
++if a copied block is missing in any group, no tail objects are reserved,
++because lookup needs the tail in every group.
+ 
+ LMCache already skips these copies in the transfer layer. On store, skipped
+ objects become `None` entries and the D2H loop does not launch a kernel for
+@@ -55,12 +70,23 @@ by the transfer helper. Block IDs are therefore staged with the existing
+ slice-only behavior; a null ID may be present in the staged tensor, but it is
+ outside every launched kernel's block-ID range and is never dereferenced.
+ 
+-Connectors that use an unallocated sentinel such as `-1` must put only kernel
+-groups with a shared presence domain in the same object group. ATOM satisfies
+-this contract because its native STATE image is indivisible: every STATE
+-ordinal is absent in the same prefix chunks and present at the same checkpoint
+-endpoint. Independently sparse kernel groups require a separate object-group
+-contract or per-kernel transfer masks and are outside this integration.
++With an unallocated sentinel such as `-1`, the incomplete-object mask prevents
++the store copy from dereferencing an absent slice. ATOM's native STATE image
++is indivisible: every STATE ordinal is absent in the same prefix chunks and
++present at the same checkpoint endpoint. An object containing independently
++sparse kernel groups is stored only where every retained slice is present;
++separation avoids discarding complete objects because another group is missing
++data.
++
++## Upgrade compatibility
++
++The STORE mask only prevents new incomplete objects from being published.
++Neither lookup nor retrieval detects or repairs existing invalid objects, and
++cache keys are unchanged. Affected deployments must stop the services, select
++fresh namespaces or storage locations for all persistent backends, and restart
++with the fixed version to rebuild caches. Restarting alone does not remove
++persistent entries. The user-facing migration steps and unreleased notice live
++in `docs/source/mp/deployment.rst` and `docs/source/mp/release_notes.rst`.
+ 
+ ## Testing
+ 
+diff --git a/docs/source/mp/deployment.rst b/docs/source/mp/deployment.rst
+index 3a8c0d4f..82b4688b 100644
+--- a/docs/source/mp/deployment.rst
++++ b/docs/source/mp/deployment.rst
+@@ -8,6 +8,33 @@ environments, along with production best practices.
+    :local:
+    :depth: 2
+ 
++Upgrading STORE completeness validation
++---------------------------------------
++
++.. warning::
++
++   Earlier versions of MP STORE could publish an
++   incomplete hybrid-cache object under a valid token hash. The completeness
++   fix prevents new invalid writes; it does not detect, repair, or invalidate
++   existing entries. Restarting services alone does not remove entries in
++   persistent storage. See :doc:`release_notes`.
++
++If the deployment may contain such objects:
++
++#. Stop the inference workers and LMCache servers using the affected cache.
++#. Configure a fresh, empty cache namespace or storage location for every
++   persistent backend. Keep older writers out of the new namespace.
++#. Restart the services with the fixed version and rebuild their caches from
++   inference. Do not migrate old cache objects into the new namespace.
++
++For example, a deployment using the :doc:`FileSystem L2 adapter <l2_storage/fs>`
++can select a new, empty directory instead of reusing its previous ``base_path``:
++
++.. code-block:: bash
++
++   lmcache server --separate-object-groups \
++       --l2-adapter '{"type": "fs", "base_path": "/data/lmcache/l2-store-completeness-v2"}'
++
+ Docker
+ ------
+ 
+diff --git a/docs/source/mp/hybrid_models.rst b/docs/source/mp/hybrid_models.rst
+index f6273363..fe4205b1 100644
+--- a/docs/source/mp/hybrid_models.rst
++++ b/docs/source/mp/hybrid_models.rst
+@@ -135,6 +135,18 @@ full-attention layers form one group, and each sliding-window size (mamba / GDN
+ included) forms another. Pass ``--no-separate-object-groups`` to make every
+ layer share a single full-attention object group.
+ 
++STORE validates the blocks retained after per-chunk window downsampling. If any
++required block is absent, LMCache skips that object. When groups are merged
++with ``--no-separate-object-groups``, a missing STATE slice also prevents storing
++the chunk's complete attention PAGE data. This is intentional: a cache hit for
++the merged object must mean that every required slice is present.
++
++With the default ``--separate-object-groups``, complete PAGE objects can be stored
++when a separate STATE object is incomplete. The tradeoff is made at the object
++group boundary; incomplete objects are never partially published. For example,
++a chunk with complete PAGE blocks and an absent STATE checkpoint is skipped
++when merged, but its PAGE object remains independently storable when separated.
++
+ .. code-block:: bash
+ 
+    # default: one object group per attention window
+@@ -149,6 +161,9 @@ difference — every layer resolves to one object group either way. For a
+ linear-attention layers their own cache objects so their recurrent state is
+ stored and loaded independently of the full-attention layers.
+ 
++For deployments upgrading from the earlier STORE validation, see the
++:doc:`cache migration warning <release_notes>` before reusing existing caches.
++
+ Mamba / Linear-Attention Hybrids
+ --------------------------------
+ 
+diff --git a/docs/source/mp/index.rst b/docs/source/mp/index.rst
+index d774bb64..ce699e36 100644
+--- a/docs/source/mp/index.rst
++++ b/docs/source/mp/index.rst
+@@ -7,6 +7,7 @@ Overview
+    request_transport
+    multi_l1
+    chunk_size_negotiation
++   release_notes
+ 
+ LMCache multiprocess (MP) mode runs LMCache as a **standalone service** that
+ vLLM instances reach through a configurable ZMQ or gRPC request transport.
+diff --git a/docs/source/mp/release_notes.rst b/docs/source/mp/release_notes.rst
+new file mode 100644
+index 00000000..cc22c39b
+--- /dev/null
++++ b/docs/source/mp/release_notes.rst
+@@ -0,0 +1,28 @@
++MP Release Notes
++================
++
++Unreleased
++----------
++
++KV-cache STORE completeness
++~~~~~~~~~~~~~~~~~~~~~~~~~~~
++
++The LMCache-driven MP STORE and engine-driven multigroup STORE paths skip
++an object if any block they would copy is absent. This prevents
++incomplete recurrent-state or sliding-window data from being published under
++valid token hashes and reused by a later prefix-cache hit.
++
++When groups are merged with ``--no-separate-object-groups``, an absent STATE
++slice also prevents storing otherwise complete PAGE data in that object. The
++default ``--separate-object-groups`` keeps complete PAGE objects independent
++for full chunks. A partial final chunk still requires all groups. See
++:doc:`hybrid_models` for the tradeoff.
++
++.. warning::
++
++   Existing invalid entries are not detected, repaired, or invalidated by this
++   fix. Affected deployments must restart their services with the fixed
++   version and rebuild caches using fresh namespaces or storage locations on
++   all persistent backends. Restarting alone does not remove old persistent
++   objects. Follow the migration steps in :doc:`deployment` before reusing
++   the cache service.
+diff --git a/lmcache/v1/client/worker_transfer.py b/lmcache/v1/client/worker_transfer.py
+index 0db47bfd..1280151f 100644
+--- a/lmcache/v1/client/worker_transfer.py
++++ b/lmcache/v1/client/worker_transfer.py
+@@ -27,6 +27,7 @@ from lmcache.v1.client.transfer_context.base import (
+ )
+ from lmcache.v1.client.transfer_context.inline import EngineDrivenContextInline
+ from lmcache.v1.client.transport.errors import REQUEST_FAILURES
++from lmcache.v1.common.attn_window import retained_blocks_missing
+ from lmcache.v1.common.custom_types import (
+     GroupLayout,
+     RegisterEngineDrivenContextPayload,
+@@ -1303,25 +1304,21 @@ class EngineDrivenTransferContext(TransferContext):
+         return picked, [chunk_indices[i] for i in idxs]
+ 
+     def _null_chunk_indices(self, block_ids: list[list[int]]) -> list[list[int]]:
+-        """Per group, the chunks whose engine blocks are all the null block.
+-
+-        Sliding-window groups lose their out-of-window blocks and align-mode
+-        recurrent (Mamba/linear-attention) groups keep only the block holding
+-        the last state, so their earlier chunks are entirely the null block.
+-        Those chunks carry no valid KV and must never be stored: object keys
+-        are prefix hashes, so a later shorter-prefix hit would restore them.
+-        Mirrors ``all_null_chunk_masks`` on the lmcache-driven path.
+-        """
++        """Per group, skip chunks missing any block the gather would copy."""
+         null_id = self._null_block_id
+         skipped: list[list[int]] = []
+         for gid, state in enumerate(self._group_states):
+             bpc = state.blocks_in_chunk
++            # gather_paged_kv_to_cpu selects chunk[-blocks_per_window:].
++            width = state.blocks_per_window
+             ids = block_ids[gid]
+             skipped.append(
+                 [
+                     c
+                     for c in range(len(ids) // bpc)
+-                    if all(b == null_id for b in ids[c * bpc : (c + 1) * bpc])
++                    if retained_blocks_missing(
++                        ids, (c + 1) * bpc - width, (c + 1) * bpc, null_id
++                    )
+                 ]
+             )
+         return skipped
+@@ -1343,9 +1340,9 @@ class EngineDrivenTransferContext(TransferContext):
+     ) -> "list[_GroupStorePlan] | None":
+         """Decide what each group stores and where it gathers to.
+ 
+-        All-null chunks are left out on both transports. Over SHM the server
+-        reserves slots for the rest (and none for skipped chunks) and they are
+-        the gather targets. Inline has no slots: ``alloc``, when given,
++        Both transports leave out chunks missing a retained block. Over SHM,
++        the server reserves gather slots only for the remaining chunks.
++        Inline has no slots: ``alloc``, when given,
+         provides each group's gather targets (the async path's pinned
+         staging), otherwise gather allocates fresh CPU tensors.
+ 
+diff --git a/lmcache/v1/common/attn_window.py b/lmcache/v1/common/attn_window.py
+index 362bd6ee..b1649db0 100644
+--- a/lmcache/v1/common/attn_window.py
++++ b/lmcache/v1/common/attn_window.py
+@@ -2,6 +2,7 @@
+ """Per-object-group attention windows, independent of either endpoint."""
+ 
+ # Standard
++from collections.abc import Sequence
+ from dataclasses import dataclass
+ from typing import Literal, get_args
+ 
+@@ -11,6 +12,23 @@ connector-private aux group. Derived server-side from
+ ``EngineGroupInfo.extra_object_group_tag``; never sent on the wire."""
+ 
+ 
++def retained_blocks_missing(
++    block_ids: Sequence[int], start: int, end: int, null_block_id: int
++) -> bool:
++    """Return whether an ID in the transfer's half-open range is absent.
++
++    Args:
++        block_ids: Host-side engine block IDs for one kernel group.
++        start: First block to copy, after any discarded prefix or padding.
++        end: Exclusive end of the copy range.
++        null_block_id: The engine's absent-block sentinel.
++
++    Returns:
++        True if the range contains the sentinel.
++    """
++    return null_block_id in block_ids[start:end]
++
++
+ @dataclass(frozen=True)
+ class AttnWindowDesc:
+     """Per-object-group cross-chunk attention windows, in LMCache chunks.
 diff --git a/lmcache/v1/multiprocess/modules/lmcache_driven_transfer.py b/lmcache/v1/multiprocess/modules/lmcache_driven_transfer.py
-index 379115c8..dc5b591d 100644
+index f2395aae..3c1b7268 100644
 --- a/lmcache/v1/multiprocess/modules/lmcache_driven_transfer.py
 +++ b/lmcache/v1/multiprocess/modules/lmcache_driven_transfer.py
-@@ -98,47 +98,46 @@ def get_layout_desc(
+@@ -17,6 +17,7 @@ from lmcache.utils import (
+     EngineType,
+     _lmcache_nvtx_annotate,
+ )
++from lmcache.v1.common.attn_window import retained_blocks_missing
+ from lmcache.v1.common.custom_types import IPCCacheServerKey
+ from lmcache.v1.common.group_view import EngineGroupInfo
+ from lmcache.v1.common.token_codec import unpack_token_ids
+@@ -103,47 +104,45 @@ def get_layout_desc(
      return MemoryLayoutDesc(shapes=list(shapes), dtypes=list(dtypes))
  
  
@@ -55,17 +348,18 @@ index 379115c8..dc5b591d 100644
 +            is_null = False
              for kg in group.kernel_group_indices:
                  bpc = blocks_per_chunk[kg]
-                 if any(
+-                if any(
 -                    block != null_block_id
-+                    block == null_block_id
-                     for block in block_ids[kg][i * bpc : (i + 1) * bpc]
+-                    for block in block_ids[kg][i * bpc : (i + 1) * bpc]
++                if retained_blocks_missing(
++                    block_ids[kg], i * bpc, (i + 1) * bpc, null_block_id
                  ):
 -                    is_null = False
 +                    is_null = True
                      break
              chunk_null.append(is_null)
          masks.append(chunk_null)
-@@ -661,6 +660,8 @@ class LMCacheDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
+@@ -701,6 +700,8 @@ class LMCacheDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
              RuntimeError: If the backend does not support IPC event handles.
  
          Notes:
@@ -74,7 +368,7 @@ index 379115c8..dc5b591d 100644
              All-or-nothing. If ``gpu_block_ids`` do not fully cover every chunk
              ``key`` resolves to for every LMCache group (e.g. a caller/protocol
              bug), a copy fails, or completion ownership is invalid, the whole
-@@ -753,21 +754,30 @@ class LMCacheDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
+@@ -793,21 +794,30 @@ class LMCacheDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
                      [],
                  )
  
@@ -117,7 +411,7 @@ index 379115c8..dc5b591d 100644
              )
  
              producer_event = event_backend.import_event(
-@@ -846,7 +856,7 @@ class LMCacheDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
+@@ -886,7 +896,7 @@ class LMCacheDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
                              iter(reserved_dict.values())
                          ).get_size() * len(reserved_dict)
  
@@ -126,25 +420,53 @@ index 379115c8..dc5b591d 100644
                      # skipped by the storage manager) become None entries; the
                      # helper skips them for D2H.
                      memory_objs: list[MemoryObj | None] = [
-diff --git a/lmcache/v1/multiprocess/object_group_transfer.py b/lmcache/v1/multiprocess/object_group_transfer.py
-index 78fd7272..eaa768bd 100644
---- a/lmcache/v1/multiprocess/object_group_transfer.py
-+++ b/lmcache/v1/multiprocess/object_group_transfer.py
-@@ -201,9 +201,11 @@ def downsample_and_stage_block_ids(
+@@ -1411,18 +1421,17 @@ class LMCacheDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
+         Raises:
+             ValueError: If a kernel group has no block for the unfull chunk.
+         """
+-        manager = cache_context.kv_layer_groups_manager
+         block_ids_gpu, skip_blocks, lead_blocks = trim_and_stage_unfull_chunk_block_ids(
+             cache_context, block_ids, key.end % self._ctx.chunk_size
+         )
+-        null_groups = all_null_chunk_masks(
+-            block_ids,
+-            manager.object_groups,
+-            [len(group_block_ids) for group_block_ids in block_ids],
+-            1,
+-            self._ctx.null_block_id,
+-        )
+-        if any(null_mask[0] for null_mask in null_groups):
++        # Lead blocks are copied separately; padding is skipped only in the
++        # regular part of the tail.
++        null_id = self._ctx.null_block_id
++        if any(
++            (lead and ids[0] == null_id)
++            or retained_blocks_missing(ids, lead + skip, len(ids), null_id)
++            for ids, lead, skip in zip(block_ids, lead_blocks, skip_blocks, strict=True)
++        ):
+             return {}
+         object_buffers: list[torch.Tensor] = []
+         for obj_group_id in range(len(obj_keys)):
+diff --git a/lmcache/v1/multiprocess/object_group_transfer/planning.py b/lmcache/v1/multiprocess/object_group_transfer/planning.py
+index b4a26d42..49524820 100644
+--- a/lmcache/v1/multiprocess/object_group_transfer/planning.py
++++ b/lmcache/v1/multiprocess/object_group_transfer/planning.py
+@@ -66,10 +66,11 @@ def downsample_and_stage_block_ids(
+ 
      Args:
          cache_context: The cache context containing the KV cache information.
-         block_ids: The original block id lists, indexed by LMCache KV group index.
-+            Mutated in place to retain only the blocks copied for each chunk.
-+            Callers use these updated host lists for store masks and direct copies.
+-        block_ids: The original block id lists, indexed by LMCache KV group index.
++        block_ids: Per-kernel-group block IDs, trimmed in place to the blocks
++            actually transferred for each chunk.
  
      Returns:
 -        The cut block id lists, indexed by LMCache KV group index.
-+        Device tensors containing the retained block IDs, indexed by kernel group.
++        Device tensors containing the retained IDs, in kernel-group order.
  
      Note:
          This function has some coupled logic with transfer_kv_per_object_group below.
 diff --git a/tests/v1/multiprocess/test_cache_server.py b/tests/v1/multiprocess/test_cache_server.py
-index 62875df1..26a949ca 100644
+index b3c81b34..58432f79 100644
 --- a/tests/v1/multiprocess/test_cache_server.py
 +++ b/tests/v1/multiprocess/test_cache_server.py
 @@ -255,6 +255,8 @@ def server_process_runner(
@@ -156,6 +478,97 @@ index 62875df1..26a949ca 100644
      )
      storage_manager_config = StorageManagerConfig(
          l1_manager_config=L1ManagerConfig(
+diff --git a/tests/v1/multiprocess/test_engine_driven_multigroup.py b/tests/v1/multiprocess/test_engine_driven_multigroup.py
+index 6efa7e00..3abdefbf 100644
+--- a/tests/v1/multiprocess/test_engine_driven_multigroup.py
++++ b/tests/v1/multiprocess/test_engine_driven_multigroup.py
+@@ -247,22 +247,24 @@ class _FakeGroupedContext:
+         return None
+ 
+ 
+-def _fanout_ctx(monkeypatch) -> tuple[EngineDrivenTransferContext, list[dict]]:
++def _fanout_ctx(
++    monkeypatch, blocks_per_chunk: tuple[int, int] = (2, 1)
++) -> tuple[EngineDrivenTransferContext, list[dict]]:
+     """Worker context with two registered groups and a capturing gather."""
+     ctx = EngineDrivenTransferContext(1, MagicMock())
+     ctx._group_states = [
+         worker_transfer._GroupState(
+             layer_names=["layer_0", "layer_1"],
+             engine_kv_format=MagicMock(),
+-            blocks_in_chunk=2,
+-            blocks_per_window=1,  # sliding-window group: keeps 1 of 2 blocks/chunk
++            blocks_in_chunk=blocks_per_chunk[0],
++            blocks_per_window=1,  # keep only the last block
+             layout_desc=MagicMock(),
+         ),
+         worker_transfer._GroupState(
+             layer_names=["layer_2"],
+             engine_kv_format=MagicMock(),
+-            blocks_in_chunk=1,
+-            blocks_per_window=1,  # full attention (window == chunk)
++            blocks_in_chunk=blocks_per_chunk[1],
++            blocks_per_window=blocks_per_chunk[1],  # full attention
+             layout_desc=MagicMock(),
+         ),
+     ]
+@@ -1127,9 +1129,8 @@ def test_register_payload_carries_group_windows_and_kinds() -> None:
+     assert [s.window_chunks for s in ctx._group_states] == [-1, 2, 1]
+ 
+ 
+-def test_store_multigroup_inline_leaves_out_all_null_chunks(monkeypatch) -> None:
+-    """A chunk whose engine blocks are all the null block carries no KV: it is
+-    neither gathered nor sent, and its key is never written."""
++def test_store_multigroup_inline_leaves_out_incomplete_chunks(monkeypatch) -> None:
++    """Only chunks with every transferred block are gathered and committed."""
+     ctx, pctx, _ = _inline_worker_ctx(monkeypatch)
+     gathered: list[dict] = []
+ 
+@@ -1149,10 +1150,9 @@ def test_store_multigroup_inline_leaves_out_all_null_chunks(monkeypatch) -> None
+     monkeypatch.setattr(pctx, "commit_store", _commit)
+     kv = {name: torch.zeros(1) for name in ("layer_0", "layer_1", "layer_2")}
+ 
+-    # Group 0 (2 blocks/chunk): chunk 0 is all null. Group 1 (1 block/chunk):
+-    # chunk 0 is null. A partly-null chunk is still stored.
++    # Group 0 retains the last block: [3, 0] is missing, [0, 4] is valid.
+     future = ctx.submit_store(
+-        "req", MagicMock(), kv, [[0, 0, 0, 4], [0, 6]], MagicMock(), 2
++        "req", MagicMock(), kv, [[3, 0, 0, 4], [0, 6]], MagicMock(), 2
+     )
+     assert future.result(timeout=1) is True
+     assert [g["chunk_indices"] for g in gathered] == [[1], [1]]
+@@ -1169,24 +1169,27 @@ def test_store_multigroup_inline_leaves_out_all_null_chunks(monkeypatch) -> None
+     assert gathered == [] and committed == [] and prepared == []
+ 
+ 
+-def test_store_multigroup_shm_asks_server_to_skip_all_null_chunks(
++def test_store_multigroup_shm_skips_missing_checkpoint_and_partial_full_chunk(
+     monkeypatch,
+ ) -> None:
+-    ctx, _ = _fanout_ctx(monkeypatch)
++    ctx, _ = _fanout_ctx(monkeypatch, blocks_per_chunk=(8, 2))
+     t = [torch.zeros(1) for _ in range(2)]
+     fake = _FakeGroupedContext(t, [1, 1], [0, 1])
+     ctx._engine_driven_context = fake  # type: ignore[assignment]
+     kv = {name: torch.zeros(1) for name in ("layer_0", "layer_1", "layer_2")}
+ 
++    # The eight-block state group reproduces the layout reported in #6705:
++    # an interior checkpoint cannot stand in for the missing endpoint.
++    state = [0, 0, 5, 0, 0, 0, 0, 0] + [0] * 7 + [6]
+     future = ctx.submit_store(
+-        "req", MagicMock(), kv, [[0, 0, 3, 4], [0, 6]], MagicMock(), 2
++        "req", MagicMock(), kv, [state, [3, 0, 4, 5]], MagicMock(), 2
+     )
+     assert future.result(timeout=1) is True
+     assert fake.skipped == ((0,), (0,))
+ 
+     # No null chunks: the RPC carries no skip list at all.
+     future = ctx.submit_store(
+-        "req", MagicMock(), kv, [[1, 2, 3, 4], [5, 6]], MagicMock(), 2
++        "req", MagicMock(), kv, [[1] * 16, [2] * 4], MagicMock(), 2
+     )
+     assert future.result(timeout=1) is True
+     assert fake.skipped == ()
 diff --git a/tests/v1/multiprocess/test_event_ipc_handle_path.py b/tests/v1/multiprocess/test_event_ipc_handle_path.py
 index 588d1160..fb2da37d 100644
 --- a/tests/v1/multiprocess/test_event_ipc_handle_path.py
@@ -181,7 +594,7 @@ index 9a04e1a3..5779baac 100644
      )
      entry = SimpleNamespace(
 diff --git a/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py b/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py
-index e1be7cad..86c48615 100644
+index e1be7cad..a3957304 100644
 --- a/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py
 +++ b/tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py
 @@ -1,9 +1,8 @@
@@ -204,9 +617,9 @@ index e1be7cad..86c48615 100644
  
  # First Party
 -from lmcache.v1.kv_layer_groups import ObjectGroupInfo
-+from lmcache.v1.kv_layer_groups import KVLayerGroupsManager, ObjectGroupInfo
 +from lmcache.v1.common.custom_types import IPCCacheServerKey
-+from lmcache.v1.multiprocess.group_view import EngineGroupInfo
++from lmcache.v1.common.group_view import EngineGroupInfo
++from lmcache.v1.kv_layer_groups import KVLayerGroupsManager, ObjectGroupInfo
  from lmcache.v1.multiprocess.modules import lmcache_driven_transfer as mod
  from lmcache.v1.multiprocess.modules.lmcache_driven_transfer import (
      LMCacheDrivenTransferModule,
@@ -348,10 +761,10 @@ index e1be7cad..86c48615 100644
      assert context.stage_block_ids.call_args.args[0] == [
          [0, 1, 2, 3],
          [-1, -1, 0, 1],
-@@ -279,6 +284,131 @@ def test_store_skip_chunks_drops_caller_masked_chunks(
-     assert all("g0c1" not in keys and "g1c1" not in keys for keys in reserved)
-     assert ["g0c0"] in reserved
+@@ -281,6 +286,136 @@ def test_store_skip_chunks_drops_caller_masked_chunks(
      assert mask[1] is False
+ 
+ 
 +@pytest.mark.parametrize("merged", [False, True])
 +@pytest.mark.parametrize("null_block_id", [0, -1])
 +def test_store_does_not_publish_an_absent_checkpoint_at_chunk_end(
@@ -466,7 +879,10 @@ index e1be7cad..86c48615 100644
 +        block_ids.append([block for chunk in chunks for block in chunk])
 +
 +    _, ok, stored = module.store_with_chunk_mask(
-+        SimpleNamespace(request_id="req", worker_id=1), 1, block_ids, b"producer"
++        IPCCacheServerKey.from_token_ids("m", 1, 1, range(1024), end=1024),
++        1,
++        block_ids,
++        b"producer",
 +    )
 +
 +    assert ok
@@ -477,9 +893,50 @@ index e1be7cad..86c48615 100644
 +        assert [
 +            i for i, obj in enumerate(transfers[group_id][1]) if obj is not None
 +        ] == expected
- 
- 
++
++
  def test_retrieve_reads_and_transfers_only_in_window(monkeypatch):
+     # Group 0 = full attention (-1): whole prefix; group 1 = mamba window 1:
+     # only the last chunk.
+@@ -496,6 +631,29 @@ def _make_unfull_store_module(monkeypatch, obj_keys):
+     return module, reserved, unfull_transfers
+ 
+ 
++def test_store_does_not_reserve_a_partial_tail_with_one_missing_block(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    module, reserved, transfers = _make_unfull_store_module(
++        monkeypatch, [["g0u"], ["g1u"]]
++    )
++    cast(MagicMock, module.context).chunk_size = 4
++    context = module.get_and_touch_context_entry(1).cache_context
++    context.lmcache_tokens_per_chunk = 4
++    context.kv_layer_groups_manager.get_subchunk_sw_size_tokens = lambda group: 4
++
++    _, ok, mask = module.store_with_chunk_mask(
++        IPCCacheServerKey.from_token_ids("m", 1, 1, [0, 1, 2], end=3),
++        1,
++        [[1, 2, 3], [4, -1, 6], [7, 8, 9]],
++        b"producer",
++    )
++
++    assert ok and mask == [False]
++    assert not any(keys for keys, _temporary in reserved)
++    assert transfers == []
++
++
+ def test_store_of_only_an_unfull_chunk_reserves_temporary_objects(monkeypatch):
+     module, reserved, unfull_transfers = _make_unfull_store_module(
+         monkeypatch, [["g0u"], ["g1u"]]
+@@ -550,7 +708,7 @@ def test_store_appends_the_unfull_chunk_after_full_chunks(monkeypatch):
+         _unfull_key(request_configs=None),
+         1,
+         # Two blocks per full chunk, then the unfull chunk's block.
+-        [[0, 1, 5], [-1, 1, 6], [-1, 1, 7]],
++        [[0, 1, 5], [2, 1, 6], [2, 1, 7]],
+         b"producer",
+     )
+ 
 diff --git a/tests/v1/multiprocess/test_mp_extension_hooks.py b/tests/v1/multiprocess/test_mp_extension_hooks.py
 index f950d1cb..694d2328 100644
 --- a/tests/v1/multiprocess/test_mp_extension_hooks.py
@@ -519,3 +976,15 @@ index fdf7e68e..380a9e48 100644
                  [
                      list(range(endpoint * 4)),
                      [-1] * (endpoint - 1) + [ordinal],
+diff --git a/tests/v1/multiprocess/test_rocm_host_event_wait.py b/tests/v1/multiprocess/test_rocm_host_event_wait.py
+index abac7910..5d77ad46 100644
+--- a/tests/v1/multiprocess/test_rocm_host_event_wait.py
++++ b/tests/v1/multiprocess/test_rocm_host_event_wait.py
+@@ -163,6 +163,7 @@ def _build(
+                 num_object_groups=1,
+                 num_kernel_groups=1,
+                 object_groups=[SimpleNamespace(kernel_group_indices=[0])],
++                get_subchunk_sw_size_tokens=lambda group_idx: 1,
+                 get_attn_desc=lambda: SimpleNamespace(
+                     num_chunks_in_sw=[-1], group_kinds=()
+                 ),

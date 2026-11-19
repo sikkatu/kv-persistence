@@ -89,7 +89,7 @@ def _harness(tmp_path: pathlib.Path, git_installs: bool = True):
         "#!/usr/bin/env bash\n"
         f'echo "pip|$*|PP=${{PYTHONPATH:-}}" >> "{apt_log}"\n'
         "  case \"$*\" in *wheel*)\n"
-        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.8rc1.post48+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
         "  esac\n"
         "exit 0\n")
     (bin_dir / "pip").chmod(0o755)
@@ -121,7 +121,7 @@ def _run(tmp_path: pathlib.Path, git_installs: bool = True):
     # extensions so the run reaches the git-config point we assert below.
     import zipfile
     with zipfile.ZipFile(
-        tmp_path / "kvp-wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl", "w"
+        tmp_path / "kvp-wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w"
     ) as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
         z.writestr("lmcache/cuda_ops_stub.so", b"\x00")

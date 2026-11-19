@@ -23,7 +23,7 @@ PY = sys.executable
 
 
 def _make_wheel(tmp_path: pathlib.Path, members: list[str]) -> pathlib.Path:
-    whl = tmp_path / "lmcache-0.5.7.dev428-cp312-cp312-linux_x86_64.whl"
+    whl = tmp_path / "lmcache-0.5.8rc1.post48-cp312-cp312-linux_x86_64.whl"
     with zipfile.ZipFile(whl, "w") as z:
         for m in members:
             z.writestr(m, b"\x00")

@@ -46,11 +46,11 @@ def make_fixture(tmp_path: pathlib.Path):
     build_dir = tmp_path / "build"
     wheels = build_dir / "wheels"
     wheels.mkdir(parents=True)
-    whl = wheels / "lmcache-0.5.7.dev428-cp312-cp312-linux_x86_64.whl"
+    whl = wheels / "lmcache-0.5.8rc1.post48-cp312-cp312-linux_x86_64.whl"
     whl.write_bytes(b"PK\x05\x06fake-wheel-content")
     (build_dir / "provenance.json").write_text(json.dumps({
-        "lmcache_source_commit": "03ee5b82418b6bd44e424cdd46932d9346f43eb2",
-        "wheel_version": "0.5.7.dev428+kvp.0123456789ab",
+        "lmcache_source_commit": "07f1c6bb642f4772606a36eab730ae009ddce08f",
+        "wheel_version": "0.5.8rc1.post48+kvp.0123456789ab",
     }))
 
     out_dir = tmp_path / "out"

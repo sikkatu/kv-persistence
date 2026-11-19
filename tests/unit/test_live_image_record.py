@@ -18,7 +18,7 @@ BUILD_IMG = ROOT / "scripts" / "build-image.sh"
 START_ALL = ROOT / "scripts" / "start-all.sh"
 PIN_FILE = ROOT / "vendor" / "pinned-base-image.env"
 
-GOOD_VERIFY = """KVP_LMC_VERSION=0.5.7.dev428+kvp.deadbeefcafe
+GOOD_VERIFY = """KVP_LMC_VERSION=0.5.8rc1.post48+kvp.deadbeefcafe
 KVP_PY_IMPORTS=OK
 KVP_CUDA_OPS_IMPORT=OK\nKVP_NATIVE_IMPORT=OK
 KVP_IDENTITY_FILE=OK
@@ -45,9 +45,9 @@ esac
     (bin_dir / "docker").chmod(0o755)
     build_dir = tmp_path / "build"
     (build_dir / "wheels").mkdir(parents=True, exist_ok=True)
-    (build_dir / "wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
+    (build_dir / "wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
     (build_dir / "provenance.json").write_text(json.dumps(
-        {"wheel_version": "0.5.7.dev428+kvp.deadbeefcafe", "module": "x"}))
+        {"wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe", "module": "x"}))
     patch_dir = tmp_path / "patches"
     patch_dir.mkdir(exist_ok=True)
     (patch_dir / "4136-mp-retrieve-abort.patch").write_text("a\n")

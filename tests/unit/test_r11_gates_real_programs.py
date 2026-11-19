@@ -71,7 +71,7 @@ def test_pip_wheel_runs_exactly_once(tmp_path):
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then\n"
         "  case \"$*\" in\n"
         f"    *wheel*) echo \"$*\" >> \"{rec}\"; "
-        f"python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        f"python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.8rc1.post48+kvp.abc.whl','w'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
         "  esac\n"
         "  exit 0\n"
         "fi\n"
@@ -90,7 +90,7 @@ def test_pip_wheel_runs_exactly_once(tmp_path):
         "exec /usr/bin/python3 \"$@\"\n")
     (bin_dir / "python3").chmod(0o755)
     for tool, body in [
-        ("git", "#!/usr/bin/env bash\ncase \"$*\" in *'rev-parse HEAD'*) echo 03ee5b82418b6bd44e424cdd46932d9346f43eb2 ;; *'merge-base --is-ancestor'*) exit 0 ;; *'apply --reverse --check'*) exit 1 ;; *'apply --check'*|*'apply '*) exit 0 ;; *'diff --cached'*) echo stubdiff ;; *'ls-files'*) exit 0 ;; *) exit 0 ;; esac\n"),
+        ("git", "#!/usr/bin/env bash\ncase \"$*\" in *'rev-parse HEAD'*) echo 07f1c6bb642f4772606a36eab730ae009ddce08f ;; *'merge-base --is-ancestor'*) exit 0 ;; *'apply --reverse --check'*) exit 1 ;; *'apply --check'*|*'apply '*) exit 0 ;; *'diff --cached'*) echo stubdiff ;; *'ls-files'*) exit 0 ;; *) exit 0 ;; esac\n"),
         ("apt-get", "#!/usr/bin/env bash\nexit 0\n"),
         ("nvcc", "#!/usr/bin/env bash\necho 'Cuda 13.0'\n"),
         ("g++", "#!/usr/bin/env bash\necho 'g++'\n"),
@@ -108,7 +108,7 @@ def test_pip_wheel_runs_exactly_once(tmp_path):
     for sub in ("kvp-work", "kvp-wheels"):
         (tmp_path / sub).mkdir()
     import zipfile
-    with zipfile.ZipFile(tmp_path / "kvp-wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl", "w") as z:
+    with zipfile.ZipFile(tmp_path / "kvp-wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w") as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
         z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
         z.writestr("lmcache/lmcache_native_stub.so", b"\x00")
@@ -207,7 +207,7 @@ def test_provenance_json_fields(tmp_path):
     for whl_dir in (build_dir / "wheels", out_dir / "wheels"):
         whl_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(
-            whl_dir / "lmcache-0.5.7.dev428+kvp.abc.whl", "w"
+            whl_dir / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w"
         ) as z:
             z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
             z.writestr("lmcache/lmcache_native_stub.so", b"\x00")
@@ -230,13 +230,13 @@ def test_provenance_json_fields(tmp_path):
         "  *) exit 0 ;;\nesac\n")
     (bin_dir / "docker").chmod(0o755)
     for tool, body in [
-        ("git", "#!/usr/bin/env bash\ncase \"$*\" in *'rev-parse HEAD'*) echo 03ee5b82418b6bd44e424cdd46932d9346f43eb2 ;; *'merge-base --is-ancestor'*) exit 0 ;; *'apply --reverse --check'*) exit 1 ;; *'apply --check'*|*'apply '*) exit 0 ;; *'diff --cached'*) echo stubdiff ;; *'ls-files'*) exit 0 ;; *) exit 0 ;; esac\n"),
+        ("git", "#!/usr/bin/env bash\ncase \"$*\" in *'rev-parse HEAD'*) echo 07f1c6bb642f4772606a36eab730ae009ddce08f ;; *'merge-base --is-ancestor'*) exit 0 ;; *'apply --reverse --check'*) exit 1 ;; *'apply --check'*|*'apply '*) exit 0 ;; *'diff --cached'*) echo stubdiff ;; *'ls-files'*) exit 0 ;; *) exit 0 ;; esac\n"),
     ]:
         p = bin_dir / tool
         p.write_text(body)
         p.chmod(0o755)
     (build_dir / "provenance.json").write_text(
-        json.dumps({"wheel_version": "0.5.7.dev428+kvp.deadbeefcafe"}))
+        json.dumps({"wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe"}))
     pdir = tmp_path / "patches"
     pdir.mkdir()
     (pdir / "4136-mp-retrieve-abort.patch").write_text("a\n")

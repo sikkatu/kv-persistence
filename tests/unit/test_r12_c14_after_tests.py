@@ -78,7 +78,7 @@ def _run(tmp_path: pathlib.Path, skip_tests: str, mutate_on: str):
     pip_body = "".join([
         "#!/usr/bin/env bash\n",
         f'state="{freeze_state}"\n',
-        f'whl="{wheels / "lmcache-0.5.7.dev428+kvp.abc.whl"}"\n',
+        f'whl="{wheels / "lmcache-0.5.8rc1.post48+kvp.abc.whl"}"\n',
         'case "$*" in\n',
         # Unique markers, checked in order (the tmp_path contains 'pytest' in
         # its name under pytest -- generic masks matched EVERY install):
@@ -107,7 +107,7 @@ def _run(tmp_path: pathlib.Path, skip_tests: str, mutate_on: str):
         # C5 runs `python3 -m pip wheel` -- recreate the wheel after C5's rm
         'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then\n',
         '  case "$*" in *wheel*) /usr/bin/python3 -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1], \'w\'); z.writestr(\'lmcache/__init__.py\', b\'# stub\'); z.writestr(\'lmcache/cuda_ops_stub.so\', b\'\\x00\'); z.writestr(\'lmcache/lmcache_native_stub.so\', b\'\\x00\'); z.close()" ',
-        f'"{wheels / "lmcache-0.5.7.dev428+kvp.abc.whl"}" ;; esac\n',
+        f'"{wheels / "lmcache-0.5.8rc1.post48+kvp.abc.whl"}" ;; esac\n',
         '  exit 0\n',
         'fi\n',
         f'if [ "$1" = "-m" ] && [ "$2" = "kvpersist.check_wheel_native" ]; then shift 2; PYTHONPATH={IMPL} exec /usr/bin/python3 -m kvpersist.check_wheel_native "$@"; fi\n',
@@ -136,7 +136,7 @@ def _run(tmp_path: pathlib.Path, skip_tests: str, mutate_on: str):
     ]))
     (bin_dir / "python3").chmod(0o755)
 
-    with zipfile.ZipFile(wheels / "lmcache-0.5.7.dev428+kvp.abc.whl", "w") as z:
+    with zipfile.ZipFile(wheels / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w") as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
         z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
         z.writestr("lmcache/lmcache_native_stub.so", b"\x00")

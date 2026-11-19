@@ -65,7 +65,7 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
         "if [ \"$1\" = \"-P\" ]; then shift; fi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then\n"
 "  case \"$*\" in *wheel*)\n"
-        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.8rc1.post48+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
         "  esac\n"
         "  exit 0\nfi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
@@ -87,7 +87,7 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
         "    *device_count*) echo '0' ;;\n"
         "    *__version__*) echo '2.4.0' ;;\n"
         "    *get_device_capability*) echo '(12, 0)' ;;\n"
-        "    *md.version*) echo '0.5.7.dev428+kvp.abc' ;;\n"
+        "    *md.version*) echo '0.5.8rc1.post48+kvp.abc' ;;\n"
         # r12: the C6c block discovers/extracts the cuda_ops .so via python3
         # zipfile (no unzip dependency) -- these probes must run for real.
         "    *re.search*|*zipfile*) exec /usr/bin/python3 \"$@\" ;;\n"
@@ -143,7 +143,7 @@ def _run_incontainer(tmp_path: pathlib.Path, pytest_out: str,
     # complete one (both native extensions).
     import zipfile
     with zipfile.ZipFile(
-        tmp_path / "kvp-wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl", "w"
+        tmp_path / "kvp-wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w"
     ) as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
         z.writestr("lmcache/cuda_ops_stub.so", b"\x00")

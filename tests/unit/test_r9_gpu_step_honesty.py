@@ -44,7 +44,7 @@ def _stub_env(tmp_path: pathlib.Path) -> tuple:
     # git stub: the fixture "LMCache" tree is not a real git repo
     (bin_dir / "git").write_text(
         "#!/usr/bin/env bash\ncase \"$*\" in\n"
-        "  *'rev-parse HEAD'*) echo 03ee5b82418b6bd44e424cdd46932d9346f43eb2 ;;\n"
+        "  *'rev-parse HEAD'*) echo 07f1c6bb642f4772606a36eab730ae009ddce08f ;;\n"
         "  *'merge-base --is-ancestor'*) exit 0 ;;\n"
         "  *'apply --reverse --check'*) exit 1 ;;\n"
         "  *'apply --check'*|*'apply '*) exit 0 ;;\n"
@@ -75,7 +75,7 @@ def _stub_env(tmp_path: pathlib.Path) -> tuple:
     out_dir.mkdir()
     # a real zip carrying a cuda_ops .so -- passes check_wheel_native
     import zipfile
-    whl_name = "lmcache-0.5.7.dev428+kvp.abc.whl"
+    whl_name = "lmcache-0.5.8rc1.post48+kvp.abc.whl"
     (build_dir / "wheels").mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(build_dir / "wheels" / whl_name, "w") as z:
         z.writestr("lmcache/cuda_ops_stub.so", b"\x00")
@@ -84,7 +84,7 @@ def _stub_env(tmp_path: pathlib.Path) -> tuple:
     (out_dir / "wheels").mkdir()
     import shutil
     shutil.copy(build_dir / "wheels" / whl_name, out_dir / "wheels" / whl_name)
-    (build_dir / "provenance.json").write_text(json.dumps({"wheel_version": "0.5.7.dev428+kvp.x"}))
+    (build_dir / "provenance.json").write_text(json.dumps({"wheel_version": "0.5.8rc1.post48+kvp.x"}))
     env = dict(os.environ,
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
                KVP_TEST_DOCKER_LOG=str(log_dir),
@@ -160,7 +160,7 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         "if [ \"$1\" = \"-P\" ]; then shift; fi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then\n"
         "  case \"$*\" in *wheel*)\n"
-        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.8rc1.post48+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'#'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
         "  esac\n"
         "  exit 0\nfi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
@@ -216,7 +216,7 @@ def test_gpu_step_skip_is_not_success(tmp_path):
     # a complete one (both native extensions).
     import zipfile
     with zipfile.ZipFile(
-        tmp_path / "kvp-wheels" / "lmcache-0.5.7.dev428+kvp.abc.whl", "w"
+        tmp_path / "kvp-wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w"
     ) as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
         z.writestr("lmcache/cuda_ops_stub.so", b"\x00")

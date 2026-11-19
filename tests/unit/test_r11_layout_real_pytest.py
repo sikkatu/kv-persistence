@@ -46,10 +46,10 @@ def _layout(tmp_path: pathlib.Path, site_name: str = "site-packages") -> tuple:
     (site / "lmcache" / "lmcache_native.py").write_text("Y = 1\n")
     # r14: the shared assert_installed() locates the installed distribution
     # via importlib.metadata -- the toy layout needs real dist-info
-    dinfo = site / "lmcache-0.5.7.dev428.dist-info"
+    dinfo = site / "lmcache-0.5.8rc1.post48.dist-info"
     dinfo.mkdir()
     (dinfo / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.7.dev428\n")
+        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.8rc1.post48\n")
     (dinfo / "RECORD").write_text("")
     (src / "tests" / "v1").mkdir(parents=True)
     for pkg in (src / "tests", src / "tests" / "v1"):

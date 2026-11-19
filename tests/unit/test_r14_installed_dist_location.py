@@ -37,7 +37,7 @@ PY = sys.executable
 
 
 def _make_installed(tmp_path: pathlib.Path, layout: str,
-                    dist_dir_name: str = "lmcache-0.5.7.dev428.dist-info") -> pathlib.Path:
+                    dist_dir_name: str = "lmcache-0.5.8rc1.post48.dist-info") -> pathlib.Path:
     """Fake installed lmcache distribution under <tmp>/<layout>:
     lmcache/{__init__,cuda_ops,lmcache_native}.py + dist-info/METADATA."""
     root = tmp_path / layout
@@ -49,7 +49,7 @@ def _make_installed(tmp_path: pathlib.Path, layout: str,
     dinfo = root / dist_dir_name
     dinfo.mkdir()
     (dinfo / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.7.dev428\n")
+        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.8rc1.post48\n")
     (dinfo / "RECORD").write_text("")
     (dinfo / "INSTALLER").write_text("pip\n")
     return root
@@ -142,10 +142,10 @@ def test_source_tree_refused(tmp_path):
 def test_metadata_and_module_mismatch_refused(tmp_path):
     meta_dir = tmp_path / "meta-root"
     meta_dir.mkdir()
-    dinfo = meta_dir / "lmcache-0.5.7.dev428.dist-info"
+    dinfo = meta_dir / "lmcache-0.5.8rc1.post48.dist-info"
     dinfo.mkdir()
     (dinfo / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.7.dev428\n")
+        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.8rc1.post48\n")
     (dinfo / "RECORD").write_text("")
     # package lives elsewhere (source tree), NOT under meta_dir
     src = _make_source_tree(tmp_path)
@@ -224,10 +224,10 @@ def test_plugin_refuses_source_tree(tmp_path):
 def test_plugin_refuses_metadata_mismatch(tmp_path):
     meta_dir = tmp_path / "meta-root"
     meta_dir.mkdir()
-    dinfo = meta_dir / "lmcache-0.5.7.dev428.dist-info"
+    dinfo = meta_dir / "lmcache-0.5.8rc1.post48.dist-info"
     dinfo.mkdir()
     (dinfo / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.7.dev428\n")
+        "Metadata-Version: 2.1\nName: lmcache\nVersion: 0.5.8rc1.post48\n")
     (dinfo / "RECORD").write_text("")
     src = _make_source_tree(tmp_path)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(

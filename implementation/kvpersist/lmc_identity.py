@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Verify the custom LMCache build identity of a running component.
 
-The LMCache wheel version alone (``0.5.7.dev428``) cannot tell our patched
-build (pinned base + downstream PR #4136/#5972) from the upstream nightly:
+The LMCache wheel version alone (``0.5.8rc1.post48``) cannot tell our patched
+build (pinned base + downstream PR #4136/#5972) from the upstream build:
 ``pyproject.toml`` uses ``local_scheme = no-local-version``. Therefore
 ``scripts/build-image.sh`` bakes an identity file into the derivative image as
 ``/etc/kvp-lmcache-identity.json`` (base commit, patch SHA-256s, wheel
@@ -49,7 +49,7 @@ def compare_wheel_version(
     """Compare the built wheel's recorded version against a runtime-reported
     one (r3 P0-2).
 
-    The upstream nightly's own version (0.5.7.dev428) is identical to what a
+    The upstream build's own version (0.5.8rc1.post48) is identical to what a
     bare source checkout reports -- only our ``+kvp.<12 hex>`` local part
     (see build-lmcache.sh ``KVP_WHEEL_VERSION``) disambiguates our build from
     the upstream nightly. A bare upstream version therefore must NOT satisfy

@@ -46,7 +46,7 @@ def _good_labels() -> dict:
 
 def _docker_stub(bin_dir: pathlib.Path, labels: dict | None, identity_json: dict | str | None,
                  cuda_ops_spec: bool = True, identity_sha_ok: bool = True,
-                 installed_version: str = "0.5.7.dev428+kvp.deadbeefcafe"):
+                 installed_version: str = "0.5.8rc1.post48+kvp.deadbeefcafe"):
     """A stub `docker` that answers each verification sub-command."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     labels = labels if labels is not None else {}
@@ -113,7 +113,7 @@ def test_deep_verifies_identity_json_and_cuda_ops(tmp_path):
         "pr4136_patch_sha256": _sha256(PATCH_DIR / "4136-mp-retrieve-abort.patch"),
         "pr5972_patch_sha256": _sha256(PATCH_DIR / "5972-incomplete-kv-objects.patch"),
         "wheel_sha256": "a" * 64,
-        "wheel_version": "0.5.7.dev428+kvp.deadbeefcafe",
+        "wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe",
     }
     r = _run(GOOD_SPEC, tmp_path, labels=_good_labels(), identity_json=ident,
              cuda_ops_spec=True)

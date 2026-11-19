@@ -65,7 +65,7 @@ def _stub_bin(tmp_path: pathlib.Path):
     g = bin_dir / "git"
     # git stub with the answers build-lmcache.sh relies on
     g.write_text("#!/usr/bin/env bash\ncase \"$*\" in\n"
-                 "  *'rev-parse HEAD'*) echo 03ee5b82418b6bd44e424cdd46932d9346f43eb2 ;;\n"
+                 "  *'rev-parse HEAD'*) echo 07f1c6bb642f4772606a36eab730ae009ddce08f ;;\n"
                  "  *'merge-base --is-ancestor'*) exit 0 ;;\n"
                  "  *'apply --reverse --check'*) exit 1 ;;\n"
                  "  *'apply --check'*|*'apply '*) exit 0 ;;\n"
@@ -151,7 +151,7 @@ def test_build_lmcache_delivers_script(tmp_path):
 
 
 # ------------------------------------------------------- build-image (A-2)
-GOOD_VERIFY = """KVP_LMC_VERSION=0.5.7.dev428+kvp.deadbeefcafe
+GOOD_VERIFY = """KVP_LMC_VERSION=0.5.8rc1.post48+kvp.deadbeefcafe
 KVP_TORCH_VERSION=2.4.0
 KVP_TORCH_CUDA=13.0.2
 KVP_PYTHON_VERSION=3.12.3
@@ -169,7 +169,7 @@ KVP_GPU_SMOKE[3] dev=0000:c1:00.0 cc=12.0 OK
 KVP_GPU_SMOKE_OK_COUNT=4
 KVP_GPU_CC=12.0
 KVP_IDENTITY_FILE=OK
-KVP_IDENTITY_BASE=03ee5b82418b6bd44e424cdd46932d9346f43eb2
+KVP_IDENTITY_BASE=07f1c6bb642f4772606a36eab730ae009ddce08f
 KVP_IDENTITY_P4136=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 KVP_IDENTITY_P5972=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 """
@@ -185,10 +185,10 @@ def _run_build_image(tmp_path: pathlib.Path, run_mode: str = "good"):
     (patch_dir / "4136-mp-retrieve-abort.patch").write_text("diff --git a/x b/x\n")
     (patch_dir / "5972-incomplete-kv-objects.patch").write_text("diff --git a/y b/y\n")
     whl = build_dir / "wheels"; whl.mkdir(parents=True)
-    (whl / "lmcache-0.5.7.dev428+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
+    (whl / "lmcache-0.5.8rc1.post48+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
     import json as _json
     (build_dir / "provenance.json").write_text(_json.dumps(
-        {"wheel_version": "0.5.7.dev428+kvp.deadbeefcafe", "module": "custom-lmcache-build"}))
+        {"wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe", "module": "custom-lmcache-build"}))
     # stub variant: what `docker run` (python3 -) prints to verify.txt
     body = GOOD_VERIFY if run_mode == "good" else ""
     verify_body = tmp_path / "verify-body.txt"

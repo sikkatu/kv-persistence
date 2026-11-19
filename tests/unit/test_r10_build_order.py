@@ -46,7 +46,7 @@ def _harness(tmp_path: pathlib.Path, wheel_has_native: bool = True,
         "if [ \"${1:-}\" = \"-m\" ] && [ \"${2:-}\" = \"pip\" ]; then\n"
         f"  echo \"python3|$*\" >> \"{call_log}\"\n"
         "  case \"$*\" in *wheel*)\n"
-        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.7.dev428+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'# stub'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
+        f"    /usr/bin/python3 -c \"import zipfile; z=zipfile.ZipFile('{tmp_path}/kvp-wheels/lmcache-0.5.8rc1.post48+kvp.abc.whl','w'); z.writestr('lmcache/__init__.py', b'# stub'); z.writestr('lmcache/cuda_ops_stub.so', b''); z.writestr('lmcache/lmcache_native_stub.so', b'')\" ;;\n"
         "  esac\n"
         "  exit 0\nfi\n"
         # r10: the wheel-native check runs as `python3 -m kvpersist.check_wheel_native`
@@ -71,7 +71,7 @@ def _harness(tmp_path: pathlib.Path, wheel_has_native: bool = True,
     (bin_dir / "python3").chmod(0o755)
     (tmp_path / "pytest-out.txt").write_text("5 passed in 0.05s\n")
     # pip stub: `pip wheel` creates a fake wheel; `pip install` logs
-    wheel_name = "lmcache-0.5.7.dev428+kvp.abc.whl"
+    wheel_name = "lmcache-0.5.8rc1.post48+kvp.abc.whl"
     import zipfile
     whl_path = tmp_path / "kvp-wheels" / wheel_name
     (tmp_path / "kvp-wheels").mkdir(parents=True, exist_ok=True)

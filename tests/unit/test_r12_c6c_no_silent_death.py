@@ -53,7 +53,7 @@ def _c6c(tmp_path: pathlib.Path) -> str:
 
 def _fake_wheel(tmp_path: pathlib.Path) -> pathlib.Path:
     import zipfile
-    wheel = tmp_path / "lmcache-0.5.7.dev428+kvp.abc.whl"
+    wheel = tmp_path / "lmcache-0.5.8rc1.post48+kvp.abc.whl"
     with zipfile.ZipFile(wheel, "w") as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
         z.writestr("lmcache/cuda_ops.cpython-312-x86_64-linux-gnu.so", b"\x7fELF")
@@ -229,7 +229,7 @@ def test_every_refusal_scenario_prints_a_message(tmp_path):
         (src / ".git").mkdir()
         (src / "requirements").mkdir()
         (src / "requirements" / "build.txt").write_text("ninja\n")
-        with zipfile.ZipFile(wheels / "lmcache-0.5.7.dev428+kvp.abc.whl", "w") as z:
+        with zipfile.ZipFile(wheels / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w") as z:
             z.writestr("lmcache/__init__.py", b"# stub\n")
             for f in wheel_files:
                 z.writestr(f, b"\x00")

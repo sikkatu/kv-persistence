@@ -158,15 +158,15 @@ def test_pretend_version_reaches_wheel_identity():
 
     # golden: matching version passes
     ok, msg = compare_wheel_version(
-        {"wheel_version": "0.5.7.dev428+kvp.0123456789ab"},
-        "0.5.7.dev428+kvp.0123456789ab",
+        {"wheel_version": "0.5.8rc1.post48+kvp.0123456789ab"},
+        "0.5.8rc1.post48+kvp.0123456789ab",
     )
     assert ok, f"identical versions must match: {msg}"
 
     # mismatched local part is a refusal
     ok, msg = compare_wheel_version(
-        {"wheel_version": "0.5.7.dev428+kvp.0123456789ab"},
-        "0.5.7.dev428+kvp.fedcba987654",
+        {"wheel_version": "0.5.8rc1.post48+kvp.0123456789ab"},
+        "0.5.8rc1.post48+kvp.fedcba987654",
     )
     assert not ok and "wheel_version" in msg, (
         f"a drifted +kvp hash must be refused, got ok={ok}, msg={msg}"
@@ -174,8 +174,8 @@ def test_pretend_version_reaches_wheel_identity():
 
     # a bare upstream nightly version (no local part) must NOT match our pin
     ok, msg = compare_wheel_version(
-        {"wheel_version": "0.5.7.dev428+kvp.0123456789ab"},
-        "0.5.7.dev428",
+        {"wheel_version": "0.5.8rc1.post48+kvp.0123456789ab"},
+        "0.5.8rc1.post48",
     )
     assert not ok, "plain upstream nightly version must not satisfy our pinned build"
 

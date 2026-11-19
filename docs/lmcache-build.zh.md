@@ -8,11 +8,11 @@
 | 项目 | 值 |
 | --- | --- |
 | 上游项目 | https://github.com/LMCache/LMCache |
-| 固定源码提交（基线） | `03ee5b82418b6bd44e424cdd46932d9346f43eb2` |
-| 基线发布标识 | `0.5.7.dev428`（2026-11-16 nightly） |
+| 固定源码提交（基线） | `07f1c6bb642f4772606a36eab730ae009ddce08f` |
+| 基线发布标识 | `0.5.8rc1.post48`（= `git rev-list --count v0.5.8rc1..<pin>` = 48） |
 | PR #6551 合并提交（已在基线内） | `61faa902a81462177d40d74f8c64bb9df02163c4` |
 | PR #4136 源码修订（补丁） | `b10588bd46288192e01ab06da3c3fa923ad0401a` |
-| PR #5972 源码修订（补丁） | `1ccd6f698794cc45d189c14223d339623abe6ec2` |
+| PR #5972 源码修订（补丁） | `bd79d4c6acf6096061b5092517698239440cb93b` |
 | 补丁目录 | `vendor/patches/lmcache/` |
 | 补丁细节与校验和 | `vendor/patches/lmcache/SOURCES.md` |
 **移植规则（r15）：**取自 PR head 的补丁必须在固定基线上通过静态导入门禁
@@ -97,7 +97,7 @@ wheel，并将完整源码身份与 wheel SHA-256 写入
 
 `scripts/build-image.sh` 将最终镜像身份写入 `live/image-identity.env`，并把
 它烙入镜像 `/etc/kvp-lmcache-identity.json`（基线提交、补丁 SHA-256、
-wheel SHA-256）——仅凭 wheel 版本号（`0.5.7.dev428`）无法区分我们的构建与
+wheel SHA-256）——仅凭 wheel 版本号（`0.5.8rc1.post48`）无法区分我们的构建与
 上游 nightly（`no-local-version`）。
 
 **部署状态（r2 P0-1 — 已上线）：** 缓存服务器现在默认为
@@ -192,7 +192,8 @@ touch <KVP_CACHE_ROOT>/.kvp-cache-root-marker
 * `KVP_LOAD_FAILURE_POLICY` 仍为实验性（默认 `fail`）。旧的 C2 保护配对
   警告已过时：retrieve/abort 竞态已在自定义构建内处理（PR #4136 的下游移植），
   不存在可能冲突的本地保护。**状态（诚实）：implemented, unit-tested;
-  hardware validation: C0-C8 passed on the operator's host; C9-C16 pending.**
+  hardware validation: C0-C8 passed on the operator's host (old base); new
+  base 07f1c6bb6 pending.**
   竞态修复、自定义构建和 cuda_ops 原生扩展已在本仓库通过单元测试
   （implemented, unit-tested）；参考构建流水线已在操作员主机上通过
   C0-C8（wheel 已构建，cuda_ops 含 sm_120，四个原生扩展，安装成功，
