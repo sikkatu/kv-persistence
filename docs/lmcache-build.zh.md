@@ -32,18 +32,18 @@
 | C4 | 带引擎 constraints 的构建依赖，无静默回退 | test_engine_freeze_diff_refuses_changed_torch（同一 constraints 逻辑） |
 | C5/C16 | 恰好一次 `pip wheel` | test_exactly_one_pip_wheel_in_the_script + test_pip_wheel_runs_exactly_once（真实运行、记录型 pip shim） |
 | C6a | wheel 文件清单对比 git ls-files | 真实运行夹具覆盖（缺文件 = 拒绝） |
-| C6b | 两个原生扩展 | test_wheel_without_lmcache_native_refused（test_r10_build_order.py）+ test_check_wheel_native.py（真实 zipfile+CLI） |
-| C6c | cuobjdump sm_120 | test_r10_build_order.py 夹具走架构拒绝路径（cuobjdump 桩打印 sm_120） |
+| C6b | 两个原生扩展 | test_wheel_without_lmcache_native_refused（test_r10_build_order.py）+ test_check_wheel_native.py（真实 zipfile+CLI）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12：真实 check_wheel_native -> C6b -> C15 -> provenance，json.loads） |
+| C6c | cuobjdump sm_120，无静默失败 | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly（r12，对提取出的 C6c 块运行真实 bash）+ test_every_refusal_scenario_prints_a_message（验收遍历）+ test_r10_build_order.py 夹具的架构拒绝路径 |
 | C7 | wheel 安装 + pip show 前后 | 真实运行夹具只有经安装才能到 import-check |
 | C8 | 从 site-packages import-check | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件） |
-| C14 | engine freeze diff | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件） |
+| C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim） |
 | C9 | 最小测试依赖（仅 pytest） | 真实运行夹具的接线 |
 | C10 | staging 不含 lmcache/ | test_layout_run_sees_installed_not_source（staging 拷贝被断言） |
 | C11 | staged pytest + kvp_assert_installed | test_script_runs_the_exact_command（每个调用都须 staged 形式）+ 插件测试 |
 | C12 | 摘要门禁（skipped==0，passed>0） | test_skip_in_five_cpu_files_still_aborts（test_r8_gpu_gate_and_artifacts.py） |
 | C13 | GPU 步骤（skip != 0 => 拒绝） | test_gpu_step_skip_is_not_success（test_r9_gpu_step_honesty.py） |
-| C15 | identity.env 单引号、严格 source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields（真实 bash/json） |
-| 主机 | provenance 字段取自 identity.env | test_provenance_json_fields（真实运行 build-lmcache.sh） |
+| C15 | identity.env 单引号、严格 source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields（真实 bash/json）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12 端到端） |
+| 主机 | provenance 字段取自 identity.env | test_provenance_json_fields（真实运行 build-lmcache.sh）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12：native_extensions 的 json.loads） |
 
 构建步骤顺序（r10）：apt/git → 构建依赖（含 proto 桩生成器所需的
 `grpcio-tools==1.78.0`）→ `pip wheel` → wheel 内容检查（git ls-files +

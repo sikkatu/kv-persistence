@@ -14,6 +14,50 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
 
+### Раунд 12 (JSON provenance, тихие падения C6c, порядок C14)
+* `125b571` **P0**: литерал brace-дефолта (форма `${VAR:-{}}`) дописывал
+  лишнюю `}` к НЕПУСТОМУ JSON — bash закрывает подстановку на первой
+  закрывающей фигурной скобке, вторая становилась литералом. Мусор шёл через
+  identity.env в provenance.json (`native_extensions` становился невалидным
+  JSON), и build-image.sh падал после уже успешной долгой сборки. Фикс:
+  дефолт присваивается отдельной строкой (`[ -n "$X" ] || X='{}'`); таких
+  литералов не осталось нигде (`grep -rn ':-{' scripts implementation` пуст).
+  НОВЫЙ сквозной тест (реальные программы, без ручных подстановок): РЕАЛЬНЫЙ
+  `kvpersist.check_wheel_native` на фейковом wheel с 3 нативными .so ->
+  блок C6b, извлечённый по маркерам из _incontainer_build.sh -> блок C15 ->
+  identity.env -> блок provenance, извлечённый из build-lmcache.sh ->
+  `json.loads(provenance.json)`; `native_extensions` обязан быть JSON-объектом
+  с ключами lmcache/cuda_ops, lmcache/lmcache_native, lmcache/lmcache_redis.
+  Мутация: возврат старой строки -> КРАСНЫЙ (JSONDecodeError: Extra data).
+* `6bbc68e` **P1**: тихие падения C6c под `set -Eeuo pipefail`. Поиск `.so`
+  шёл через `unzip` (в образе его НЕТ — тихий выход rc=127), а конвейер с
+  cuobjdump тихо умирал на пустом выводе. Фикс: `.so` ищется и извлекается
+  через python3 zipfile (без unzip), каждый конвейер в подстановках либо
+  fail-soft (`|| true`), либо отказывает с ЯВНЫМ `BUILD REFUSED` (пустой
+  cuobjdump -> `BUILD REFUSED: cuobjdump produced no architectures` + сырой
+  вывод `cuobjdump --list-elf`). НОВЫЕ тесты гоняют РЕАЛЬНЫЙ блок C6c
+  (извлечённый по маркерам) под настоящим bash: (а) работает без unzip (был
+  тихий rc=127), (б) пустой cuobjdump -> громкий отказ, (в) только sm_89 ->
+  `does NOT contain sm_120`. Обходчик приёмки: 7 сценариев отказа РЕАЛЬНОГО
+  скрипта целиком — каждый ненулевой выход обязан нести сообщение `BUILD
+  REFUSED` / `REGRESSION FAILURE` (он же поймал тихую смерть `nvcc --version |
+  tail -1`, исправлена так же). Мутация: возврат unzip-версии C6c -> (а)-(в)
+  КРАСНЫЕ.
+* `d4cb10a` **P2**: diff engine freeze (C14) перенесён ПОСЛЕ тестовой фазы
+  (C9-C13), перед C15 — установка pytest теперь покрывается diff'ом, а гейт
+  выполняется и при `KVP_BUILD_SKIP_TESTS=1`. НОВЫЕ тесты гоняют РЕАЛЬНЫЙ
+  скрипт целиком с stateful pip-шимом: мутация numpy при установке pytest
+  (тесты ВКЛ) или при установке wheel (тесты ВЫКЛ) обязана давать `BUILD
+  REFUSED: engine packages changed`; чистый прогон проходит. Мутация: возврат
+  C14 перед C9 -> КРАСНЫЙ.
+* `19f1ded`: фикстуры r8 подстроены под новый C6c (zipfile-запросы python3 в
+  шиме должны исполняться по-настоящему) — фикстуры подстраиваются под
+  пайплайн, гейты не ослаблены.
+Таблица шаг->тест в docs/lmcache-build.* обновлена (x3); формулировка
+«implemented, unit-tested; hardware validation pending» сохранена.
+Полные прогоны обоих репозиториев (раунд 12, финал):
+* kv-persistence: 566 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Раунд 11 (эталонный пайплайн сборки C0-C16)
 * `f6c4312`: `_incontainer_build.sh` перестроен ровно по порядку C0-C16
   (baseline freeze -> apt/git -> гейт тулчейна -> build-зависимости с

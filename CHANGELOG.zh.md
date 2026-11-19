@@ -13,6 +13,15 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 12 轮（provenance JSON、C6c 静默失败、C14 顺序）
+* `125b571` **P0**：brace 默认值字面量（`${VAR:-{}}` 形式）会给**非空** JSON 多写一个 `}`——bash 在第一个右花括号处就结束参数替换，第二个花括号成了字面量。垃圾数据经 identity.env 流入 provenance.json（`native_extensions` 变成非法 JSON），build-image.sh 在已经成功完成的漫长构建之后崩溃。修复：默认值单独一行赋值（`[ -n "$X" ] || X='{}'`）；此类字面量已全部清除（`grep -rn ':-{' scripts implementation` 为空）。**新**端到端测试（真实程序，无手动替换）：真实 `kvpersist.check_wheel_native` 对含 3 个原生 .so 的假 wheel → 按标记从 _incontainer_build.sh 提取的 C6b 块 → C15 块 → identity.env → 从 build-lmcache.sh 提取的 provenance 块 → `json.loads(provenance.json)`；`native_extensions` 必须是含 lmcache/cuda_ops、lmcache/lmcache_native、lmcache/lmcache_redis 的 JSON 对象。变异：恢复旧行 → 红（JSONDecodeError: Extra data）。
+* `6bbc68e` **P1**：`set -Eeuo pipefail` 下 C6c 的静默失败。`.so` 查找用 `unzip`（镜像中**没有**——rc=127 静默退出），cuobjdump 管道在空输出时静默死亡。修复：`.so` 用 python3 zipfile 定位并解压（不依赖 unzip），每个替换管道要么 fail-soft（`|| true`），要么以**明确**的 `BUILD REFUSED` 拒绝（cuobjdump 空输出 → `BUILD REFUSED: cuobjdump produced no architectures` + 原始 `cuobjdump --list-elf` 输出）。**新**测试在真实 bash 下运行真实 C6c 块（按标记提取）：(a) 无 unzip 也能工作（原先 rc=127 静默），(b) cuobjdump 空输出 → 明确拒绝，(c) 仅 sm_89 → `does NOT contain sm_120`。验收遍历器：真实完整脚本的 7 个拒绝场景——每个非零退出必须带 `BUILD REFUSED` / `REGRESSION FAILURE` 消息（它还抓到了 `nvcc --version | tail -1` 的静默死亡，同样已修复）。变异：恢复 unzip 版 C6c → (a)-(c) 红。
+* `d4cb10a` **P2**：engine freeze diff（C14）移到测试阶段（C9-C13）**之后**、C15 之前——pytest 安装现在被 diff 覆盖，且该门禁在 `KVP_BUILD_SKIP_TESTS=1` 时也执行。**新**测试用带状态的 pip shim 驱动真实完整脚本：pytest 安装时（测试开）或 wheel 安装时（测试关）变异 numpy 必须拒绝 `BUILD REFUSED: engine packages changed`；干净运行通过。变异：C14 移回 C9 之前 → 红。
+* `19f1ded`：r8 真实运行夹具适配新 C6c（shim 中的 python3 zipfile 探测必须真正执行）——夹具适配流水线，门禁不变。
+docs/lmcache-build.* 中步骤→测试表格已更新（x3）；措辞保持「implemented, unit-tested; hardware validation pending」。
+两个仓库的全套测试（第 12 轮最终）：
+* kv-persistence：566 passed，26 skipped
+* recipes：        443 passed，5 skipped
 ### 第 11 轮（参考构建流水线 C0-C16）
 * `f6c4312`：`_incontainer_build.sh` 按 C0-C16 顺序重建（baseline freeze → apt/git → 工具链门禁 → 带 constraints 的构建依赖 → 恰好一次 `pip wheel` → wheel 检查（文件 + **两个**原生扩展 + cuobjdump sm_120）→ 安装 → 从 site-packages import-check（`python3 -P`）→ engine freeze diff → 最小测试依赖 → staging 无 lmcache/ → 带新插件 `kvp_assert_installed` 的 staged pytest → 摘要门禁 → 可选 GPU 步骤 → 单引号 identity.env）。主机端：identity.env 严格 source，provenance 字段用独立默认行（旧的 ${VAR:-{}} 会多写一个 `}`），转发 KVP_TORCH_CUDA_ARCH_LIST。
 * `c77dc6f`：测试夹具适配新阶段（python3 shim 先剥离 `-P`，C5 的 rm 后重建 wheel；工具链桩；staging 夹具；提取器接受 staged pytest 形式；接线测试要求**每个** pytest 调用都是 staged 形式）。

@@ -34,18 +34,18 @@ MP-сервер кэша и каждый vLLM-воркер модели. Анг�
 | C4 | build-зависимости с constraints движка, без тихого fallback | test_engine_freeze_diff_refuses_changed_torch (та же логика constraints) |
 | C5/C16 | ровно один `pip wheel` | test_exactly_one_pip_wheel_in_the_script + test_pip_wheel_runs_exactly_once (реальный прогон, пишущий pip shim) |
 | C6a | состав wheel против git ls-files | покрыто фикстурами реального прогона (пропавший файл = отказ) |
-| C6b | оба нативных расширения | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (реальный zipfile+CLI) |
-| C6c | cuobjdump sm_120 | путь отказа по архитектурам в фикстурах test_r10_build_order.py (cuobjdump-стаб печатает sm_120) |
+| C6b | оба нативных расширения | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (реальный zipfile+CLI) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: РЕАЛЬНЫЙ check_wheel_native -> C6b -> C15 -> provenance, json.loads) |
+| C6c | cuobjdump sm_120, без тихих падений | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly (r12, РЕАЛЬНЫЙ bash на извлечённом блоке C6c) + test_every_refusal_scenario_prints_a_message (обходчик приёмки) + путь отказа по архитектурам в фикстурах test_r10_build_order.py |
 | C7 | установка wheel + pip show до/после | фикстуры реального прогона доходят до import-check только через установку |
 | C8 | import-check из site-packages | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (РЕАЛЬНЫЙ pytest + плагин) |
-| C14 | diff engine freeze | test_engine_freeze_diff_refuses_changed_torch (реальный python на freeze-файлах) |
+| C14 | diff engine freeze (после тестов, перед C15; выполняется и при KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (реальный python на freeze-файлах) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, РЕАЛЬНЫЙ весь скрипт, stateful pip shim) |
 | C9 | минимальные тестовые зависимости (только pytest) | проводка в фикстурах реального прогона |
 | C10 | staging без lmcache/ | test_layout_run_sees_installed_not_source (копирование staging проверяется) |
 | C11 | staged pytest + kvp_assert_installed | test_script_runs_the_exact_command (каждый вызов в staged-форме) + тесты плагина |
 | C12 | гейт сводки (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
 | C13 | GPU-шаг (skip != 0 => отказ) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
-| C15 | identity.env в одинарных кавычках, строгий source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (РЕАЛЬНЫЙ bash/json) |
-| хост | поля provenance из identity.env | test_provenance_json_fields (реальный прогон build-lmcache.sh) |
+| C15 | identity.env в одинарных кавычках, строгий source | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (РЕАЛЬНЫЙ bash/json) + test_c6b_identity_provenance_chain_delivers_valid_json (r12 сквозной) |
+| хост | поля provenance из identity.env | test_provenance_json_fields (реальный прогон build-lmcache.sh) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: json.loads поле native_extensions) |
 
 Порядок шагов сборки (r10): apt/git -> build-зависимости (включая
 `grpcio-tools==1.78.0` для генератора proto-стабов) -> `pip wheel` ->

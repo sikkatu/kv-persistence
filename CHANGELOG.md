@@ -13,6 +13,50 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 12 (provenance JSON, C6c silent deaths, C14 order)
+* `125b571` **P0**: the brace-default literal ( `${VAR:-{}}` form ) appended a
+  stray `}` to a NON-EMPTY JSON -- bash closes the parameter expansion at the
+  first closing brace, so the second brace became a literal. The junk flowed
+  through identity.env into provenance.json (`native_extensions` became
+  invalid JSON) and build-image.sh died after an already-successful long
+  build. Fix: the default is assigned on its own line
+  (`[ -n "$X" ] || X='{}'`); no such literal is left anywhere
+  (`grep -rn ':-{' scripts implementation` is empty). NEW end-to-end test
+  (real programs, no manual substitutions): the REAL `kvpersist.check_wheel_native`
+  on a fake wheel with 3 native .so -> the C6b block extracted by its markers
+  from _incontainer_build.sh -> the C15 block -> identity.env -> the provenance
+  block extracted from build-lmcache.sh -> `json.loads(provenance.json)`;
+  `native_extensions` must be a JSON object with lmcache/cuda_ops,
+  lmcache/lmcache_native, lmcache/lmcache_redis. Mutation: restoring the old
+  line -> RED (JSONDecodeError: Extra data).
+* `6bbc68e` **P1**: C6c silent deaths under `set -Eeuo pipefail`. The `.so`
+  discovery used `unzip` (NOT guaranteed in the image -- rc=127 silent exit)
+  and the cuobjdump pipeline died silently on empty output. Fix: the `.so` is
+  located and extracted via python3 zipfile (no unzip), every substitution
+  pipeline is fail-soft (`|| true`) or refuses with an EXPLICIT `BUILD REFUSED`
+  (empty cuobjdump -> `BUILD REFUSED: cuobjdump produced no architectures` +
+  the raw `cuobjdump --list-elf` output). NEW tests run the REAL C6c block
+  (extracted by markers) under real bash: (a) works without unzip (was rc=127
+  silent), (b) empty cuobjdump -> loud refusal, (c) sm_89-only -> `does NOT
+  contain sm_120`. Acceptance walker: 7 refusal scenarios of the REAL whole
+  script -- every non-zero exit must carry a `BUILD REFUSED` / `REGRESSION
+  FAILURE` message (it also caught a silent `nvcc --version | tail -1` death,
+  fixed the same way). Mutation: restoring the unzip-based C6c -> (a)-(c) RED.
+* `d4cb10a` **P2**: the engine freeze diff (C14) moved AFTER the test phase
+  (C9-C13), before C15 -- the pytest install is now covered by the diff and
+  the gate runs at `KVP_BUILD_SKIP_TESTS=1`. NEW tests drive the REAL whole
+  script with a stateful pip shim: a numpy mutation at the pytest install
+  (tests ON) or at the wheel install (tests OFF) must refuse with `BUILD
+  REFUSED: engine packages changed`; clean run passes. Mutation: moving C14
+  back before C9 -> RED.
+* `19f1ded`: r8 real-run fixtures adapted to the new C6c (python3 zipfile
+  probes must run for real in the shim) -- fixtures adapt to the pipeline,
+  gates unchanged.
+Step->test table in docs/lmcache-build.* updated (x3); wording kept
+"implemented, unit-tested; hardware validation pending".
+Full suite runs (both repositories, round 12 final):
+* kv-persistence: 566 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Round 11 (reference build pipeline C0-C16)
 * `f6c4312`: `_incontainer_build.sh` rebuilt to the exact C0-C16 order
   (baseline freeze -> apt/git -> toolchain gate -> constrained build deps ->

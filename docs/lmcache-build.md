@@ -33,18 +33,18 @@ focused upstream regression suites for #4136 and #5972, builds the wheel with
 | C4 | build deps with engine constraints, no silent fallback | test_engine_freeze_diff_refuses_changed_torch exercises the same constraint logic (test_r11_gates_real_programs.py) |
 | C5/C16 | exactly one `pip wheel` | test_exactly_one_pip_wheel_in_the_script + test_pip_wheel_runs_exactly_once (real run, recording pip shim) |
 | C6a | wheel file-list vs git ls-files | covered inside the real-run fixtures (missing file = refusal) |
-| C6b | both native extensions | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (real zipfile+CLI) |
-| C6c | cuobjdump sm_120 | arch refusal path exercised by test_r10_build_order.py fixtures (cuobjdump stub prints sm_120) |
+| C6b | both native extensions | test_wheel_without_lmcache_native_refused (test_r10_build_order.py) + test_check_wheel_native.py (real zipfile+CLI) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: REAL check_wheel_native -> C6b -> C15 -> provenance, json.loads) |
+| C6c | cuobjdump sm_120, no silent death | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly (r12, REAL bash on the extracted C6c block) + test_every_refusal_scenario_prints_a_message (acceptance walker) + arch refusal path in test_r10_build_order.py fixtures |
 | C7 | wheel install + pip show before/after | real-run fixtures reach import-check only through the install |
 | C8 | import-check from site-packages | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4 (REAL pytest + plugin) |
-| C14 | engine freeze diff | test_engine_freeze_diff_refuses_changed_torch (real python on freeze files) |
+| C14 | engine freeze diff (after the tests, before C15; runs at KVP_BUILD_SKIP_TESTS=1) | test_engine_freeze_diff_refuses_changed_torch (real python on freeze files) + test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation (r12, REAL whole script, stateful pip shim) |
 | C9 | minimal test deps (pytest only) | wiring in the real-run fixtures |
 | C10 | staging without lmcache/ | test_layout_run_sees_installed_not_source (staging copy asserted) |
 | C11 | staged pytest run + kvp_assert_installed | test_script_runs_the_exact_command (every invocation staged form) + plugin tests |
 | C12 | summary gate (skipped==0, passed>0) | test_skip_in_five_cpu_files_still_aborts (test_r8_gpu_gate_and_artifacts.py) |
 | C13 | GPU step (skip != 0 refused) | test_gpu_step_skip_is_not_success (test_r9_gpu_step_honesty.py) |
-| C15 | identity.env single-quoted, sourced strictly | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (REAL bash/json) |
-| host | provenance fields from identity.env | test_provenance_json_fields (real build-lmcache.sh run) |
+| C15 | identity.env single-quoted, sourced strictly | test_identity_env_sources_cleanly_under_strict_bash + test_provenance_json_fields (REAL bash/json) + test_c6b_identity_provenance_chain_delivers_valid_json (r12 end-to-end) |
+| host | provenance fields from identity.env | test_provenance_json_fields (real build-lmcache.sh run) + test_c6b_identity_provenance_chain_delivers_valid_json (r12: json.loads of native_extensions) |
 
 Build step order (r10): apt/git -> build deps (incl. `grpcio-tools==1.78.0`
 for the proto stub generator) -> `pip wheel` -> wheel content checks
