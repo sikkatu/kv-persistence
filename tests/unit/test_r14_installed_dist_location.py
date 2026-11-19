@@ -248,6 +248,44 @@ def test_plugin_refuses_metadata_mismatch(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# (e) editable-like: the distribution root INSIDE source_roots -> refused
+# (r15 P2.2: the missing test for the source-tree protection -- a mutation
+# `if False:` on that branch left every test green before)
+# ---------------------------------------------------------------------------
+def test_distribution_inside_source_roots_refused(tmp_path):
+    """The installed lmcache distribution lives under the checkout itself
+    (editable-like: <checkout>/site-packages/lmcache) and source_roots covers
+    the checkout -> BUILD REFUSED."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    site = _make_installed(checkout, "site-packages")
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(SCRIPTS), str(site)]))
+    code = CHECK_SNIPPET.format(src_root=str(checkout))
+    r = subprocess.run([PY, "-P", "-c", code], capture_output=True, text=True,
+                       timeout=60, env=env, cwd=str(tmp_path))
+    assert r.returncode != 0, (
+        f"a distribution inside source_roots must be refused:\n{r.stdout}")
+    assert "BUILD REFUSED" in r.stderr, (
+        f"the refusal must say BUILD REFUSED:\n{r.stdout}\n{r.stderr}")
+    assert "lives inside the source tree" in r.stderr, r.stderr
+
+
+def test_plugin_refuses_distribution_inside_source_roots(tmp_path):
+    """The same editable-like case through the REAL pytest plugin: the
+    distribution root under KVP_LMC_SRC -> exit 4."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    site = _make_installed(checkout, "site-packages")
+    src = _make_source_tree(tmp_path)
+    r = _run_plugin(tmp_path, site, src_root=checkout, cwd=tmp_path)
+    assert r.returncode == 4, (
+        f"plugin must exit 4 when the distribution lives inside the source "
+        f"tree, got rc={r.returncode}:\n{r.stdout}\n{r.stderr}")
+    assert "BUILD REFUSED" in (r.stdout + r.stderr), (
+        f"the refusal must say BUILD REFUSED:\n{r.stdout}\n{r.stderr}")
+
+
+# ---------------------------------------------------------------------------
 # static gates: no substring checks left; C8 uses the shared function
 # ---------------------------------------------------------------------------
 def test_no_site_packages_substring_check_left():
