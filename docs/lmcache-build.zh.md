@@ -28,25 +28,35 @@
 `scripts/build-lmcache.sh` 验证基线修订及 #6551 为其祖先，确定性地应用两个
 补丁（补丁无法应用或已被意外应用时响亮失败），运行 #4136 与 #5972 的聚焦
 上游回归测试，用 `--no-build-isolation` 针对镜像内已安装的 PyTorch 构建
+wheel，并在 docker 阶段之前把 `rerun-prod-hash.txt`（打补丁树的 production
+哈希）写入 `live/lmcache-build/`。
+**快速重跑 CPU 门禁的准确命令（r17 B3）：** 构建成功后可不重新构建直接重跑
+C8-C12 —— `bash scripts/rerun-lmcache-gate.sh`（不带参数：wheel 取自
+`live/lmcache-build/wheels`，哈希与构建写入的
+`live/lmcache-build/rerun-prod-hash.txt` 比对）。若 wheel 来自记录哈希之前的
+构建（例如既有的工位构建）—— `bash scripts/rerun-lmcache-gate.sh
+--trust-wheel`：以响亮的 `ASSUMING the wheel was built from this production
+tree` 警告记录当前哈希。没有哈希文件时脚本拒绝：`Need a full build: bash
+scripts/build-lmcache.sh`。
 
 ### 参考构建流水线 C0-C16：步骤 -> 覆盖测试（r11）
 
 | 步骤 | 门禁 | 真实程序测试 |
 | --- | --- | --- |
 | 补丁导入 | 补丁树静态导入门禁（docker 之前） | test_stale_import_refused_with_message / test_fixed_import_passes / test_fallback_import_not_flagged / test_namespace_package_accepted / test_exempt_modules_and_proto_gen / test_empty_file_list_refused / test_gate_wired_in_build_before_docker（test_r15_patched_import_gate.py）+ test_no_stale_ipccacheserverkey_import_in_patches / test_5972_carries_the_fixed_import / test_sources_md_sha256_matches_patch_files（test_r15_patch_porting.py）+ test_patch_test_fixtures_carry_the_adapted_attributes / test_no_pending_store_left_in_the_patch（test_r16_patch4136_fixtures.py，r16 P0：4136 夹具适配）+ test_pr6608_ancestor_gate_dies_when_not_ancestor / test_empty_gate_scope_refused（test_r16_shell_gates.py，r16 P4.2） |
-| 快速重跑 | rerun-lmcache-gate.sh：production 哈希比对 + NOT-production 横幅（不写 live/） | test_production_hash_mismatch_refused / test_no_wheel_refused / test_success_path_prints_not_production_banner / test_nothing_written_to_live / test_shared_gate_module_used_everywhere（test_r16_rerun_gate.py，r16 P3） |
+| 快速重跑 | rerun-lmcache-gate.sh：wheel 取自 $OUT_DIR/wheels（构建输出目录，恰好一个 *.whl），production 哈希与构建写入的哈希（rerun-prod-hash.txt）比对 + NOT-production 横幅（不写 live/）；`--trust-wheel` 为 r17 之前的 wheel 响亮地记录哈希 | test_build_then_rerun_without_arguments_reaches_banner / test_production_edit_after_build_refused_on_first_run / test_test_only_edit_after_build_passes / test_no_hash_file_refused_without_trust / test_trust_wheel_records_hash_with_warning / test_two_wheels_refused / test_hash_recorded_before_docker_run（test_r17_b3_rerun_build_tie.py，r17 B3：真实构建 + 真实 rerun，仅 docker 桩）+ test_production_hash_mismatch_refused / test_no_wheel_refused / test_success_path_prints_not_production_banner / test_nothing_written_to_live / test_shared_gate_module_used_everywhere（test_r16_rerun_gate.py） |
 | C0 | 前导：trap EXIT chown、baseline pip freeze | test_chown_runs_even_on_pytest_failure（test_r8_gpu_gate_and_artifacts.py） |
 | C1 | apt update -> git + cuda dev pkgs（响亮拒绝） | test_git_is_installed_before_first_use / test_missing_git_package_refuses_loudly（test_r9_git_install.py，真实 bash+apt 日志） |
 | C2 | git safe.directory 在安装之后 | 同 r9 测试（顺序由 apt/git 日志断言） |
 | C3 | nvcc + g++ + ninja 门禁、架构覆盖 | test_project_arch_override_wins_over_image（test_r10_build_order.py） |
-| C4 | 带引擎 constraints 的构建依赖，无静默回退 | test_engine_freeze_diff_refuses_changed_torch（同一 constraints 逻辑） |
+| C4 | 带引擎 constraints 的构建依赖，无静默回退；打印 pin 行，constraints 为空 -> 任何安装前 BUILD REFUSED | test_c4_empty_constraints_refused_before_install / test_c4_nonempty_constraints_printed_and_install_runs（test_r17_b4_misc.py，r17 B4.2：真实 C4 块）+ test_engine_freeze_diff_refuses_changed_torch（同一 constraints 逻辑） |
 | C5/C16 | 恰好一次 `pip wheel` | test_exactly_one_pip_wheel_in_the_script + test_pip_wheel_runs_exactly_once（真实运行、记录型 pip shim） |
 | C6a | wheel 文件清单对比 git ls-files | 真实运行夹具覆盖（缺文件 = 拒绝） |
 | C6b | 两个原生扩展 | test_wheel_without_lmcache_native_refused（test_r10_build_order.py）+ test_check_wheel_native.py（真实 zipfile+CLI）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12：真实 check_wheel_native -> C6b -> C15 -> provenance，json.loads） |
 | C6c | cuobjdump sm_120，无静默失败 | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly（r12，对提取出的 C6c 块运行真实 bash）+ test_every_refusal_scenario_prints_a_message（验收遍历）+ test_r10_build_order.py 夹具的架构拒绝路径 |
 | C7 | wheel 安装 + pip show 前后（SIGPIPE 安全） | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install（r13，真实 bash，200 KB pip 桩）+ test_no_head_pipeline_outside_fail_soft_substitutions（lint） |
-| C8 | 从已安装分发位置 import-check（支持 dist-packages） | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件）+ test_installed_dist_packages_layout_passes / test_source_tree_refused / test_metadata_and_module_mismatch_refused / test_plugin_passes_dist_packages_layout（r14：共享 assert_installed，两种布局） |
-| C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行；要求 baseline 含 torch+vllm，解析 `name==ver` + `name @ url`） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim）+ test_both_freeze_formats_are_parsed / test_unrecognised_baseline_is_refused / test_changed_torch_version_refused_with_names_and_versions / test_unchanged_passes_and_prints_pins / test_pep503_name_normalisation（test_r16_c14_engine_pins.py，r16 P2） |
+| C8 | 从已安装分发位置 import-check（支持 dist-packages）；PYTHONPATH = /kvp-scripts:/kvp-impl（r17 B1） | test_c8_command_from_build_script_runs_as_written / test_c8_command_from_rerun_script_runs_as_written / test_distribution_inside_source_tree_refused（test_r17_b1_c8_imports.py，r17 B1：按脚本原样的真实命令，伪安装分发）+ test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件）+ test_installed_dist_packages_layout_passes / test_source_tree_refused / test_metadata_and_module_mismatch_refused / test_plugin_passes_dist_packages_layout（r14：共享 assert_installed，两种布局） |
+| C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行；要求 baseline 含 torch+vllm，解析 `name==ver` + `name @ url`；只比对引擎包（PEP 503 归一化后的 torch*/vllm*/numpy*/triton*），构建噪声（pytest/lmcache/...）忽略 — r17 B2） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim 含真实构建噪声）+ test_both_freeze_formats_are_parsed / test_unrecognised_baseline_is_refused / test_changed_torch_version_refused_with_names_and_versions / test_unchanged_passes_and_prints_pins / test_build_noise_is_not_an_engine_change / test_changed_torchvision_refused / test_ok_line_lists_only_engine_packages / test_pep503_name_normalisation（test_r16_c14_engine_pins.py）+ test_harness_positive_control_adds_noise_and_passes / test_harness_engine_mutation_still_refused（test_r17_b2_c14_noise.py，r17 B2） |
 | C9 | 最小测试依赖（仅 pytest） | 真实运行夹具的接线 |
 | C10 | staging 不含 lmcache/ | test_layout_run_sees_installed_not_source（staging 拷贝被断言） |
 | C11 | staged pytest + kvp_assert_installed（传入 KVP_LMC_SRC，source-tree 防护生效） | test_script_runs_the_exact_command（每个调用都须 staged 形式）+ 插件测试 + test_distribution_inside_source_roots_refused / test_plugin_refuses_distribution_inside_source_roots（r15 P2.2）+ r16 P0 修复的 5 个补丁测试（夹具适配：test_patch_test_fixtures_carry_the_adapted_attributes） |

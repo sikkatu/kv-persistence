@@ -13,7 +13,53 @@ LMCache** (база `0.5.7.dev428` = `03ee5b82418b6bd44e424cdd46932d9346f43eb2`,
 downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache-build.ru.md`);
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
-
+### Раунд 17 (три блокера железной сборки: путь импорта C8, фильтр C14, связка rerun/сборка)
+* `5c65ce0` **B1** (`No module named 'kvpersist'` на ПЕРВОЙ же команде
+  контейнерной фазы): оба in-container скрипта вызывали `python3 -P -m
+  kvpersist.gate_common check-imports` только с `PYTHONPATH=$KVP_SCRIPTS`, а
+  пакет `kvpersist` лежит в `implementation/` (в контейнере `/kvp-impl`).
+  Добавлено `PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL"` (в обе команды C8); шим
+  python3 в test_r12_c14_after_tests.py теперь передаёт окружение вызывающего
+  КАК ЕСТЬ (раньше сам выставлял PYTHONPATH и подменял check-imports — поэтому
+  тесты не заметили поломку). Новый тест test_r17_b1_c8_imports.py извлекает
+  РЕАЛЬНУЮ команду C8 из ОБОИХ скриптов и выполняет её как написана против
+  фейкового установленного дистрибутива lmcache в dist-packages-подобном
+  каталоге (PYTHONUSERBASE user-site, как это делает `site`). Мутация (убрать
+  `:$KVP_IMPL`) -> RED на обоих скриптах.
+* `c12e71e` **B2** (C14 отказывал КАЖДОЙ реальной сборке): переписывание
+  engine_pins в r16 потеряло фильтр имён движка — гейт сравнивал КАЖДЫЙ пакет
+  pip, а сама сборка меняет freeze (C7 новый lmcache, C9
+  pytest+pluggy+iniconfig, C4 setuptools-scm): `BUILD REFUSED: engine packages
+  changed ... iniconfig / lmcache / pluggy / pytest / setuptools-scm`. Фильтр
+  восстановлен ПОСЛЕ PEP 503-нормализации (torch*, vllm*, numpy*, triton* —
+  включая torchvision, vllm-flash-attn, triton-kernels); OK-строка печатает
+  только пины движка. Фикстуры несут реальный шум сборки; pip-шим r12-harness
+  повторяет реальное изменение freeze. Мутация (убрать фильтр) -> RED.
+* `8fd30ff` **B3** (rerun не находил wheel, гейт ни с чем не был связан):
+  build-lmcache.sh пишет wheel в `$OUT_DIR/wheels`, а rerun искал
+  `$WORK_DIR/wheels` + `/tmp/kvp-lmc-build.*`; `rerun-prod-hash.txt` писал
+  ПЕРВЫЙ ЗАПУСК rerun, а не сборка. Теперь: общий
+  `kvpersist.gate_common prod-hash SRC` (один алгоритм); build-lmcache.sh
+  записывает `$OUT_DIR/rerun-prod-hash.txt` ДО docker run; rerun берёт wheel из
+  `${KVP_OUT_DIR:-live/lmcache-build}/wheels` (ровно один *.whl), без файла
+  хеша отказывает (`Need a full build`) и только `--trust-wheel` пишет хеш
+  (громкое предупреждение `ASSUMING the wheel was built from this production
+  tree`). Точная команда: `bash scripts/rerun-lmcache-gate.sh` (после сборки) /
+  `--trust-wheel` (для wheel из сборки до r17). Мутации (поиск в
+  $WORK_DIR/wheels снова; запись при первом запуске) -> RED.
+* `d486fe7` **B4**: пустые строки GFM в SOURCES.md восстановлены (абзац после
+  строки таблицы становится строкой таблицы) + тест; C4 печатает пины движка и
+  отказывает при ПУСТЫХ constraints (`BUILD REFUSED: no engine pins found in
+  baseline freeze`, диагностика первых 20 строк как в C14) ДО любой установки.
+  Доки: раунд 17 + строки таблицы «шаг → тест» (C8, C14, C4, быстрый перезапуск)
+  в docs/lmcache-build{,.ru,.zh}.md, точная команда rerun во всех трёх.
+* Полный прогон: kv-persistence **638 passed, 26 skipped** (все скипы —
+  окружение: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, только
+  железо); recipes **443 passed, 5 skipped** (код в этом раунде не менялся,
+  числа свежего прогона). Статус железа без изменений: C0-C10 passed on the
+  operator's host (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16
+  («проверено без железа, подтверждение на железе в ожидании»), C12-C16
+  pending.
 ### Раунд 16 (фикстуры 4136, junit-гейты, слепая зона engine-pin, быстрый перезапуск)
 * `c354ba9` **P0** (лог оператора 19.11 18:53: C0-C10 прошли на новой базе,
   C11 = 150 passed / 5 failed): все пять падений в

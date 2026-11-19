@@ -13,6 +13,55 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 17 (three hardware build blockers: C8 import path, C14 engine filter, rerun/build tie)
+* `5c65ce0` **B1** (`No module named 'kvpersist'` on the FIRST container
+  command): both in-container scripts ran `python3 -P -m
+  kvpersist.gate_common check-imports` with `PYTHONPATH=$KVP_SCRIPTS` only,
+  but the `kvpersist` package lives in `implementation/` (`/kvp-impl` in the
+  container). `PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL"` added (in both C8
+  commands); the python3 shim in test_r12_c14_after_tests.py now passes the
+  caller's environment through AS-IS (it used to set PYTHONPATH itself and
+  stub check-imports -- that is why the tests missed the break). New test
+  test_r17_b1_c8_imports.py extracts the REAL C8 command from BOTH scripts
+  and runs it as written against a fake installed lmcache distribution in a
+  dist-packages-like dir (PYTHONUSERBASE user-site, as `site` does).
+  Mutation (drop `:$KVP_IMPL`) -> RED on both scripts.
+* `c12e71e` **B2** (C14 refused EVERY real build): the r16 engine_pins
+  rewrite dropped the engine-name filter and compared EVERY pip package --
+  while the build itself changes the freeze (C7 new lmcache, C9
+  pytest+pluggy+iniconfig, C4 setuptools-scm): `BUILD REFUSED: engine
+  packages changed ... iniconfig / lmcache / pluggy / pytest /
+  setuptools-scm`. Filter restored AFTER PEP 503 normalisation (torch*,
+  vllm*, numpy*, triton* -- torchvision, vllm-flash-attn, triton-kernels
+  included); the OK line prints only the engine pins. Fixtures carry real
+  build noise; the r12 harness pip shim mirrors the real freeze churn.
+  Mutation (drop the filter) -> RED.
+* `8fd30ff` **B3** (rerun never found the wheel, gate tied to nothing):
+  build-lmcache.sh writes the wheel to `$OUT_DIR/wheels` while rerun
+  searched `$WORK_DIR/wheels` + `/tmp/kvp-lmc-build.*`; and
+  `rerun-prod-hash.txt` was recorded by the FIRST rerun, not by the build.
+  Now: shared `kvpersist.gate_common prod-hash SRC` (one algorithm);
+  build-lmcache.sh records `$OUT_DIR/rerun-prod-hash.txt` BEFORE the docker
+  run; rerun takes the wheel from `${KVP_OUT_DIR:-live/lmcache-build}/wheels`
+  (exactly one *.whl), refuses without the hash file (`Need a full build`)
+  and only `--trust-wheel` records a hash (loud `ASSUMING the wheel was
+  built from this production tree` warning). Exact command: `bash
+  scripts/rerun-lmcache-gate.sh` (after a build) / `--trust-wheel` (for a
+  wheel from a pre-r17 build). Mutations (search $WORK_DIR/wheels again;
+  record-on-first-run) -> RED.
+* `d486fe7` **B4**: SOURCES.md GFM blank lines restored (a paragraph after a
+  table row becomes a table row) + test; C4 prints the engine pins and
+  refuses an EMPTY constraints file (`BUILD REFUSED: no engine pins found in
+  baseline freeze`, first-20-lines diagnostic like C14) BEFORE any install.
+  Docs: round 17 + step->test table rows (C8, C14, C4, fast rerun) in
+  docs/lmcache-build{,.ru,.zh}.md, exact rerun command in all three.
+* Full run: kv-persistence **638 passed, 26 skipped** (all skips are
+  environment: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache,
+  hardware-only); recipes **443 passed, 5 skipped** (unchanged code this
+  round, numbers from the fresh run). Hardware status unchanged: C0-C10
+  passed on the operator's host (new base 07f1c6bb6), C11 (4136 test
+  fixtures) fixed in r16 ("verified without hardware, hardware confirmation
+  pending"), C12-C16 pending.
 ### Round 16 (4136 test fixtures, junit gates, engine-pin blind spot, fast rerun)
 * `c354ba9` **P0** (hardware log 19.11 18:53: C0-C10 passed on the new base,
   C11 = 150 passed / 5 failed): all five failures in
