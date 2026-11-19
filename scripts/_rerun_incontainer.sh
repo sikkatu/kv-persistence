@@ -33,7 +33,7 @@ pip install --no-deps --force-reinstall "$WHEEL_FILE" \
 # ---------------------------------------------------------------------------
 # C8: import-check from the installed distribution (shared gate_common)
 # ---------------------------------------------------------------------------
-PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" \
+PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL" KVP_LMC_SRC="$LMC_SRC" \
   python3 -P -m kvpersist.gate_common check-imports \
   || die "C8 import-check failed"
 
@@ -62,7 +62,7 @@ note "test staging: $TESTROOT (no lmcache/ dir)"
 # ---------------------------------------------------------------------------
 note "running CPU gate: 5 regression files (skipped==0)"
 set +e
-(cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
+(cd "$TESTROOT" && PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL" KVP_LMC_SRC="$LMC_SRC" python3 -P -m pytest -p kvp_assert_installed -q -rs \
   --junitxml="$KVP_WORK/pytest-report.xml" \
   tests/v1/test_lmcache_mp_connector.py \
   tests/v1/test_vllm_mp_adapter.py \
