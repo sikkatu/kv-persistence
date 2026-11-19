@@ -35,7 +35,7 @@
 | C6b | 两个原生扩展 | test_wheel_without_lmcache_native_refused（test_r10_build_order.py）+ test_check_wheel_native.py（真实 zipfile+CLI）+ test_c6b_identity_provenance_chain_delivers_valid_json（r12：真实 check_wheel_native -> C6b -> C15 -> provenance，json.loads） |
 | C6c | cuobjdump sm_120，无静默失败 | test_c6c_works_without_unzip / test_c6c_empty_cuobjdump_refuses_loudly / test_c6c_sm89_only_refuses_loudly（r12，对提取出的 C6c 块运行真实 bash）+ test_every_refusal_scenario_prints_a_message（验收遍历）+ test_r10_build_order.py 夹具的架构拒绝路径 |
 | C7 | wheel 安装 + pip show 前后（SIGPIPE 安全） | test_c7_reaches_after_marker_despite_big_pip_show / test_c7_before_line_no_false_not_installed / test_c7_before_line_reports_missing_install（r13，真实 bash，200 KB pip 桩）+ test_no_head_pipeline_outside_fail_soft_substitutions（lint） |
-| C8 | 从 site-packages import-check | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件） |
+| C8 | 从已安装分发位置 import-check（支持 dist-packages） | test_layout_run_sees_installed_not_source / test_plugin_refuses_source_tree_with_exit4（真实 pytest + 插件）+ test_installed_dist_packages_layout_passes / test_source_tree_refused / test_metadata_and_module_mismatch_refused / test_plugin_passes_dist_packages_layout（r14：共享 assert_installed，两种布局） |
 | C14 | engine freeze diff（在测试之后、C15 之前；KVP_BUILD_SKIP_TESTS=1 时也执行） | test_engine_freeze_diff_refuses_changed_torch（真实 python 处理 freeze 文件）+ test_c14_runs_after_pytest_install_and_detects_mutation / test_c14_runs_even_when_tests_are_skipped / test_c14_positive_control_no_mutation（r12，真实完整脚本，带状态的 pip shim） |
 | C9 | 最小测试依赖（仅 pytest） | 真实运行夹具的接线 |
 | C10 | staging 不含 lmcache/ | test_layout_run_sees_installed_not_source（staging 拷贝被断言） |

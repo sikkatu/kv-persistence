@@ -13,6 +13,13 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
 
+### 第 14 轮（C8 误拒绝：dist-packages 布局 vs site-packages 子串）
+* `d15c5fc` **P0**（硬件日志 19.11 12:52）：C0-C7 通过（r13 在硬件上确认），随后 C8 **错误地**拒绝了正确安装的 wheel——`BUILD REFUSED: lmcache imported from /usr/local/lib/python3.12/dist-packages/lmcache/__init__.py, not site-packages`。vLLM 镜像是 Debian/Ubuntu 布局，pip 安装到 dist-packages；配方启动脚本知道这一点，构建脚本不知道（r11 夹具用了 site-packages 路径，所以测试一直是绿的）。修复：判据按**实质**——scripts/kvp_assert_installed.py 中新的共享 `assert_installed(mods, source_roots)` 通过 importlib.metadata 定位已安装 lmcache 分发根目录，要求每个模块文件位于其**下**（任何布局：site-packages、dist-packages、…），且根目录不在源码树内（$KVP_LMC_SRC/cwd）；拒绝消息带两个路径（file、dist root）。C8 导入共享函数（PYTHONPATH=$KVP_SCRIPTS），pytest 插件使用同一个（惰性 `import pytest`，模块在安装测试依赖前也可用）。**新**测试（真实 python3 -P + 真实插件，带 dist-info/METADATA 的假已安装分发）：(a) site-packages 通过，(b) dist-packages 通过（修复前红：子串拒绝——精确复现硬件日志），(c) 源码树 → BUILD REFUSED，(d) 元数据/模块不匹配 → BUILD REFUSED；同样通过插件（exit 4）。r11 布局测试增加 dist-packages 变体。静态门禁：子串判据已清除（grep 干净），C8 使用共享函数。变异：恢复子串检查 → (b) x3 + lint 红，已验证。
+硬件验证状态（按 ТЗ 保留）：
+「implemented, unit-tested; hardware validation: C0-C7 passed on the operator's host; C8-C16 pending」。
+两个仓库的全套测试（第 14 轮最终）：
+* kv-persistence：581 passed，26 skipped
+* recipes：        443 passed，5 skipped
 ### 第 13 轮（C7 的 SIGPIPE：`pip show | head -3` = 静默 rc=120）
 * `7bda1bc` **P0**（首次硬件运行，19.11 11:42）：构建通过 C0-C7（wheel 已构建，cuda_ops 仅含 sm_120，四个原生扩展，`pip install` 成功），随后在 C8 之前**静默**死亡（`docker run rc=120`）。原因：`pip show lmcache | head -3`——`head` 关闭管道，`pip show` 写入已关闭的 stdout 并以 120 退出（SIGPIPE，`ERROR: Pipe to stdout was broken`），`pipefail` 下脚本无消息终止（该行**没有** `||`）。BEFORE 行还在已安装时错误地打印 `(not installed)`。与 r12 同类缺陷但在 `$(...)` 之外——r12 的审计和消息遍历器漏掉了普通管道。修复：两行都用 `sed -n '1,3p'`（读取全部输出），`(not installed)` 仅在 `pip show` 真正失败时打印。**新**测试（真实 bash、按标记提取的真实 C7 块、python pip 桩写 ≥200 KB 且在 stdout 关闭时退出 120）：块必须到达 C7 后的标记（修复前红：rc=120——精确复现硬件日志），无错误的 `(not installed)`，真正失败时打印它。验收 lint：_incontainer_build.sh 中无未保护的 `| head` 管道。变异：恢复 `| head -3` → 红，已验证。scripts/ + implementation/ 中所有 `| head` / `| grep -q` / `sed q` 管道已审计——每处均为 fail-soft（`|| true`）、受保护或有界的诊断输出。
 硬件验证状态（新措辞，文档 x3）：

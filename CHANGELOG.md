@@ -13,6 +13,36 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 14 (C8 false refusal: dist-packages layout vs "site-packages" substring)
+* `d15c5fc` **P0** (hardware log 19.11 12:52): C0-C7 passed (r13 confirmed on
+  hardware), then C8 FALSELY refused a correctly installed wheel --
+  `BUILD REFUSED: lmcache imported from
+  /usr/local/lib/python3.12/dist-packages/lmcache/__init__.py, not
+  site-packages`. The vLLM image is Debian/Ubuntu layout and pip installs
+  into dist-packages; the recipe launchers already knew that, the build
+  scripts did not (the r11 fixtures used site-packages paths, so the tests
+  stayed green). Fix: the criterion goes by SUBSTANCE -- a new shared
+  `assert_installed(mods, source_roots)` in scripts/kvp_assert_installed.py
+  locates the installed lmcache distribution root via importlib.metadata and
+  requires every module file UNDER it (any layout: site-packages,
+  dist-packages, ...), with the root NOT inside the source tree
+  ($KVP_LMC_SRC/cwd); refusal messages carry both paths (file, dist root).
+  C8 imports the shared function (PYTHONPATH=$KVP_SCRIPTS) and the pytest
+  plugin uses the same one (lazy `import pytest` so the module works before
+  the test-deps install). NEW tests (REAL python3 -P + REAL plugin, fake
+  installed distributions with dist-info/METADATA): (a) site-packages passes,
+  (b) dist-packages passes (RED before: substring refused -- the exact
+  hardware reproduction), (c) source tree -> BUILD REFUSED, (d)
+  metadata/module mismatch -> BUILD REFUSED; the same through the plugin
+  (exit 4). r11 layout test gains the dist-packages variant. Static gates:
+  no substring criterion left (grep-clean), C8 uses the shared function.
+  Mutation: restoring the substring check -> (b) x3 + lint RED, verified.
+Hardware validation status (kept per the spec):
+"implemented, unit-tested; hardware validation: C0-C7 passed on the
+operator's host; C8-C16 pending".
+Full suite runs (both repositories, round 14 final):
+* kv-persistence: 581 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Round 13 (SIGPIPE in C7: `pip show | head -3` = silent rc=120)
 * `7bda1bc` **P0** (first hardware run, 19.11 11:42): the build passed C0-C7
   (wheel built, cuda_ops has only sm_120, four native extensions, `pip

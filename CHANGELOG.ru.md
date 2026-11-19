@@ -14,6 +14,36 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
 
+### Раунд 14 (ложный отказ C8: раскладка dist-packages против подстроки site-packages)
+* `d15c5fc` **P0** (лог оператора 19.11 12:52): C0-C7 прошли (r13 подтверждён на
+  железе), затем C8 ЛОЖНО отказал правильно установленному wheel — `BUILD
+  REFUSED: lmcache imported from
+  /usr/local/lib/python3.12/dist-packages/lmcache/__init__.py, not
+  site-packages`. Образ vLLM — Debian/Ubuntu-раскладка, pip ставит в
+  dist-packages; скрипты рецептов это знали, сборочные — нет (фикстуры r11
+  использовали site-packages-пути, поэтому тесты были зелёными). Фикс:
+  критерий по СУТИ — новый общий `assert_installed(mods, source_roots)` в
+  scripts/kvp_assert_installed.py находит корень установленного дистрибутива
+  lmcache через importlib.metadata и требует, чтобы файл каждого модуля лежал
+  ПОД ним (любая раскладка: site-packages, dist-packages, ...), а сам корень не
+  находился внутри дерева исходников ($KVP_LMC_SRC/cwd); в отказе — оба пути
+  (file, dist root). C8 импортирует общую функцию (PYTHONPATH=$KVP_SCRIPTS), и
+  плагин pytest использует ту же (ленивый `import pytest` — модуль работает до
+  установки тестовых зависимостей). НОВЫЕ тесты (РЕАЛЬНЫЙ python3 -P +
+  РЕАЛЬНЫЙ плагин, фейковые установленные дистрибутивы с dist-info/METADATA):
+  (а) site-packages проходит, (б) dist-packages проходит (КРАСНЫЙ до фикса:
+  подстрока отказывала — точное воспроизведение железа), (в) дерево исходников
+  -> BUILD REFUSED, (г) несовпадение метаданных и модуля -> BUILD REFUSED; то
+  же через плагин (exit 4). Тест раскладки r11 дополнен вариантом
+  dist-packages. Статические гейты: подстрочного критерия не осталось (grep
+  чист), C8 использует общую функцию. Мутация: возврат подстрочной проверки ->
+  (б) x3 + линт КРАСНЫЕ, проверено.
+Статус аппаратной валидации (сохранён по ТЗ):
+«implemented, unit-tested; hardware validation: C0-C7 passed on the
+operator's host; C8-C16 pending».
+Полные прогоны обоих репозиториев (раунд 14, финал):
+* kv-persistence: 581 passed, 26 skipped
+* recipes:        443 passed, 5 skipped
 ### Раунд 13 (SIGPIPE в C7: `pip show | head -3` = тихий rc=120)
 * `7bda1bc` **P0** (первый запуск на железе, 19.11 11:42): сборка прошла
   C0-C7 (wheel собран, cuda_ops содержит только sm_120, четыре нативных
