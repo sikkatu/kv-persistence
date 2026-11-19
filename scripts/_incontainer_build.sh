@@ -63,7 +63,11 @@ for tool in nvcc g++ ninja; do
     exit 1
   fi
 done
-NVCC_VERSION="$(nvcc --version | tail -1)"
+# r12 P1: every pipeline in a substitution is marked -- either `|| true`
+# (empty result acceptable) or an explicit BUILD REFUSED below. A pipeline
+# that dies under `pipefail` must never end the script silently.
+NVCC_VERSION="$(nvcc --version | tail -1 || true)"
+[ -n "$NVCC_VERSION" ] || { echo "BUILD REFUSED: 'nvcc --version' produced no output -- toolchain broken" >&2; exit 1; }
 echo "[in-container] nvcc: $NVCC_VERSION"
 export BUILD_WITH_CUDA=1
 if [ -n "${TORCH_CUDA_ARCH_LIST:-}" ]; then
@@ -89,12 +93,15 @@ echo "[in-container] build dependencies installed (constraints: $KVP_WORK/build-
 rm -f "$KVP_WHEELS"/*.whl 2>/dev/null || true
 cd "$LMC_SRC"
 python3 -m pip wheel . --no-build-isolation --no-deps -w "$KVP_WHEELS"
-_wheel_count="$(ls "$KVP_WHEELS"/*.whl 2>/dev/null | wc -l)"
+# r12 P1: `ls | wc` and `ls | head` are fail-soft pipelines (empty result is
+# acceptable -- the check below refuses loudly); marked `|| true` so a failing
+# `ls` cannot end the script silently under pipefail.
+_wheel_count="$(ls "$KVP_WHEELS"/*.whl 2>/dev/null | wc -l || true)"
 if [ "$_wheel_count" != "1" ]; then
   echo "BUILD REFUSED: expected exactly one wheel, found $_wheel_count in $KVP_WHEELS" >&2
   exit 1
 fi
-WHEEL_FILE="$(ls "$KVP_WHEELS"/*.whl | head -1)"
+WHEEL_FILE="$(ls "$KVP_WHEELS"/*.whl | head -1 || true)"
 echo "[in-container] wheel built: $WHEEL_FILE"
 
 # ---- C6a: wheel content vs git ls-files ------------------------------------
@@ -123,21 +130,37 @@ echo "$NATIVE_OUT"
 # then a closing brace) closed at the first `}` -- the second brace became a
 # literal and a non-empty JSON got a stray `}` appended (garbage in
 # identity.env / provenance.json). Default is assigned on its own line.
-NATIVE_EXTENSIONS_JSON="$(printf '%s\n' "$NATIVE_OUT" | sed -n 's/^native_extensions=//p' | tail -1)"
+# r12 P1: fail-soft pipeline (empty result is acceptable -- the default
+# below covers it), marked `|| true`.
+NATIVE_EXTENSIONS_JSON="$(printf '%s\n' "$NATIVE_OUT" | sed -n 's/^native_extensions=//p' | tail -1 || true)"
 [ -n "$NATIVE_EXTENSIONS_JSON" ] || NATIVE_EXTENSIONS_JSON='{}'
 export NATIVE_EXTENSIONS_JSON
 
 # ---- C6c: cuobjdump arch check (sm_120 required) ---------------------------
+# r12 P1: the .so is located and extracted with python3 zipfile -- `unzip` is
+# NOT guaranteed in the image (a missing unzip used to kill the script with
+# rc=127 and NO message). Every pipeline is fail-soft (`|| true`) and every
+# empty result gets an EXPLICIT BUILD REFUSED with diagnostics.
 CUDA_OPS_ARCHS="unknown"
 if command -v cuobjdump >/dev/null 2>&1; then
-  _so="$(unzip -l "$WHEEL_FILE" | awk '/lmcache\/cuda_ops.*\.so$/{print $NF; exit}')"
+  _so="$(python3 -c 'import sys, zipfile
+for n in zipfile.ZipFile(sys.argv[1]).namelist():
+    if n.startswith("lmcache/cuda_ops") and n.endswith(".so"):
+        print(n); break' "$WHEEL_FILE" || true)"
   if [ -n "$_so" ]; then
     mkdir -p /tmp/kvp-arch && cd /tmp/kvp-arch
-    unzip -o -q "$WHEEL_FILE" "$_so"
-    CUDA_OPS_ARCHS="$(cuobjdump --list-elf "$_so" 2>/dev/null | grep -o 'sm_[0-9]*' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+    python3 -c 'import sys, zipfile
+zipfile.ZipFile(sys.argv[1]).extract(sys.argv[2], "/tmp/kvp-arch")' "$WHEEL_FILE" "$_so"
+    CUDA_OPS_ARCHS="$(cuobjdump --list-elf "/tmp/kvp-arch/$_so" | grep -o 'sm_[0-9]*' | sort -u | tr '\n' ' ' | sed 's/ $//' || true)"
     cd - >/dev/null
   fi
   echo "[in-container] cuda_ops archs (cuobjdump): $CUDA_OPS_ARCHS"
+  if [ -z "$CUDA_OPS_ARCHS" ] || [ "$CUDA_OPS_ARCHS" = "unknown" ]; then
+    echo "BUILD REFUSED: cuobjdump produced no architectures (wheel member: '${_so:-none}')" >&2
+    echo "  raw 'cuobjdump --list-elf' output:" >&2
+    cuobjdump --list-elf "/tmp/kvp-arch/${_so:-missing.so}" >&2 || true
+    exit 1
+  fi
   case " $CUDA_OPS_ARCHS " in
     *" sm_120 "*) : ;;
     *) echo "BUILD REFUSED: cuda_ops*.so does NOT contain sm_120 (found: '$CUDA_OPS_ARCHS')" >&2
