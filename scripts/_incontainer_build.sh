@@ -253,25 +253,55 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
   set -e
   cat "$KVP_WORK/pytest-report.txt"
 
-  # C12: summary gate -- rc==0, summary found, skipped==0, passed>0.
+  # C12: summary gate -- rc==0, junit report parsable, skipped==0, passed>0.
+  # r16 P1: the summary is read from the --junitxml report, NOT from the text
+  # output -- with `log_cli = true` in pytest.ini the summary line carries a
+  # `=`-decoration and a text grep misses it on a GREEN run (hardware log
+  # 19.11: `grep -E '^[0-9]+ (passed|...)'` found nothing ->
+  # "pytest summary not found" on a green suite). The same counts feed C13.
   if [ "$rc" != "0" ]; then
     echo "REGRESSION FAILURE: pytest exited rc=$rc -- aborting build" >&2
     exit 1
   fi
-  _summary="$(grep -E '^[0-9]+ (passed|failed|error)' "$KVP_WORK/pytest-report.txt" | tail -1 || true)"
-  if [ -z "$_summary" ]; then
-    echo "REGRESSION FAILURE: pytest summary not found -- suite died before completion" >&2
+  _kvp_junit_counts() {
+    # $1 = junit xml path; prints "tests failures errors skipped passed"
+    python3 - "$1" <<'PY'
+import sys, xml.etree.ElementTree as ET
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+except Exception as e:
+    print(f"__ERROR__{e}")
+    raise SystemExit(0)
+suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+if not suites:
+    print("__ERROR__no testsuite elements")
+    raise SystemExit(0)
+def _sum(attr):
+    return sum(int(s.get(attr, 0) or 0) for s in suites)
+tests, failures, errors, skipped = _sum("tests"), _sum("failures"), _sum("errors"), _sum("skipped")
+passed = tests - failures - errors - skipped
+print(f"{tests} {failures} {errors} {skipped} {passed}")
+PY
+  }
+  _counts="$(_kvp_junit_counts "$KVP_WORK/pytest-report.xml")"
+  case "$_counts" in
+    __ERROR__*)
+      echo "REGRESSION FAILURE: junit report missing/unparsable ($KVP_WORK/pytest-report.xml): ${_counts#__ERROR__}" >&2
+      exit 1 ;;
+  esac
+  set -- $_counts
+  _tests="$1" _failures="$2" _errors="$3" _skipped="$4" _passed="$5"
+  if [ "$_failures" != "0" ] || [ "$_errors" != "0" ]; then
+    echo "REGRESSION FAILURE: gate reported failures (failures=$_failures, errors=$_errors)" >&2
     exit 1
   fi
-  _skipped="$(python3 -c 'import re,sys; m=re.search(r"(\d+) skipped", sys.argv[1]); print(m.group(1) if m else 0)' "$_summary")"
-  _passed="$(python3 -c 'import re,sys; m=re.search(r"(\d+) passed", sys.argv[1]); print(m.group(1) if m else 0)' "$_summary")"
   if [ "$_skipped" != "0" ] || [ "$_passed" = "0" ]; then
     echo "REGRESSION FAILURE: gate did not run cleanly (passed=$_passed, skipped=$_skipped)" >&2
     echo "  The five CPU files must run 0 skipped, >0 passed. SKIPPED rows:" >&2
     grep '^SKIPPED \[' "$KVP_WORK/pytest-report.txt" >&2 || true
     exit 1
   fi
-  echo "pytest rc=$rc -- CPU gate PASSED ($_summary)"
+  echo "CPU gate PASSED ($_passed passed, $_failures failed, $_errors errors, $_skipped skipped)"
 
   # C13: GPU step (r9 behaviour: torch.cuda check, skip!=0 refuse, etc.)
   GPU_REGRESSION_RUN=false
@@ -294,9 +324,20 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
       echo "REGRESSION FAILURE: GPU regression pytest exited rc=$_gpu_rc" >&2
       exit 1
     fi
-    _gpu_summary="$(grep -E '^[0-9]+ (passed|failed|error|skipped)' "$KVP_WORK/pytest-gpu-report.txt" | tail -1 || true)"
-    _gpu_skipped="$(python3 -c 'import re,sys; m=re.search(r"(\d+) skipped", sys.argv[1]); print(m.group(1) if m else 0)' "${_gpu_summary:-}")"
-    _gpu_passed="$(python3 -c 'import re,sys; m=re.search(r"(\d+) passed", sys.argv[1]); print(m.group(1) if m else 0)' "${_gpu_summary:-}")"
+    # r16 P1: same junit-based counting as C12 (the text summary is decorated
+    # when `log_cli = true` and a text grep misses it on a green run).
+    _gpu_counts="$(_kvp_junit_counts "$KVP_WORK/pytest-gpu-report.xml")"
+    case "$_gpu_counts" in
+      __ERROR__*)
+        echo "REGRESSION FAILURE: junit report missing/unparsable ($KVP_WORK/pytest-gpu-report.xml): ${_gpu_counts#__ERROR__}" >&2
+        exit 1 ;;
+    esac
+    set -- $_gpu_counts
+    _gpu_tests="$1" _gpu_failures="$2" _gpu_errors="$3" _gpu_skipped="$4" _gpu_passed="$5"
+    if [ "$_gpu_failures" != "0" ] || [ "$_gpu_errors" != "0" ]; then
+      echo "REGRESSION FAILURE: GPU regression reported failures (failures=$_gpu_failures, errors=$_gpu_errors)" >&2
+      exit 1
+    fi
     if [ "$_gpu_skipped" != "0" ] || [ "$_gpu_passed" = "0" ]; then
       echo "REGRESSION FAILURE: GPU regression did NOT run (passed=$_gpu_passed, skipped=$_gpu_skipped)" >&2
       grep '^SKIPPED \[' "$KVP_WORK/pytest-gpu-report.txt" >&2 || true
@@ -304,7 +345,7 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
     fi
     GPU_REGRESSION_RUN=true
     export GPU_REGRESSION_RUN=true
-    echo "[in-container] GPU regression PASSED ($_gpu_passed passed, 0 skipped)"
+    echo "GPU regression PASSED ($_gpu_passed passed, $_gpu_failures failed, $_gpu_errors errors, $_gpu_skipped skipped)"
   else
     export GPU_REGRESSION_RUN=false
     echo "[in-container] GPU regression step SKIPPED (set KVP_BUILD_GPU_TESTS=1)"
