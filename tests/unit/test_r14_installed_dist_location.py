@@ -306,9 +306,13 @@ def test_no_site_packages_substring_check_left():
 
 
 def test_c8_uses_the_shared_assert_installed():
-    """C8 must import assert_installed from the shared module (one criterion
-    for the heredoc and the plugin), not keep a private copy."""
+    """C8 must delegate to the shared gate logic (r16 P3: kvpersist.gate_common
+    check-imports wraps assert_installed) -- one criterion for the heredoc,
+    the plugin and the fast rerun script, not private copies."""
     src = INCONTAINER.read_text()
-    assert "from kvp_assert_installed import assert_installed" in src, (
-        "C8 must use the shared assert_installed()")
-    assert 'assert_installed(mods' in src, "C8 must call assert_installed(mods...)"
+    assert "kvpersist.gate_common check-imports" in src, (
+        "C8 must run the shared gate_common check-imports")
+    gate = (ROOT / "implementation" / "kvpersist" / "gate_common.py").read_text()
+    assert "from kvp_assert_installed import assert_installed" in gate, (
+        "gate_common must use the shared assert_installed()")
+    assert "assert_installed(mods" in gate, "gate_common must call assert_installed(mods...)"

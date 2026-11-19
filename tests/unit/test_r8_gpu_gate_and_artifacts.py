@@ -71,12 +71,22 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
         # honest pytest model: the module-level CUDA skip of
         # test_cache_server.py happens ONLY when that file is collected.
+        "  _src=\""
+        f"{out_file}"
+        "\"\n"
         "  case \"$*\" in\n"
         "    *test_cache_server.py*)\n"
-        f"      cat \"{gpu_file}\" ;;\n"
+        f"      cat \"{gpu_file}\"; _src=\"{gpu_file}\" ;;\n"
         "    *)\n"
         f"      cat \"{out_file}\" ;;\n"
         "  esac\n"
+        # r16 P1: the C12/C13 gates count from the --junitxml report -- derive
+        # the counts from the canned text and write the report like real pytest
+        "  _xml=\"\"\n"
+        "  for _a in \"$@\"; do case \"$_a\" in --junitxml=*) _xml=\"${_a#--junitxml=}\" ;; esac; done\n"
+        "  if [ -n \"$_xml\" ]; then\n"
+        "    /usr/bin/python3 -c \"import re,sys; t=open(sys.argv[1]).read(); g=lambda p: int(m.group(1)) if (m:=re.search(p,t)) else 0; s,f,p=g(r'(\\\\d+) skipped'),g(r'(\\\\d+) failed'),g(r'(\\\\d+) passed'); print('<?xml version=\\\"1.0\\\"?><testsuites><testsuite name=\\\"stub\\\" tests=\\\"%d\\\" failures=\\\"%d\\\" errors=\\\"0\\\" skipped=\\\"%d\\\"></testsuite></testsuites>' % (s+f+p,f,s))\" \"$_src\" > \"$_xml\"\n"
+        "  fi\n"
         f"  exit {pytest_rc}\n"
         "fi\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'Python 3.12.3'; exit 0; fi\n"
@@ -99,6 +109,16 @@ def _make_stubs(tmp_path: pathlib.Path, pytest_out: str, pytest_rc: int = 0,
         # r10: the import-check heredoc runs as `python3 -P -` -- it must see
         # site-packages modules; the stub accepts it and prints the proof lines.
         "if [ \"$1\" = \"-P\" ]; then cat > /dev/null; echo 'lmcache.__file__ = /usr/lib/python3/site-packages/lmcache/__init__.py'; echo 'lmcache.cuda_ops.__file__ = /usr/lib/python3/site-packages/lmcache/cuda_ops.so'; echo 'lmcache.lmcache_native.__file__ = /usr/lib/python3/site-packages/lmcache/lmcache_native.so'; echo '[in-container] import-check OK (all native modules from site-packages)'; exit 0; fi\n"
+        # r16 P3: the shared gate module runs for real EXCEPT check-imports (no
+        # installed lmcache in the fixtures); junit-counts must run for real
+        # (the C12/C13 gates count from the junit report)
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"kvpersist.gate_common\" ]; then\n"
+        "  shift 2\n"
+        "  if [ \"${1:-}\" = \"check-imports\" ]; then\n"
+        "    echo '[in-container] import-check OK (all native modules under the installed distribution location)'; exit 0\n"
+        "  fi\n"
+        "  PYTHONPATH=" + str(ROOT / "implementation") + " exec /usr/bin/python3 -m kvpersist.gate_common \"$@\"\n"
+        "fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "exec /usr/bin/python3 \"$@\"\n"
     )

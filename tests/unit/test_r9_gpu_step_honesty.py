@@ -164,10 +164,21 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         "  esac\n"
         "  exit 0\nfi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n"
+        "  _src=\""
+        f"{out}"
+        "\"\n"
         "  case \"$*\" in\n"
-        f"    *test_cache_server.py*) cat \"{gpu_out}\" ;;\n"
+        f"    *test_cache_server.py*) cat \"{gpu_out}\"; _src=\"{gpu_out}\" ;;\n"
         f"    *) cat \"{out}\" ;;\n"
-        "  esac\n  exit 0\nfi\n"
+        "  esac\n"
+        # r16 P1: the C12/C13 gates count from the --junitxml report -- derive
+        # the counts from the canned text and write the report like real pytest
+        "  _xml=\"\"\n"
+        "  for _a in \"$@\"; do case \"$_a\" in --junitxml=*) _xml=\"${_a#--junitxml=}\" ;; esac; done\n"
+        "  if [ -n \"$_xml\" ]; then\n"
+        "    /usr/bin/python3 -c \"import re,sys; t=open(sys.argv[1]).read(); g=lambda p: int(m.group(1)) if (m:=re.search(p,t)) else 0; s,f,p=g(r'(\\\\d+) skipped'),g(r'(\\\\d+) failed'),g(r'(\\\\d+) passed'); print('<?xml version=\\\"1.0\\\"?><testsuites><testsuite name=\\\"stub\\\" tests=\\\"%d\\\" failures=\\\"%d\\\" errors=\\\"0\\\" skipped=\\\"%d\\\"></testsuite></testsuites>' % (s+f+p,f,s))\" \"$_src\" > \"$_xml\"\n"
+        "  fi\n"
+        "  exit 0\nfi\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'Python 3.12.3'; exit 0; fi\n"
         "if [ \"$1\" = \"-c\" ]; then\n  case \"$2\" in\n"
         "    *torch.version.cuda*) echo '13.0' ;;\n"
@@ -180,6 +191,15 @@ def test_gpu_step_skip_is_not_success(tmp_path):
         "    *) echo '' ;;\n  esac\n  exit 0\nfi\n"
         "if [ \"$1\" = \"-\" ] || [ \"$1\" = \"-P\" ]; then cat > /dev/null; exit 0; fi\n"
         "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then shift 2; exec pip \"$@\"; fi\n"
+        # r16 P3: shared gate module -- check-imports stubbed (no installed
+        # lmcache in the fixtures), junit-counts runs for real
+        "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"kvpersist.gate_common\" ]; then\n"
+        "  shift 2\n"
+        "  if [ \"${1:-}\" = \"check-imports\" ]; then\n"
+        "    echo '[in-container] import-check OK (all native modules under the installed distribution location)'; exit 0\n"
+        "  fi\n"
+        "  PYTHONPATH=" + str(ROOT / "implementation") + " exec /usr/bin/python3 -m kvpersist.gate_common \"$@\"\n"
+        "fi\n"
         "if [ \"$1\" = \"-m\" ]; then exit 0; fi\n"
         "exec /usr/bin/python3 \"$@\"\n")
     (bin_dir / "python3").chmod(0o755)

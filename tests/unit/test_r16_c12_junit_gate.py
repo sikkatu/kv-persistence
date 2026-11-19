@@ -87,6 +87,7 @@ def _run_c12(tmp_path: pathlib.Path, suite: pathlib.Path,
         "set -u\n",
         f'rc="{run.returncode}"\n',
         f'KVP_WORK="{work}"\n',
+        f'KVP_IMPL="{ROOT / "implementation"}"\n',
         _c12_block() + "\n",
         "echo C12-DONE\n",
     ]))

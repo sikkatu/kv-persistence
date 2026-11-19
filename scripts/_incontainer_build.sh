@@ -198,24 +198,11 @@ pip show lmcache 2>/dev/null | sed -n '1,3p' || true
 # lmcache distribution root (importlib.metadata), and that root is not inside
 # the source tree. Runs before the test-deps install, so the module must be
 # importable WITHOUT pytest (lazy `import pytest` inside the hook only).
-PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" python3 -P - <<'PY' || exit 1
-import sys
-import lmcache
-import lmcache.cuda_ops
-import lmcache.lmcache_native
-from lmcache.integration.vllm import lmcache_mp_connector
-from lmcache.v1.multiprocess.modules import lmcache_driven_transfer
-from kvp_assert_installed import assert_installed
-mods = (lmcache, sys.modules["lmcache.cuda_ops"], sys.modules["lmcache.lmcache_native"])
-try:
-    assert_installed(mods, source_roots=[__import__("os").environ.get("KVP_LMC_SRC", ".")])
-except RuntimeError as e:
-    print(str(e), file=sys.stderr)
-    raise SystemExit(1)
-for mod in mods:
-    print(f"{mod.__name__}.__file__ =", mod.__file__)
-print("[in-container] import-check OK (all native modules under the installed distribution location)")
-PY
+# r16 P3: the import-check and the junit counting live in the shared module
+# kvpersist.gate_common so `scripts/rerun-lmcache-gate.sh` runs the SAME gate
+# logic (not a copy). The module stays importable WITHOUT pytest (C8 runs
+# before the test-deps install).
+PYTHONPATH="$KVP_SCRIPTS" KVP_LMC_SRC="$LMC_SRC" python3 -P -m kvpersist.gate_common check-imports || exit 1
 
 # ---- C9-C13: tests (CPU gate + optional GPU step) ---------------------------
 if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
@@ -264,24 +251,10 @@ if [ "$KVP_BUILD_SKIP_TESTS" = "0" ]; then
     exit 1
   fi
   _kvp_junit_counts() {
-    # $1 = junit xml path; prints "tests failures errors skipped passed"
-    python3 - "$1" <<'PY'
-import sys, xml.etree.ElementTree as ET
-try:
-    root = ET.parse(sys.argv[1]).getroot()
-except Exception as e:
-    print(f"__ERROR__{e}")
-    raise SystemExit(0)
-suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
-if not suites:
-    print("__ERROR__no testsuite elements")
-    raise SystemExit(0)
-def _sum(attr):
-    return sum(int(s.get(attr, 0) or 0) for s in suites)
-tests, failures, errors, skipped = _sum("tests"), _sum("failures"), _sum("errors"), _sum("skipped")
-passed = tests - failures - errors - skipped
-print(f"{tests} {failures} {errors} {skipped} {passed}")
-PY
+    # $1 = junit xml path; prints "tests failures errors skipped passed".
+    # r16 P3: shared logic in kvpersist.gate_common (same code the fast
+    # rerun script uses -- never a copy).
+    PYTHONPATH="$KVP_IMPL" python3 -m kvpersist.gate_common junit-counts "$1"
   }
   _counts="$(_kvp_junit_counts "$KVP_WORK/pytest-report.xml")"
   case "$_counts" in

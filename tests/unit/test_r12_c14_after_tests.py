@@ -111,6 +111,16 @@ def _run(tmp_path: pathlib.Path, skip_tests: str, mutate_on: str):
         '  exit 0\n',
         'fi\n',
         f'if [ "$1" = "-m" ] && [ "$2" = "kvpersist.check_wheel_native" ]; then shift 2; PYTHONPATH={IMPL} exec /usr/bin/python3 -m kvpersist.check_wheel_native "$@"; fi\n',
+        # r16 P3: the shared gate module runs for real EXCEPT check-imports (the
+        # fixtures have no installed lmcache -- import-check was stubbed the
+        # same way before, when it was a heredoc)
+        f'if [ "$1" = "-m" ] && [ "$2" = "kvpersist.gate_common" ]; then\n',
+        '  shift 2\n',
+        '  if [ "${1:-}" = "check-imports" ]; then\n',
+        '    echo "[in-container] import-check OK (all native modules under the installed distribution location)"; exit 0\n',
+        '  fi\n',
+        f'  PYTHONPATH={IMPL} exec /usr/bin/python3 -m kvpersist.gate_common "$@"\n',
+        'fi\n',
         'if [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then\n',
         # r16 P1: the C12 gate counts from the --junitxml report -- the stub
         # must produce one (5 passed) like the real pytest does
