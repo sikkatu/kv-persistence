@@ -172,12 +172,21 @@ fi
 export CUDA_OPS_ARCHS
 
 # ---- C7: install the built wheel (pip show before/after) --------------------
+# r13 P0: `pip show ... | head -3` closes the pipe early -- pip writes to the
+# closed stdout and exits 120 (SIGPIPE), which under `pipefail` ends the
+# script SILENTLY (hardware log: docker run rc=120 after a successful
+# install). `sed -n '1,3p'` reads the whole output instead. The BEFORE line
+# prints "(not installed)" ONLY when `pip show` really fails.
 echo "[in-container] pip show lmcache BEFORE install:"
-pip show lmcache 2>/dev/null | head -3 || echo "(not installed)"
+if pip show lmcache >/dev/null 2>&1; then
+  pip show lmcache 2>/dev/null | sed -n '1,3p' || true
+else
+  echo "(not installed)"
+fi
 pip install --no-deps --force-reinstall "$WHEEL_FILE" || {
   echo "BUILD REFUSED: cannot install the built wheel." >&2; exit 1; }
 echo "[in-container] pip show lmcache AFTER install:"
-pip show lmcache 2>/dev/null | head -3
+pip show lmcache 2>/dev/null | sed -n '1,3p' || true
 
 # ---- C8: import-check from site-packages (python3 -P) -----------------------
 python3 -P - <<'PY' || exit 1
