@@ -57,6 +57,16 @@ def _stub_env(tmp_path: pathlib.Path) -> tuple:
     build_dir = tmp_path / "build"
     (build_dir / "LMCache" / ".git").mkdir(parents=True)
     (build_dir / "LMCache" / "requirements").mkdir()
+    # r15: the static import gate needs the five CPU-gate files to exist
+    # (fixtures adapt to the gate -- the gate is not weakened)
+    for _rel in ("tests/v1/test_lmcache_mp_connector.py",
+                 "tests/v1/test_vllm_mp_adapter.py",
+                 "tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py",
+                 "tests/v1/multiprocess/test_native_state_lookup.py",
+                 "tests/v1/multiprocess/test_l1_owner_completion.py"):
+        _p = build_dir / "LMCache" / _rel
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text("def test_ok():\n    assert True\n")
     pdir = tmp_path / "patches"
     pdir.mkdir()
     (pdir / "4136-mp-retrieve-abort.patch").write_text("a\n")

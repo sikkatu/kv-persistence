@@ -90,6 +90,17 @@ def _run_build_lmcache(tmp_path: pathlib.Path):
     src2 = build_dir / "LMCache"
     (src2 / ".git").mkdir(parents=True)
     (src2 / "requirements").mkdir()
+    # r15: the static import gate needs the five CPU-gate files to exist
+    # (fixtures adapt to the gate -- the gate is not weakened)
+    for _tree in (src, src2):
+        for _rel in ("tests/v1/test_lmcache_mp_connector.py",
+                     "tests/v1/test_vllm_mp_adapter.py",
+                     "tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py",
+                     "tests/v1/multiprocess/test_native_state_lookup.py",
+                     "tests/v1/multiprocess/test_l1_owner_completion.py"):
+            _p = _tree / _rel
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            _p.write_text("def test_ok():\n    assert True\n")
     pdir = tmp_path / "patches"; pdir.mkdir()
     (pdir / "4136-mp-retrieve-abort.patch").write_text("diff --git a/x b/x\n")
     (pdir / "5972-incomplete-kv-objects.patch").write_text("diff --git a/y b/y\n")

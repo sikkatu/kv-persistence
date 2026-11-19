@@ -159,6 +159,65 @@ apply_patch "$PATCH_5972" "5972-incomplete-kv-objects"
 PATCHED_STATE="$(git -C "$SRC" add -A && git -C "$SRC" diff --cached | sha256sum | awk '{print $1}')"
 note "patched tree fingerprint (diff sha256): $PATCHED_STATE"
 
+# r15 P1: static import gate for the patched tree -- catches stale patch/test
+# imports (like the IPCCacheServerKey move to lmcache.v1.common) in seconds,
+# BEFORE the 20-minute docker compile. Scope: the files touched by the patches
+# (git diff vs HEAD -- the tree is staged above) + the five CPU-gate test files
+# + their transitive tests/... imports (same ast walk). No torch/vllm needed.
+GATE_SCOPE="$(python3 - "$SRC" <<'PY'
+import ast, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+patched = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "HEAD"],
+                         capture_output=True, text=True, check=True).stdout.split()
+gate = ["tests/v1/test_lmcache_mp_connector.py", "tests/v1/test_vllm_mp_adapter.py",
+        "tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py",
+        "tests/v1/multiprocess/test_native_state_lookup.py",
+        "tests/v1/multiprocess/test_l1_owner_completion.py"]
+seen, queue, missing = set(), list(patched) + gate, []
+while queue:
+    rel = queue.pop()
+    if rel in seen:
+        continue
+    p = root / rel
+    if not p.is_file():
+        # a gate file absent from the tree is a sign this is not the pinned
+        # source -- the EMPTY-scope refusal below catches it
+        missing.append(rel)
+        continue
+    seen.add(rel)
+    try:
+        tree = ast.parse(p.read_text())
+    except SyntaxError:
+        continue
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.ImportFrom) and n.level == 0 and n.module
+                and n.module.split(".")[0] == "tests"):
+            parts = n.module.split(".")
+            mod_file = "/".join(parts) + ".py"
+            pkg_init = "/".join(parts) + "/__init__.py"
+            for cand in (mod_file, pkg_init):
+                if (root / cand).is_file() and cand not in seen:
+                    queue.append(cand)
+print("\n".join(sorted(seen)))
+PY
+)"
+[ -n "$GATE_SCOPE" ] || {
+  echo "BUILD REFUSED (stale patch/test import): gate scope is EMPTY -- refusing to skip the import gate" >&2
+  exit 1
+}
+GATE_FILES=()
+while IFS= read -r _f; do
+  [ -n "$_f" ] && GATE_FILES+=("$_f")
+done <<< "$GATE_SCOPE"
+if ! python3 "$ROOT/implementation/kvpersist/check_patched_imports.py" "$SRC" "${GATE_FILES[@]}"; then
+  echo "BUILD REFUSED (stale patch/test import): the patched tree carries unresolvable imports" >&2
+  echo "  A patch taken from a PR head is NOT automatically compatible with the pinned base" >&2
+  echo "  ('applies cleanly' does NOT mean 'semantically current') -- port the patch to the pin" >&2
+  echo "  (fix the import/stale name in the patch and re-export it), do NOT weaken this gate." >&2
+  exit 1
+fi
+note "patched-tree import gate OK (${#GATE_FILES[@]} files)"
+
 # r3 P0-2: inside the container the build runs as root while /usr/src/lmcache
 # is mounted from the host (different uid) -- git refuses with "dubious
 # ownership" and setuptools_scm's `pip wheel` aborts. The container is

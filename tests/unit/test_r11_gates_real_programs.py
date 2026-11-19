@@ -180,6 +180,16 @@ def test_provenance_json_fields(tmp_path):
     out_dir.mkdir()
     (build_dir / "LMCache" / ".git").mkdir(parents=True)
     (build_dir / "LMCache" / "requirements").mkdir()
+    # r15: the static import gate needs the five CPU-gate files to exist
+    # (fixtures adapt to the gate -- the gate is not weakened)
+    for _rel in ("tests/v1/test_lmcache_mp_connector.py",
+                 "tests/v1/test_vllm_mp_adapter.py",
+                 "tests/v1/multiprocess/test_lmcache_driven_transfer_skip.py",
+                 "tests/v1/multiprocess/test_native_state_lookup.py",
+                 "tests/v1/multiprocess/test_l1_owner_completion.py"):
+        _p = build_dir / "LMCache" / _rel
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text("def test_ok():\n    assert True\n")
     (build_dir / "wheels").mkdir(parents=True)
     # the host phase sources identity.env from KVP_BUILD_DIR (= WORK_DIR)
     # the values are UNIQUE (not the script defaults) so a renamed variable
