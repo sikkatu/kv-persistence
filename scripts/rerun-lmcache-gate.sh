@@ -6,26 +6,30 @@
 # only patch test files needs no recompile. This script:
 #   1. re-applies the two patches to a FRESH checkout of the pinned base,
 #   2. runs the r15 P1 static import gate (check_patched_imports.py),
-#   3. takes the ALREADY BUILT wheel from a previous work dir (auto-detects
-#      the newest /tmp/kvp-lmc-build.* carrying wheels/*.whl, or WORK_DIR),
+#   3. takes the ALREADY BUILT wheel from the build output dir (OUT_DIR,
+#      default $ROOT/live/lmcache-build -- the same place build-lmcache.sh
+#      writes it to, mounted at /kvp-wheels during the build),
 #   4. installs it into the same pinned image and runs C8-C12 there.
 #
 # Conditions (all fail-loud):
 #   (a) the PRODUCTION part of the patched tree (everything except tests/ and
 #       docs/) must match the tree the wheel was built from -- the hash is
-#       recorded in the work dir (rerun-prod-hash.txt) or provenance; a
-#       mismatch refuses with "need a full build";
+#       recorded by build-lmcache.sh in $OUT_DIR/rerun-prod-hash.txt BEFORE
+#       the build. No hash file -> "Need a full build" (or --trust-wheel,
+#       which records the CURRENT hash with a loud warning);
 #   (b) end banner `NOT production-acceptable: no provenance/identity
 #       written` -- nothing is written to live/lmcache-build;
 #   (c) the SAME gate logic as _incontainer_build.sh -- the shared module
-#       kvpersist.gate_common (C8 import-check, C12 junit counting), never a
-#       copy.
+#       kvpersist.gate_common (C8 import-check, C12 junit counting, prod-hash
+#       algorithm), never a copy.
 #
 # Final acceptance is still ONLY via the full `scripts/build-lmcache.sh`.
 #
 # Usage:
-#   bash scripts/rerun-lmcache-gate.sh [WORK_DIR]
-# (WORK_DIR = a previous build-lmcache work dir; autodetected when omitted)
+#   bash scripts/rerun-lmcache-gate.sh [--trust-wheel] [OUT_DIR]
+# (OUT_DIR = the build output dir, default $ROOT/live/lmcache-build or
+#  $KVP_OUT_DIR; --trust-wheel records the CURRENT production hash when the
+#  build predates the hash file -- loudly assumed, never silently)
 
 set -Eeuo pipefail
 
@@ -63,22 +67,32 @@ PATCH_5972="$PATCH_DIR/5972-incomplete-kv-objects.patch"
 [ -f "$PATCH_5972" ] || die "missing patch: $PATCH_5972"
 
 # ---------------------------------------------------------------------------
-# WORK_DIR: explicit argument, or the newest /tmp/kvp-lmc-build.* with a wheel
+# OUT_DIR: the build output dir (where build-lmcache.sh writes the wheel and
+# the production hash). Optional argument [OUT_DIR]; --trust-wheel records
+# the CURRENT production hash when the build predates the hash file.
 # ---------------------------------------------------------------------------
-WORK_DIR="${1:-}"
-if [ -z "$WORK_DIR" ]; then
-  for _cand in $(ls -d /tmp/kvp-lmc-build.* 2>/dev/null | sort -r); do
-    if [ -n "$(find "$_cand/wheels" -name '*.whl' -print -quit 2>/dev/null)" ]; then
-      WORK_DIR="$_cand"
-      break
-    fi
-  done
+TRUST_WHEEL=0
+OUT_DIR="${KVP_OUT_DIR:-$ROOT/live/lmcache-build}"
+for _arg in "$@"; do
+  case "$_arg" in
+    --trust-wheel) TRUST_WHEEL=1 ;;
+    -*) die "unknown option: $_arg (usage: bash scripts/rerun-lmcache-gate.sh [--trust-wheel] [OUT_DIR])" ;;
+    *) OUT_DIR="$_arg" ;;
+  esac
+done
+WHEELS="$OUT_DIR/wheels"
+[ -d "$WHEELS" ] || die "wheel dir not found: $WHEELS -- run scripts/build-lmcache.sh first (or pass the right OUT_DIR)"
+# r17 B3: EXACTLY one wheel, refused otherwise (C5's rm -f *.whl leaves the
+# wheel of the LAST build here, even a failed one -- no arbitrary pick)
+_wheel_list=("$WHEELS"/*.whl)
+if [ ! -e "${_wheel_list[0]:-}" ]; then
+  die "no *.whl in $WHEELS -- run scripts/build-lmcache.sh first (no wheel to rerun against)"
 fi
-[ -n "$WORK_DIR" ] || die "no previous work dir with a wheel (pass one as \$1 or build first)"
-[ -d "$WORK_DIR" ] || die "work dir not found: $WORK_DIR"
-WHEEL="$(find "$WORK_DIR/wheels" -name '*.whl' -print -quit 2>/dev/null)"
-[ -n "$WHEEL" ] || die "no *.whl in $WORK_DIR/wheels -- run scripts/build-lmcache.sh first (no wheel to rerun against)"
-note "work dir: $WORK_DIR"
+if [ "${#_wheel_list[@]}" != "1" ]; then
+  die "expected exactly one wheel in $WHEELS, found ${#_wheel_list[@]} -- refuse to pick one arbitrarily (clean the dir or rebuild)"
+fi
+WHEEL="${_wheel_list[0]}"
+note "out dir:  $OUT_DIR"
 note "wheel:    $WHEEL"
 
 # ---------------------------------------------------------------------------
@@ -113,19 +127,31 @@ apply_patch "$PATCH_5972" "5972-incomplete-kv-objects"
 
 # ---------------------------------------------------------------------------
 # (a) production-part check: everything except tests/ and docs/ must match
-# the tree the wheel was built from (hash recorded at build time or now)
+# the tree the wheel was built from (recorded by build-lmcache.sh BEFORE the
+# build, in $OUT_DIR/rerun-prod-hash.txt)
 # ---------------------------------------------------------------------------
-PROD_HASH="$(git -C "$SRC" add -A >/dev/null 2>&1; \
-  git -C "$SRC" diff --cached --name-only | grep -v '^tests/' | grep -v '^docs/' | sort \
-  | while IFS= read -r _f; do
-      printf '%s ' "$_f"
-      git -C "$SRC" show ":$_f" 2>/dev/null | sha256sum | awk '{print $1}'
-    done | sha256sum | awk '{print $1}')"
-REF_HASH_FILE="$WORK_DIR/rerun-prod-hash.txt"
+PROD_HASH="$(PYTHONPATH="$ROOT/implementation" python3 -m kvpersist.gate_common prod-hash "$SRC")" \
+  || die "cannot compute the production-part hash of the patched tree"
+REF_HASH_FILE="$OUT_DIR/rerun-prod-hash.txt"
 if [ ! -f "$REF_HASH_FILE" ]; then
-  # fall back: record the CURRENT hash (first rerun against this work dir)
-  echo "$PROD_HASH" > "$REF_HASH_FILE"
-  note "production hash recorded for this work dir (first rerun): $PROD_HASH"
+  if [ "$TRUST_WHEEL" = "1" ]; then
+    # r17 B3: the ONLY place that records a hash outside the build. Loud:
+    # the operator asserts the wheel was built from THIS production tree.
+    echo "$PROD_HASH" > "$REF_HASH_FILE"
+    echo "WARNING(rerun-lmcache-gate): --trust-wheel -- ASSUMING the wheel was built from this production tree." >&2
+    echo "  No $REF_HASH_FILE existed (the build predates the hash recording)." >&2
+    echo "  The CURRENT production hash is recorded: $PROD_HASH" >&2
+    echo "  If the production code changed since that build, this rerun tests the WRONG wheel." >&2
+    note "production hash recorded via --trust-wheel ($PROD_HASH)"
+  else
+    echo "ERROR(rerun-lmcache-gate): no production hash recorded: $REF_HASH_FILE" >&2
+    echo "  The wheel cannot be tied to a production tree -- the gate would run" >&2
+    echo "  against a wheel of unknown provenance." >&2
+    echo "  Need a full build: bash scripts/build-lmcache.sh" >&2
+    echo "  (or, if this wheel really was built from the current production tree:" >&2
+    echo "   bash scripts/rerun-lmcache-gate.sh --trust-wheel)" >&2
+    exit 1
+  fi
 else
   REF_HASH="$(cat "$REF_HASH_FILE")"
   if [ "$REF_HASH" != "$PROD_HASH" ]; then
@@ -198,14 +224,14 @@ note "patched-tree import gate OK (${#GATE_FILES[@]} files)"
 # ---------------------------------------------------------------------------
 RERUN_WORK="$RERUN_DIR/work"
 mkdir -p "$RERUN_WORK"
-note "running C8-C12 in the pinned image (wheel from $WORK_DIR)"
+note "running C8-C12 in the pinned image (wheel from $WHEELS)"
 RERUN_RC=0
 docker run --rm \
   -v "$SRC":/usr/src/lmcache:rw \
   -v "$ROOT/scripts":/kvp-scripts:ro \
   -v "$ROOT/implementation":/kvp-impl:ro \
   -v "$RERUN_WORK":/kvp-work:rw \
-  -v "$WORK_DIR/wheels":/kvp-wheels:ro \
+  -v "$WHEELS":/kvp-wheels:ro \
   -e PYTHONUNBUFFERED=1 \
   -e KVP_LMC_SRC=/usr/src/lmcache \
   -e KVP_SCRIPTS_DIR=/kvp-scripts \

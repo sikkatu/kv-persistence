@@ -86,6 +86,9 @@ IMAGE="$BASE_IMAGE"  # legacy name used by the docker run below
 WORK_DIR="${KVP_BUILD_DIR:-$(mktemp -d /tmp/kvp-lmc-build.XXXXXX)}"
 OUT_DIR="${KVP_OUT_DIR:-$ROOT/live/lmcache-build}"
 mkdir -p "$OUT_DIR"
+# r17 B3: never leave a stale production hash from a previous build around
+# -- the file is rewritten below, BEFORE the docker run
+rm -f "$OUT_DIR/rerun-prod-hash.txt"
 
 note "patch dir : $PATCH_DIR"
 note "work dir  : $WORK_DIR"
@@ -166,6 +169,18 @@ apply_patch "$PATCH_5972" "5972-incomplete-kv-objects"
 # modified+added files that were staged, exactly the applied patch content.
 PATCHED_STATE="$(git -C "$SRC" add -A && git -C "$SRC" diff --cached | sha256sum | awk '{print $1}')"
 note "patched tree fingerprint (diff sha256): $PATCHED_STATE"
+
+# r17 B3: record the PRODUCTION-part hash of the patched tree (everything
+# except tests/ and docs/) BEFORE the docker run -- scripts/rerun-lmcache-
+# gate.sh compares against this file to know whether the wheel still matches
+# the production tree. One shared algorithm (gate_common prod-hash), never a
+# bash copy.
+PROD_HASH_FILE="$OUT_DIR/rerun-prod-hash.txt"
+PROD_HASH="$(PYTHONPATH="$ROOT/implementation" python3 -m kvpersist.gate_common prod-hash "$SRC")" \
+  || die "cannot compute the production-part hash of the patched tree"
+[ -n "$PROD_HASH" ] || die "empty production-part hash -- refusing to record"
+echo "$PROD_HASH" > "$PROD_HASH_FILE"
+note "production hash recorded: $PROD_HASH_FILE ($PROD_HASH)"
 
 # r15 P1: static import gate for the patched tree -- catches stale patch/test
 # imports (like the IPCCacheServerKey move to lmcache.v1.common) in seconds,

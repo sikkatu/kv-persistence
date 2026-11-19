@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """r16 P3: fast CPU-gate rerun without rebuilding the wheel.
 
-`scripts/rerun-lmcache-gate.sh [WORK_DIR]` re-applies the patches to a fresh
-pinned checkout, runs the r15 P1 import gate, takes the ALREADY BUILT wheel
-from a previous work dir, and runs C8-C12 in the pinned image. Conditions:
+`scripts/rerun-lmcache-gate.sh [--trust-wheel] [OUT_DIR]` re-applies the
+patches to a fresh pinned checkout, runs the r15 P1 import gate, takes the
+ALREADY BUILT wheel from $OUT_DIR/wheels (the dir build-lmcache.sh writes
+to), and runs C8-C12 in the pinned image. Conditions (r17 B3):
   (a) the PRODUCTION part of the patched tree (everything except tests/ and
-      docs/) must match the tree the wheel was built from (hash recorded in
-      the work dir) -- mismatch -> "Need a full build";
+      docs/) must match the tree the wheel was built from -- the hash is
+      RECORDED BY THE BUILD (rerun-prod-hash.txt, shared gate_common
+      prod-hash algorithm) and checked on every run; missing hash -> "Need
+      a full build" unless --trust-wheel;
   (b) the end banner `NOT production-acceptable: no provenance/identity
       written` -- nothing written to live/lmcache-build;
   (c) the same gate logic as _incontainer_build.sh (shared module
@@ -27,6 +30,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -90,7 +94,9 @@ def _mini_repo(tmp_path: pathlib.Path):
 
 
 def _make_work_dir(tmp_path: pathlib.Path, prod_hash: str | None = None) -> pathlib.Path:
-    wd = tmp_path / "work"
+    """OUT_DIR fixture as the REAL build leaves it: wheels/ with exactly one
+    wheel, and rerun-prod-hash.txt recorded by the build (r17 B3)."""
+    wd = tmp_path / "out"
     (wd / "wheels").mkdir(parents=True)
     with zipfile.ZipFile(wd / "wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl", "w") as z:
         z.writestr("lmcache/__init__.py", b"# stub\n")
@@ -128,17 +134,42 @@ def _run_rerun(tmp_path: pathlib.Path, work_dir: pathlib.Path,
         env=env, cwd=str(tmp_path))
 
 
+def _record_build_hash(wd: pathlib.Path, repo: pathlib.Path, sha: str,
+                       patch_dir: pathlib.Path) -> str:
+    """Record rerun-prod-hash.txt the way the REAL build does (r17 B3):
+    hash of the PRODUCTION part of the patched tree, via the SHARED
+    gate_common prod-hash algorithm -- never a copy."""
+    chk = wd / "_hashcheck"
+    subprocess.run(["git", "clone", "-q", str(repo), str(chk)],
+                   check=True, capture_output=True, env=GIT_ENV)
+    subprocess.run(["git", "-C", str(chk), "checkout", "-q", "--detach", sha],
+                   check=True, capture_output=True, env=GIT_ENV)
+    for name in ("4136-mp-retrieve-abort.patch",
+                 "5972-incomplete-kv-objects.patch"):
+        subprocess.run(["git", "-C", str(chk), "apply",
+                        str(patch_dir / name)],
+                       check=True, capture_output=True, env=GIT_ENV)
+    r = subprocess.run(
+        [sys.executable, "-m", "kvpersist.gate_common", "prod-hash", str(chk)],
+        capture_output=True, text=True, check=True,
+        env=dict(os.environ, PYTHONPATH=str(ROOT / "implementation")))
+    h = r.stdout.strip()
+    (wd / "rerun-prod-hash.txt").write_text(h)
+    import shutil
+    shutil.rmtree(chk)
+    return h
+
+
 def test_production_hash_mismatch_refused(tmp_path):
-    """(1) first run records the production hash; after CHANGING the
-    production patch the next run must refuse with "Need a full build"
-    (mutation: a changed production tree -> this test RED)."""
+    """(1) the hash is recorded AT BUILD TIME (r17 B3); after CHANGING the
+    production patch the rerun must refuse with "Need a full build" on the
+    FIRST run (mutation: a changed production tree -> this test RED)."""
     repo, sha, patch_dir = _mini_repo(tmp_path)
     wd = _make_work_dir(tmp_path)
+    _record_build_hash(wd, repo, sha, patch_dir)
     r1 = _run_rerun(tmp_path, wd, repo, sha, patch_dir)
-    assert (wd / "rerun-prod-hash.txt").is_file(), (
-        f"the first run must record the production hash:\n{r1.stdout}\n{r1.stderr}")
     assert r1.returncode == 0, (
-        f"first run must succeed:\n{r1.stdout}\n{r1.stderr}")
+        f"first run must succeed against the recorded hash:\n{r1.stdout}\n{r1.stderr}")
     # change the PRODUCTION part of the patch -> hash mismatch
     prod = repo / "lmcache" / "prod.py"
     prod.write_text("# production code\nVALUE = 3\n")
@@ -169,6 +200,7 @@ def test_success_path_prints_not_production_banner(tmp_path):
     """(3) the success path must end with the honest banner."""
     repo, sha, patch_dir = _mini_repo(tmp_path)
     wd = _make_work_dir(tmp_path)
+    _record_build_hash(wd, repo, sha, patch_dir)
     r = _run_rerun(tmp_path, wd, repo, sha, patch_dir)
     assert r.returncode == 0, (
         f"success path must pass:\n{r.stdout}\n{r.stderr}")
@@ -183,6 +215,7 @@ def test_nothing_written_to_live(tmp_path):
     """(4) the rerun must NOT write to live/lmcache-build (no provenance)."""
     repo, sha, patch_dir = _mini_repo(tmp_path)
     wd = _make_work_dir(tmp_path)
+    _record_build_hash(wd, repo, sha, patch_dir)
     r = _run_rerun(tmp_path, wd, repo, sha, patch_dir)
     assert r.returncode == 0, f"run must pass:\n{r.stdout}\n{r.stderr}"
     live = tmp_path / "live" / "lmcache-build"

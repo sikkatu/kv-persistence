@@ -13,9 +13,40 @@ Commands:
   check-imports             the C8 import-check: import lmcache + the native
                             modules, assert_installed() against the installed
                             distribution; exit 1 with the refusal on stderr.
+  prod-hash SRC             r17 B3: hash of the PRODUCTION part of the patched
+                            tree in SRC (everything except tests/ and docs/),
+                            using the index content of the staged tree (git
+                            show :file). Prints the hash on stdout; used by
+                            build-lmcache.sh (records rerun-prod-hash.txt
+                            BEFORE docker run) and rerun-lmcache-gate.sh
+                            (compares) -- one algorithm, never a bash copy.
 """
 from __future__ import annotations
 import sys
+
+
+def prod_hash(src: str) -> str:
+    """Hash of the PRODUCTION part of the patched tree in `src` (everything
+    except tests/ and docs/). The tree is expected to be staged (`git add
+    -A`); the hash covers the sorted per-file SHA-256 of the index content.
+    r17 B3: shared by build-lmcache.sh and rerun-lmcache-gate.sh so the
+    recorded and the compared hash cannot drift apart."""
+    import hashlib
+    import subprocess
+
+    def _git(*args: str) -> bytes:
+        return subprocess.run(["git", "-C", src, *args],
+                              capture_output=True, check=True).stdout
+
+    _git("add", "-A")
+    files = _git("diff", "--cached", "--name-only").decode().split()
+    prod = sorted(f for f in files
+                  if not f.startswith("tests/") and not f.startswith("docs/"))
+    h = hashlib.sha256()
+    for f in prod:
+        content = _git("show", f":{f}")
+        h.update(f.encode() + b" " + hashlib.sha256(content).hexdigest().encode())
+    return h.hexdigest()
 
 
 def junit_counts(xml_path: str) -> str:
@@ -68,7 +99,7 @@ def check_imports() -> int:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        print("usage: gate_common.py {junit-counts XML | check-imports}",
+        print("usage: gate_common.py {junit-counts XML | check-imports | prod-hash SRC}",
               file=sys.stderr)
         return 2
     cmd = argv[0]
@@ -80,6 +111,12 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "check-imports":
         return check_imports()
+    if cmd == "prod-hash":
+        if len(argv) != 2:
+            print("usage: gate_common.py prod-hash SRC", file=sys.stderr)
+            return 2
+        print(prod_hash(argv[1]))
+        return 0
     print(f"gate_common.py: unknown command {cmd!r}", file=sys.stderr)
     return 2
 
