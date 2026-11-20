@@ -13,6 +13,46 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 18 (image-step integrity: provenance, wheel, patches)
+* `9030142` **G1** (a failed build left a stale provenance.json next to the
+  new untested wheel): the wheel lands in `$OUT_DIR/wheels` at C5 (long
+  before gates C8-C14) while provenance.json was written at the very END of
+  a successful build -- after any build failing at a gate, build-image.sh
+  would bake an image from a mismatched pair. Now build-lmcache.sh removes
+  provenance.json at the start of the build (next to
+  rerun-prod-hash.txt). Tests: real build + docker stub (rc=1 after
+  dropping the wheel) -> no provenance + real build-image.sh refuses
+  'provenance.json not found'; positive control writes a new one. Mutation
+  (drop the rm) -> RED.
+* `90984c1` **G2** (build-image.sh verified neither the wheel nor the
+  patches against provenance): now, BEFORE docker build -- exactly one
+  *.whl (zero/>1 refused), sha256(WHEEL) == wheel_sha256 from provenance
+  ('wheel does not match provenance.json (rebuild: bash
+  scripts/build-lmcache.sh)'), pr4136/pr5972 patch SHAs == current patch
+  files ('patches changed since the wheel was built: full rebuild
+  required'), tests_skipped must be "0" (refused otherwise; with
+  KVP_ALLOW_UNTESTED_WHEEL=1 a loud warning and the identity is marked
+  `untested-wheel`). Patch SHAs in the image identity come from PROVENANCE,
+  not from the current files (the old source-of-truth made the identity
+  LIE). Tests: two/zero wheels, one-byte wheel change, 4136/5972 edits,
+  tests_skipped refusal / override, consistent-pair control -- each with a
+  mutation detector on the real script.
+* `03fc6bd` **G3**: (1) provenance heredoc duplicate keys removed (7 keys
+  were written twice; strict object_pairs_hook test on the real build);
+  (2) gate_common prod-hash uses `--name-only -z` + core.quotepath=off --
+  filenames with spaces / non-ASCII (`a b.py`, `тест.py`) now influence the
+  hash correctly (tests on real trees); (3) the gate rerun returns workspace
+  ownership: rerun-lmcache-gate.sh passes KVP_HOST_UID/KVP_HOST_GID,
+  _rerun_incontainer.sh chowns the work dirs back via a fail-soft EXIT trap
+  (runs even when a gate aborts).
+* `202a2a5` follow-up: older build-image harnesses (test_live_image_record,
+  test_base_image_pin, test_docker_stdin_delivery) get realistic provenance
+  fixtures (like the real build) so the G2 checks pass on consistent pairs.
+* Full run: kv-persistence **657 passed, 26 skipped** (all skips
+  environment); recipes **443 passed, 5 skipped** (code unchanged this
+  round). Hardware status unchanged: C0-C10 passed on the operator's host
+  (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16 ("verified
+  without hardware, hardware confirmation pending"), C12-C16 pending.
 ### Round 17 (three hardware build blockers: C8 import path, C14 engine filter, rerun/build tie)
 * `5c65ce0` **B1** (`No module named 'kvpersist'` on the FIRST container
   command): both in-container scripts ran `python3 -P -m
