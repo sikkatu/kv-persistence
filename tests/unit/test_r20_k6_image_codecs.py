@@ -91,7 +91,8 @@ def _fixture(tmp_path: pathlib.Path):
 def _run_image(tmp_path: pathlib.Path, patch_dir, build_dir, out_dir,
                script: pathlib.Path = SCRIPT,
                verify_extra: str = ("KVP_ZSTD_IMPORT=OK\nKVP_ZSTD_VERSION=0.25.0\n"
-                                    "KVP_LZ4_IMPORT=OK\nKVP_LZ4_VERSION=4.4.5\n")):
+                                    "KVP_LZ4_IMPORT=OK\nKVP_LZ4_VERSION=4.4.5\n"),
+               smoke_extra: str | None = None):
     bin_dir = tmp_path / "bin"
     store = tmp_path / "docker-store"
     base.make_docker_stub(bin_dir, store)
@@ -121,10 +122,14 @@ case "$cmd" in
       bash)
         # r20 K6.3: the server smoke (bash _smoke_cache_server.sh <codec> ...)
         [ -n "$_codec" ] || _codec=none
-        case "$_codec" in
-          zstd) echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0" ;;
-          *)    echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0" ;;
-        esac ;;
+        if [ "$KVP_SMOKE_STUB_OUTPUT" = "USE_DEFAULT" ]; then
+          case "$_codec" in
+            zstd) echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0" ;;
+            *)    echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0" ;;
+          esac
+        else
+          printf '%s\n' "$KVP_SMOKE_STUB_OUTPUT"
+        fi ;;
       python3)
         if [ -n "$_script" ]; then
           # the verify run: the markers the strict gate checks (r19 H2 noise
@@ -173,6 +178,7 @@ esac
         KVP_LIVE_DIR=str(out_dir / "live"),
         IMAGE=f"vllm/vllm-openai:nightly-test@sha256:{'1' * 64}",
         KVP_VERIFY_STUB_OUTPUT=verify_extra,
+        KVP_SMOKE_STUB_OUTPUT=("USE_DEFAULT" if smoke_extra is None else smoke_extra),
     )
     r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
                        timeout=60, env=env, cwd=str(tmp_path))
@@ -371,6 +377,39 @@ def test_mutation_markers_cut_from_verify_output(tmp_path):
     out = r.stdout + r.stderr
     assert "KVP_ZSTD_IMPORT=OK" in out and "missing" in out, (
         f"the refusal must name the missing marker:\n{out[-800:]}")
+
+
+def test_smoke_runs_for_both_codecs_and_markers_gated():
+    """(K6.3) build-image.sh must run the server smoke for zstd AND none with
+    the SHARED command source, and gate on the strict smoke markers."""
+    bi = SCRIPT.read_text()
+    assert "_smoke_cache_server" in bi, "build-image.sh must run the smoke script"
+    assert "_kvp_server_argv" in (ROOT / "scripts" / "env.sh").read_text(), \
+        "the server argv must live in env.sh (one source)"
+    assert "_kvp_server_argv" in (ROOT / "scripts" / "start-cache.sh").read_text(), \
+        "start-cache.sh must use the shared server argv"
+    assert "_kvp_server_argv" in (ROOT / "scripts" / "_smoke_cache_server.sh").read_text(), \
+        "the smoke must use the shared server argv"
+    for codec in ("zstd", "none"):
+        assert f"KVP_SMOKE_{codec.upper()}_READY=OK" in bi or \
+            'KVP_SMOKE_${_uc}_READY=OK' in bi, (
+            f"the gate must require the READY marker for {codec}")
+    assert "KVP_SMOKE_${_uc}_READY=OK" in bi and "KVP_SMOKE_${_uc}_EXIT=0" in bi, (
+        "build-image.sh must gate on the strict smoke markers")
+
+
+def test_mutation_smoke_markers_cut_is_red(tmp_path):
+    """Mutation: the smoke prints neither READY nor EXIT -> the build gate
+    must REFUSE (behavioral, same as the verify-marker mutation)."""
+    patch_dir, build_dir, out_dir, whl = _fixture(tmp_path)
+    r, store = _run_image(tmp_path, patch_dir, build_dir, out_dir,
+                         smoke_extra="")
+    assert r.returncode != 0, (
+        "the build must refuse when the smoke output lacks the markers:\n"
+        f"{r.stdout[-800:]}")
+    out = r.stdout + r.stderr
+    assert "KVP_SMOKE" in out and "missing" in out, (
+        f"the refusal must name the missing smoke marker:\n{out[-800:]}")
 
 
 # ---------------------------------------------------------------------------
