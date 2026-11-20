@@ -30,8 +30,12 @@ _kvp_chown_back() {
   [ -n "$_uid" ] && [ -n "$_gid" ] || return 0
   # LMC_SRC is mounted rw (the gate may touch it) and KVP_WORK holds the
   # reports/testroot -- both come back to the host user
-  chown -R "$_uid:$_gid" "$LMC_SRC" "$KVP_WORK" 2>/dev/null || true
-  echo "[rerun-incontainer] ownership returned to $_uid:$_gid"
+  if chown -R "$_uid:$_gid" "$LMC_SRC" "$KVP_WORK" 2>/dev/null; then
+    echo "[rerun-incontainer] ownership returned to $_uid:$_gid"
+  else
+    _rc=$?
+    echo "[rerun-incontainer] WARNING: could not return ownership (rc=$_rc): the work dir may stay root-owned" >&2
+  fi
 }
 trap _kvp_chown_back EXIT
 

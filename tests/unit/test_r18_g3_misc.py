@@ -157,3 +157,57 @@ def test_rerun_passes_host_ids_and_chowns_back():
                      and not ln.lstrip().startswith("#"))
     assert "chown" in trap_line or "_kvp_chown" in trap_line, (
         f"the EXIT trap must invoke the chown-back: {trap_line!r}")
+
+
+def _run_chown_function(tmp_path: pathlib.Path, chown_rc: int):
+    """Extract the REAL _kvp_chown_back function from _rerun_incontainer.sh
+    and run it with a stub `chown` in PATH that exits with chown_rc."""
+    src = (ROOT / "scripts" / "_rerun_incontainer.sh").read_text()
+    lines = src.splitlines()
+    start = next(i for i, ln in enumerate(lines)
+                 if ln.startswith("_kvp_chown_back()"))
+    end = next(i for i, ln in enumerate(lines) if i > start and ln.strip() == "}")
+    block = "\n".join(lines[start:end + 1])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "chown").write_text(
+        f"#!/usr/bin/env bash\nexit {chown_rc}\n")
+    (bin_dir / "chown").chmod(0o755)
+    driver = tmp_path / "chown-driver.sh"
+    driver.write_text("".join([
+        "set -u\n",
+        f'PATH="{bin_dir}:/usr/bin:/bin"\n',
+        'KVP_HOST_UID="1000"\nKVP_HOST_GID="1000"\n',
+        f'LMC_SRC="{tmp_path / "src"}"\n',
+        f'KVP_WORK="{tmp_path / "work"}"\n',
+        "mkdir -p \"$LMC_SRC\" \"$KVP_WORK\"\n",
+        block + "\n",
+        "_kvp_chown_back\n",   # the trap invokes it on EXIT -- call it here
+        "echo DRIVER-DONE\n",
+    ]))
+    return subprocess.run(["bash", str(driver)], capture_output=True,
+                          text=True, timeout=30, cwd=str(tmp_path))
+
+
+def test_chown_failure_prints_warning_not_returned(tmp_path):
+    """r19 H4.2: when chown fails (rc != 0) the script must print the
+    WARNING 'could not return ownership' and must NOT claim 'ownership
+    returned'; the exit code of the script is unchanged (the trap keeps it).
+    With a WORKING chown the opposite. (Mutation: unconditional echo ->
+    RED.)"""
+    r = _run_chown_function(tmp_path, chown_rc=1)
+    out = r.stdout + r.stderr
+    assert "could not return ownership" in out, (
+        f"a failing chown must warn loudly:\n{out}")
+    assert "ownership returned" not in out, (
+        f"the script must NOT claim success on a failed chown:\n{out}")
+    assert "DRIVER-DONE" in r.stdout, (
+        "the exit code / flow of the script must be unchanged")
+    assert r.returncode == 0, (
+        f"the trap must not change the exit code (rc={r.returncode}):\n{out}")
+
+    r2 = _run_chown_function(tmp_path, chown_rc=0)
+    out2 = r2.stdout + r2.stderr
+    assert "ownership returned to 1000:1000" in out2, (
+        f"a working chown must report the return:\n{out2}")
+    assert "could not return ownership" not in out2, out2
