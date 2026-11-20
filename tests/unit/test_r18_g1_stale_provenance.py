@@ -146,9 +146,14 @@ def _run_build(env, tmp_path):
                           text=True, timeout=120, env=env, cwd=str(tmp_path))
 
 
-def _run_build_image(env, tmp_path):
-    """The REAL build-image.sh (no docker side effects -- stub returns rc=0
-    on build/run/inspect)."""
+def _run_build_image(env, tmp_path, out_dir=None):
+    """The REAL build-image.sh. In production BOTH scripts work with the SAME
+    dir (live/lmcache-build) -- r19 H4.1: pass the build's OUT_DIR as
+    KVP_BUILD_DIR (for build-lmcache.sh KVP_BUILD_DIR means the WORK dir and
+    must NOT be reused -- a second run would hit 'patch ALREADY applied')."""
+    env = dict(env)
+    if out_dir is not None:
+        env["KVP_BUILD_DIR"] = str(out_dir)
     return subprocess.run(["bash", str(BUILD_IMAGE)], capture_output=True,
                           text=True, timeout=120, env=env, cwd=str(tmp_path))
 
@@ -190,11 +195,81 @@ def test_failed_build_leaves_no_stale_provenance(tmp_path):
     assert not (out_dir / "provenance.json").exists(), (
         "stale provenance.json must be removed at build start (r18 G1):\n"
         f"{rb.stdout[-800:]}")
-    # the REAL build-image.sh refuses the missing provenance
-    ri = _run_build_image(env, tmp_path)
+    # the REAL build-image.sh refuses the missing provenance -- run it on the
+    # SAME dir the build writes to (production: live/lmcache-build)
+    ri = _run_build_image(env, tmp_path, out_dir=out_dir)
     assert ri.returncode != 0, "build-image must refuse without provenance"
     assert "provenance.json not found" in (ri.stdout + ri.stderr), (
         f"the refusal must name provenance.json:\n{ri.stdout}\n{ri.stderr}")
+
+
+def test_end_to_end_build_then_image_and_failed_rebuild(tmp_path):
+    """r19 H4.1: the full production chain on ONE dir (like
+    live/lmcache-build): real build (docker rc=0) -> its OWN provenance.json
+    -> real build-image.sh reaches docker build and writes identity; then a
+    FAILING rebuild -> build-image.sh refuses 'provenance.json not found'.
+    (Mutation: drop the rm -f provenance.json -> both controls RED.)"""
+    repo, sha, patch_dir, out_dir, build_dir, env = _setup(tmp_path, docker_rc=0)
+    rb = _run_build(env, tmp_path)
+    assert rb.returncode == 0, (
+        f"the successful build must pass:\n{rb.stdout[-1200:]}")
+    assert (out_dir / "provenance.json").is_file(), (
+        "the build must write its OWN provenance.json")
+    # before build-image: a verify-capable docker stub (build-image runs
+    # `docker run` for the in-image check and needs the success markers)
+    bin_dir = pathlib.Path(env["PATH"].split(os.pathsep)[0])
+    (bin_dir / "docker").write_text("".join([
+        "#!/usr/bin/env bash\n",
+        'cmd="$1"; shift || true\n',
+        'case "$cmd" in\n',
+        "  run)\n",
+        '    echo "KVP_PY_IMPORTS=OK"\n',
+        '    echo "KVP_CUDA_OPS_IMPORT=OK"\n',
+        '    echo "KVP_NATIVE_IMPORT=OK"\n',
+        '    echo "KVP_IDENTITY_FILE=OK"\n',
+        '    echo "KVP_GPU_COUNT=4"\n',
+        '    echo "KVP_GPU_SMOKE_OK_COUNT=4"\n',
+        "    exit 0 ;;\n",
+        '  inspect) echo "sha256:$(printf \'a%.0s\' $(seq 64))"; exit 0 ;;\n',
+        "  build) exit 0 ;;\n",
+        "  info) exit 0 ;;\n",
+        "  *) exit 0 ;;\n",
+        "esac\n",
+    ]))
+    (bin_dir / "docker").chmod(0o755)
+    # the REAL build-image.sh on the SAME out dir must reach docker build
+    ri = _run_build_image(env, tmp_path, out_dir=out_dir)
+    assert ri.returncode == 0, (
+        f"build-image on the consistent pair must reach docker build:\n"
+        f"stdout:\n{ri.stdout[-1200:]}\nstderr:\n{ri.stderr[-1200:]}")
+    assert "BUILD REFUSED" not in (ri.stdout + ri.stderr), (
+        f"no refusal on the consistent pair:\n{ri.stdout}\n{ri.stderr}")
+    # now a FAILING rebuild (docker rc=1) on the same dir
+    bin_dir = pathlib.Path(env["PATH"].split(os.pathsep)[0])
+    (bin_dir / "docker").write_text("".join([
+        "#!/usr/bin/env bash\n",
+        'cmd="$1"; shift || true\n',
+        'case "$cmd" in\n',
+        "  run)\n",
+        "    _wheels=\"\"\n",
+        '    while [ "$#" -gt 0 ]; do case "$1" in -v) case "$2" in */kvp-wheels:*) _wheels="${2%%:*}" ;; esac; shift 2 ;; *) shift ;; esac; done\n',
+        '    /usr/bin/python3 -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1], \'w\'); z.writestr(\'lmcache/__init__.py\', b\'# stub\'); z.close()" "$_wheels/lmcache-NEW.whl"\n',
+        "    exit 1 ;;\n",
+        '  inspect) echo "sha256:$(printf \'a%.0s\' $(seq 64))"; exit 0 ;;\n',
+        "  info) exit 0 ;;\n",
+        "  *) exit 0 ;;\n",
+        "esac\n",
+    ]))
+    (bin_dir / "docker").chmod(0o755)
+    rb2 = _run_build(env, tmp_path)
+    assert rb2.returncode != 0, "the failing rebuild must abort"
+    assert not (out_dir / "provenance.json").exists(), (
+        "the failing rebuild must remove the stale provenance")
+    ri2 = _run_build_image(env, tmp_path, out_dir=out_dir)
+    assert ri2.returncode != 0, (
+        "build-image after the failed rebuild must refuse")
+    assert "provenance.json not found" in (ri2.stdout + ri2.stderr), (
+        f"the refusal must name provenance.json:\n{ri2.stdout}\n{ri2.stderr}")
 
 
 def test_successful_build_writes_new_provenance(tmp_path):
