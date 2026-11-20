@@ -187,6 +187,24 @@ with open(out_path, "w") as fh:
         fh.write(f"{k}={v}\n")
 PY
 
+# r19 H4.3: an image baked with KVP_ALLOW_UNTESTED_WHEEL=1 carries a wheel
+# that NEVER ran the test gates. The operator chose that mode deliberately
+# -- no refusal, but it must be LOUD at verification time, not silent. The
+# warning is printed BEFORE the heavy checks so it is visible on every
+# outcome (verified, MISMATCH or INCONCLUSIVE). Empty / missing field (old
+# images) -> no warning.
+if [ "$CHECK_CONFIG_ONLY" = 0 ] && [ "${KVP_SKIP_LMC_IDENTITY:-0}" != "1" ]; then
+  _early_ident="/etc/kvp-lmcache-identity.json"
+  _early_json="$(docker exec "$CONTAINER" cat "$_early_ident" 2>/dev/null || true)"
+  _untested="$(printf '%s' "$_early_json" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("untested_wheel","") or "")' 2>/dev/null || true)"
+  if [ -n "$_untested" ]; then
+    echo "" >&2
+    echo "WARNING: this image carries an UNTESTED LMCache wheel" >&2
+    echo "  ($_early_ident: untested_wheel=$_untested -- the wheel was built with" >&2
+    echo "  KVP_BUILD_SKIP_TESTS=1 and never ran the test gates)" >&2
+  fi
+fi
+
 python3 - "$ROOT" "$CONFIG" "$CONTAINER" "$MODEL_DIR" "$CHECK_CONFIG_ONLY" <<'PYEOF'
 import json, os, re, subprocess, sys
 root, config, container, model_dir = sys.argv[1:5]
@@ -592,6 +610,8 @@ if [ "$CHECK_CONFIG_ONLY" = 0 ] && [ "${KVP_SKIP_LMC_IDENTITY:-0}" != "1" ]; the
     echo "  #4136 retrieve/abort fix and the #5972 incomplete-object fix." >&2
     exit 4
   fi
+  # r19 H4.3: the UNTESTED-wheel warning is printed EARLIER (before the heavy
+  # checks) so it is visible on every outcome -- see above.
   # Single source of truth for the comparison logic: kvpersist.lmc_identity
   # (unit-tested); the expected base comes from the recorded build provenance.
   _exp_base="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("lmcache_source_commit",""))' "$ROOT/live/lmcache-build/provenance.json" 2>/dev/null || true)"
