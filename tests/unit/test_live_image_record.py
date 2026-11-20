@@ -45,13 +45,26 @@ esac
     (bin_dir / "docker").chmod(0o755)
     build_dir = tmp_path / "build"
     (build_dir / "wheels").mkdir(parents=True, exist_ok=True)
-    (build_dir / "wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
-    (build_dir / "provenance.json").write_text(json.dumps(
-        {"wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe", "module": "x"}))
+    whl = build_dir / "wheels" / "lmcache-0.5.8rc1.post48+kvp.abc.whl"
+    whl.write_bytes(b"PK\x03\x04fake")
     patch_dir = tmp_path / "patches"
     patch_dir.mkdir(exist_ok=True)
     (patch_dir / "4136-mp-retrieve-abort.patch").write_text("a\n")
     (patch_dir / "5972-incomplete-kv-objects.patch").write_text("b\n")
+    import hashlib
+    def _sha(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    # r18 G2: provenance is written like the REAL build (wheel_sha256 + both
+    # patch SHAs + tests_skipped) so the integrity checks pass
+    (build_dir / "provenance.json").write_text(json.dumps({
+        "wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe",
+        "module": "custom-lmcache-build",
+        "wheel": whl.name,
+        "wheel_sha256": _sha(whl),
+        "pr4136_patch_sha256": _sha(patch_dir / "4136-mp-retrieve-abort.patch"),
+        "pr5972_patch_sha256": _sha(patch_dir / "5972-incomplete-kv-objects.patch"),
+        "tests_skipped": "0",
+    }))
     env = dict(os.environ,
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
                KVP_BUILD_DIR=str(build_dir), KVP_PATCH_DIR=str(patch_dir),

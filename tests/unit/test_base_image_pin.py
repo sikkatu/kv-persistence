@@ -72,10 +72,22 @@ def _fixture(tmp_path: pathlib.Path) -> dict:
     out_dir.mkdir()
     whl = build_dir / "wheels"
     whl.mkdir(parents=True)
-    (whl / "lmcache-0.5.8rc1.post48+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
-    (build_dir / "provenance.json").write_text(json.dumps(
-        {"wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe",
-         "module": "custom-lmcache-build"}))
+    whl_file = whl / "lmcache-0.5.8rc1.post48+kvp.abc.whl"
+    whl_file.write_bytes(b"PK\x03\x04fake")
+    import hashlib
+    def _sha(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    # r18 G2: provenance is written like the REAL build (wheel_sha256 + both
+    # patch SHAs + tests_skipped) so the integrity checks pass
+    (build_dir / "provenance.json").write_text(json.dumps({
+        "wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe",
+        "module": "custom-lmcache-build",
+        "wheel": whl_file.name,
+        "wheel_sha256": _sha(whl_file),
+        "pr4136_patch_sha256": _sha(pdir / "4136-mp-retrieve-abort.patch"),
+        "pr5972_patch_sha256": _sha(pdir / "5972-incomplete-kv-objects.patch"),
+        "tests_skipped": "0",
+    }))
     return {"KVP_BUILD_DIR": str(build_dir), "KVP_PATCH_DIR": str(pdir),
             "KVP_OUT_DIR": str(out_dir),
             "KVP_IDENTITY_OUT": str(out_dir / "image-identity.env")}

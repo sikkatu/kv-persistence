@@ -185,10 +185,22 @@ def _run_build_image(tmp_path: pathlib.Path, run_mode: str = "good"):
     (patch_dir / "4136-mp-retrieve-abort.patch").write_text("diff --git a/x b/x\n")
     (patch_dir / "5972-incomplete-kv-objects.patch").write_text("diff --git a/y b/y\n")
     whl = build_dir / "wheels"; whl.mkdir(parents=True)
-    (whl / "lmcache-0.5.8rc1.post48+kvp.abc.whl").write_bytes(b"PK\x03\x04fake")
-    import json as _json
-    (build_dir / "provenance.json").write_text(_json.dumps(
-        {"wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe", "module": "custom-lmcache-build"}))
+    whl_file = whl / "lmcache-0.5.8rc1.post48+kvp.abc.whl"
+    whl_file.write_bytes(b"PK\x03\x04fake")
+    import json as _json, hashlib as _hashlib
+    def _sha(p):
+        return _hashlib.sha256(p.read_bytes()).hexdigest()
+    # r18 G2: provenance is written like the REAL build (wheel_sha256 + both
+    # patch SHAs + tests_skipped) so the integrity checks pass
+    (build_dir / "provenance.json").write_text(_json.dumps({
+        "wheel_version": "0.5.8rc1.post48+kvp.deadbeefcafe",
+        "module": "custom-lmcache-build",
+        "wheel": whl_file.name,
+        "wheel_sha256": _sha(whl_file),
+        "pr4136_patch_sha256": _sha(patch_dir / "4136-mp-retrieve-abort.patch"),
+        "pr5972_patch_sha256": _sha(patch_dir / "5972-incomplete-kv-objects.patch"),
+        "tests_skipped": "0",
+    }))
     # stub variant: what `docker run` (python3 -) prints to verify.txt
     body = GOOD_VERIFY if run_mode == "good" else ""
     verify_body = tmp_path / "verify-body.txt"
