@@ -231,11 +231,17 @@ $(tail -n 20 "$TMPD/verify.txt" 2>/dev/null)"
 
 IMAGE_ID="$(docker inspect --format='{{.Id}}' "$OUT_IMAGE" | sed 's/sha256://')"
 
+# r19 H2: image-identity.env must be a REAL env-file. The raw verify.txt
+# carries log noise and rows like `KVP_GPU_SMOKE[0] dev=...` (invalid shell
+# names) -- `set -e; . image-identity.env` would die on the first of them.
+# Only clean `^KVP_[A-Z0-9_]+=` lines go into the .env (KEY=value, no quotes
+# -- the marker values carry no spaces); the raw output is kept next to it
+# as live/image-verify.txt for diagnostics.
 {
   echo "KVP_CUSTOM_IMAGE=$OUT_IMAGE"
   echo "KVP_CUSTOM_IMAGE_ID=sha256:$IMAGE_ID"
   echo "KVP_LMC_BASE_IMAGE=$BASE_IMAGE"
-  cat "$TMPD/verify.txt"
+  grep -E '^KVP_[A-Z0-9_]+=' "$TMPD/verify.txt" || true
 } > "$IDENTITY"
 
 # r6-7 B-2: record the CUSTOM image id for the whole launch chain. This is
@@ -245,6 +251,8 @@ IMAGE_ID="$(docker inspect --format='{{.Id}}' "$OUT_IMAGE" | sed 's/sha256://')"
 # still wins. KVP_LIVE_DIR keeps test runs out of the repo's live/.
 KVP_LIVE_DIR="${KVP_LIVE_DIR:-$ROOT/live}"
 mkdir -p "$KVP_LIVE_DIR"
+# r19 H2: the raw verify output for diagnostics lives NEXT TO the .env
+cp "$TMPD/verify.txt" "$KVP_LIVE_DIR/image-verify.txt"
 printf 'sha256:%s\n' "$IMAGE_ID" > "$KVP_LIVE_DIR/image"
 note "custom image id recorded: $KVP_LIVE_DIR/image (sha256:${IMAGE_ID:0:16}...)"
 note "ready to launch: bash scripts/start-all.sh   # picks the image up from live/image"
