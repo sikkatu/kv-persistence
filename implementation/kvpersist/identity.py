@@ -82,6 +82,12 @@ class CacheIdentity:
     tp_size: int
     connector: str               # e.g. "LMCacheMPConnector"
     connector_version: str       # pinned lmcache/vllm build identity
+    # r20 K7: the LMCache BUILD identity -- wheel_version from the baked
+    # /etc/kvp-lmcache-identity.json ("0.5.8rc1.post48+kvp.<12hex>").
+    # MANDATORY: without it the stock build (0.5.6) and our custom build
+    # derived the SAME namespace and a new server read the old cache.
+    # Empty/unreadable -> IdentityError (uncertain -> cache miss).
+    lmcache_build: str
     max_model_len: int
     chat_template_digest: str    # sha256 of the applied chat template, 64 hex
     namespace_hint: str = ""     # optional user label, does not affect identity
@@ -123,6 +129,14 @@ class CacheIdentity:
             raise IdentityError("connector is empty")
         if not self.connector_version:
             raise IdentityError("connector_version is empty")
+        # r20 K7: the LMCache build must be KNOWN. Empty or an "unknown"
+        # placeholder cannot tell one build from another -> uncertain.
+        if not (self.lmcache_build or "").strip() or \
+                (self.lmcache_build or "").strip().lower() == "unknown":
+            raise IdentityError(
+                "lmcache_build is empty/unknown (the LMCache build identity "
+                "could not be read from /etc/kvp-lmcache-identity.json -- "
+                "uncertain -> cache miss)")
         if not _SHA64.match(self.chat_template_digest or ""):
             raise IdentityError("chat_template_digest must be 64 hex chars (sha256)")
         # Advanced fields: when non-empty, digest-like fields must be 64 hex.
@@ -205,6 +219,59 @@ def _strip_quotes(value: str) -> str:
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
         v = v[1:-1]
     return v
+
+
+# r20 K7: the ONE reader of the LMCache build identity. Every consumer must
+# derive `lmcache_build` from here so bash (check_image_identity.py
+# --print-wheel-version) and Python (this module) can never disagree.
+DEFAULT_LMCACHE_IDENTITY = "/etc/kvp-lmcache-identity.json"
+DEFAULT_IMAGE_IDENTITY = "/var/lib/kv-persistence/image-identity.env"
+
+
+def read_lmcache_build(ident_json_path: str = "") -> str:
+    """Read the LMCache build identity (``wheel_version``) from the baked
+    identity JSON.
+
+    Args:
+        ident_json_path: explicit path; when empty, ``KVP_LMCACHE_IDENTITY``
+            from the environment, else ``/etc/kvp-lmcache-identity.json``.
+
+    Returns:
+        the recorded ``wheel_version`` string (``""`` when the file is
+        missing or unreadable -- the caller then treats the identity as
+        uncertain).
+    """
+    import os as _os
+    path = (ident_json_path or _os.environ.get("KVP_LMCACHE_IDENTITY", "")
+            or DEFAULT_LMCACHE_IDENTITY)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        ver = (data.get("wheel_version") or "").strip()
+        if ver:
+            return ver
+    except (OSError, ValueError):
+        pass
+    # Fallback (the SAME value, a different reader): the host has no
+    # /etc/kvp-lmcache-identity.json (it lives INSIDE the image) -- the build
+    # recorded it as KVP_LMC_VERSION (= md.version("lmcache")) in
+    # live/image-identity.env at build time, and the launchers export that as
+    # KVP_LMCACHE_BUILD. Read the env first, then the recorded file.
+    ver = (_os.environ.get("KVP_LMCACHE_BUILD")
+           or _os.environ.get("KVP_LMC_VERSION", "")).strip()
+    if ver:
+        return ver
+    env_path = (_os.environ.get("KVP_IMAGE_IDENTITY", "")
+                or DEFAULT_IMAGE_IDENTITY)
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if line.startswith("KVP_LMC_VERSION="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
 
 
 def _read_env_config(path: str) -> Dict[str, str]:
@@ -342,6 +409,12 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         raise IdentityError(
             f"KVP_ROPE_CONFIG_DIGEST must be 64 hex chars (sha256), got {rope_digest!r}"
         )
+    # r20 K7: the LMCache build identity. ONE source: the baked identity JSON
+    # (wheel_version). An explicit KVP_LMCACHE_BUILD pin (env/files) overrides
+    # it -- that is what verify-engine-identity.sh cross-checks against the
+    # running image. When neither is readable the value stays empty and
+    # validate() refuses (uncertain -> cache miss).
+    lmcache_build = (get("KVP_LMCACHE_BUILD") or "").strip() or read_lmcache_build()
     return CacheIdentity(
         model_id=get("KVP_MODEL_ID"),
         model_revision=get("KVP_MODEL_REVISION"),
@@ -354,6 +427,7 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         tp_size=int(get("KVP_TP_SIZE") or 0),
         connector=get("KVP_CONNECTOR"),
         connector_version=get("KVP_CONNECTOR_VERSION"),
+        lmcache_build=lmcache_build,
         max_model_len=int(get("KVP_MAX_MODEL_LEN") or 0),
         chat_template_digest=get("KVP_CHAT_TEMPLATE_DIGEST"),
         namespace_hint=get("KVP_NAMESPACE_HINT"),

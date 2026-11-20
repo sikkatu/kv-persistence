@@ -23,6 +23,7 @@ def make_identity(**over):
         tp_size=4,
         connector="LMCacheMPConnector",
         connector_version="lmcache-0.5.x@pin",
+        lmcache_build="0.5.8rc1.post48+kvp.testhash00",
         max_model_len=1048576,
         chat_template_digest="c" * 64,
     )
@@ -255,9 +256,9 @@ def test_advanced_identity_fields_loaded_from_config(tmp_path, monkeypatch):
         "KVP_MULTIMODAL_COMPONENTS=vision-enc@rev2\n"
         "KVP_ROPE_CONFIG_DIGEST=" + "d" * 64 + "\n"
         "KVP_SPECULATIVE_CONFIG=mtp-draft@rev3\n"
+        "KVP_LMCACHE_BUILD=0.5.8rc1.post48+kvp.testhash00\n"
     )
     from kvpersist.identity import identity_from_env_files
-
     ident = identity_from_env_files(str(tmp))
     assert ident.lora_adapters == "lora-a@rev1"
     assert ident.multimodal_components == "vision-enc@rev2"
@@ -318,6 +319,7 @@ def test_identity_from_env_files_env_wins(tmp_path, monkeypatch):
         "KVP_CONNECTOR_VERSION=v\n"
         "KVP_MAX_MODEL_LEN=1024\n"
         "KVP_CHAT_TEMPLATE_DIGEST=" + "c" * 64 + "\n"
+        "KVP_LMCACHE_BUILD=0.5.8rc1.post48+kvp.testhash00\n"
         "LMCACHE_L2_SERDE=none\n"
     )
     monkeypatch.delenv("LMCACHE_L2_SERDE", raising=False)

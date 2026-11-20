@@ -608,6 +608,7 @@ def _identity_base() -> dict:
         tokenizer_name="mimo-pro-tok", tokenizer_revision="b" * 40,
         kv_cache_dtype="auto", block_size=16, num_kv_heads=8, head_dim=128,
         tp_size=4, connector="LMCacheMPConnector", connector_version="0.5.3",
+        lmcache_build="0.5.8rc1.post48+kvp.testhash00",
         max_model_len=131072, chat_template_digest="c" * 64,
     )
 

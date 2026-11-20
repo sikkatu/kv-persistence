@@ -488,6 +488,7 @@ def test_kvp_l2_serde_pin_reaches_namespace(tmp_path):
         "\nKVP_KV_CACHE_DTYPE=bfloat16\nKVP_BLOCK_SIZE=16\nKVP_NUM_KV_HEADS=8"
         "\nKVP_HEAD_DIM=128\nKVP_TP_SIZE=4\nKVP_CONNECTOR=c\n"
         "KVP_CONNECTOR_VERSION=v\nKVP_MAX_MODEL_LEN=1\n"
+        "KVP_LMCACHE_BUILD=0.5.8rc1.post48+kvp.testhash00\n"
         "KVP_CHAT_TEMPLATE_DIGEST=" + "0" * 64 + "\n")
     code = (
         "import os, sys; "

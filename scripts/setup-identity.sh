@@ -262,7 +262,7 @@ echo "-- verifying the written configuration"
 python3 - "$CONFIG" "$ROOT/implementation" <<'PY' || die "identity config failed verification"
 import re, sys
 sys.path.insert(0, sys.argv[2])
-from kvpersist.identity import CacheIdentity, IdentityError
+from kvpersist.identity import CacheIdentity, IdentityError, read_lmcache_build
 vals = {}
 for line in open(sys.argv[1]).read().splitlines():
     m = re.match(r"^([A-Z][A-Z0-9_]*)=(.*)$", line.strip())
@@ -276,6 +276,7 @@ for line in open(sys.argv[1]).read().splitlines():
         vals[m.group(1)] = v
 try:
     rope = vals.get("KVP_ROPE_CONFIG_DIGEST", "")
+    lmcache_build = (vals.get("KVP_LMCACHE_BUILD", "") or "").strip()
     ident = CacheIdentity(
         model_id=vals.get("KVP_MODEL_ID", ""),
         model_revision=vals.get("KVP_MODEL_REVISION", ""),
@@ -288,6 +289,7 @@ try:
         tp_size=int(vals.get("KVP_TP_SIZE", "0")),
         connector=vals.get("KVP_CONNECTOR", ""),
         connector_version=vals.get("KVP_CONNECTOR_VERSION", ""),
+        lmcache_build=lmcache_build or read_lmcache_build(),
         max_model_len=int(vals.get("KVP_MAX_MODEL_LEN", "0")),
         chat_template_digest=vals.get("KVP_CHAT_TEMPLATE_DIGEST", ""),
         lora_adapters=vals.get("KVP_LORA_ADAPTERS", ""),

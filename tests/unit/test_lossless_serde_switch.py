@@ -89,7 +89,8 @@ def test_switch_changes_the_namespace():
         model_id="m", model_revision="a" * 40, tokenizer_name="t",
         tokenizer_revision="b" * 40, kv_cache_dtype="bfloat16", block_size=16,
         num_kv_heads=8, head_dim=128, tp_size=4, connector="LMCacheMPConnector",
-        connector_version="v1", max_model_len=1048576,
+        connector_version="v1", lmcache_build="0.5.8rc1.post48+kvp.testhash00",
+        max_model_len=1048576,
         chat_template_digest="c" * 64,
     )
     n_none = CacheIdentity(**base, l2_serde="none").namespace()

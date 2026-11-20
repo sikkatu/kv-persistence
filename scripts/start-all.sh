@@ -38,10 +38,19 @@ _kvp_load_env "$ROOT"
 # nothing). The stock IMAGE= from tp4.env is the BASE pin: it must match the
 # base of the custom image recorded in live/image; the launch always runs
 # the CUSTOM one. Refusal here exits before the first docker call.
-_kvp_resolve_runtime_image "$ROOT" "$_kvp_image_from_env" || {
-  echo "ERROR: runtime image resolution failed -- refusing to start (nothing was started)" >&2
-  exit 1
-}
+# r20 K1 fix (round-81b regression): when persistence is OFF
+# (KVP_PERSIST_ENABLED=false -- a stock recipe run without KV_PERSIST) the
+# IMAGE question must NOT block the launch at all (contract: "при
+# KV_PERSIST!=1 IMAGE не трогать"). The custom-image deep check applies only
+# to the persistence path, and it runs in the recipe branch BEFORE step 1/3.
+if [ "${KVP_PERSIST_ENABLED:-true}" = "false" ]; then
+  echo "NOTE: KVP_PERSIST_ENABLED=false -- persistence is off, the runtime image is NOT resolved/checked (KV_PERSIST!=1 path)"
+else
+  _kvp_resolve_runtime_image "$ROOT" "$_kvp_image_from_env" || {
+    echo "ERROR: runtime image resolution failed -- refusing to start (nothing was started)" >&2
+    exit 1
+  }
+fi
 
 # ONE codec decision (review round 58): resolve the effective L2 codec ONCE
 # here and pass the SAME value to both children. start-cache.sh and

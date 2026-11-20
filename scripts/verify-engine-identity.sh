@@ -391,6 +391,30 @@ else:
         else f"--kv-transfer-config does not reference {want_conn!r}"
     )
 engine_checks.append(("connector", want_conn, connector_seen))
+# r20 K7: the LMCache BUILD identity cross-check. The cache namespace now
+# hashes `lmcache_build` = wheel_version from the baked identity JSON. When
+# the operator pins KVP_LMCACHE_BUILD (identity.env[.local]), the RUNNING
+# image must actually carry that build -- otherwise a cache written by one
+# build is read by another. Cross-check against the image's
+# /etc/kvp-lmcache-identity.json (docker exec cat, same as the untested-wheel
+# warning). Empty pin -> nothing to prove (the namespace still hashes the
+# build read from the image); no container -> UNAVAILABLE/INCONCLUSIVE.
+if not check_config_only and container:
+    _build_expect = (vals.get("KVP_LMCACHE_BUILD", "") or "").strip()
+    if _build_expect:
+        try:
+            _bj = subprocess.run(
+                ["docker", "exec", container, "cat",
+                 "/etc/kvp-lmcache-identity.json"],
+                capture_output=True, text=True, timeout=20,
+            )
+            _bident = json.loads(_bj.stdout) if _bj.returncode == 0 else {}
+            _build_seen = (_bident.get("wheel_version") or "").strip()
+        except Exception:
+            _build_seen = ""
+        if not _build_seen:
+            _build_seen = "MISSING"
+        engine_checks.append(("lmcache_build", _build_expect, _build_seen))
 # Review fix (round 26): check the L2 codec (serde). It lives in the shell
 # that started the cache server -- if the recipe shell has USE_LOSSLESS_SERDE=1
 # and the server shell does not (or vice versa), the namespaces diverge and
