@@ -830,6 +830,17 @@ _kvp_resolve_runtime_image() {
   local _live_image=""
   [ -s "$_live/image" ] && _live_image="$(tr -d '[:space:]' < "$_live/image")"
   local _in="${IMAGE:-}"
+  # r20 K1: test-harness opt-out -- the SAME switch that suppressed the old
+  # verify-image-custom.sh block in the launchers (round 2). With
+  # KVP_SKIP_IMAGE_CHECK=1 only the trivial resolve remains (empty IMAGE ->
+  # live/image when present); no refusal, no custom-image check. Production
+  # must never set this.
+  if [ "${KVP_SKIP_IMAGE_CHECK:-0}" = "1" ]; then
+    [ -z "$_in" ] && [ -n "$_live_image" ] && IMAGE="$_live_image"
+    export IMAGE
+    echo "NOTE: KVP_SKIP_IMAGE_CHECK=1 -- runtime image resolution/check suppressed (test harness)"
+    return 0
+  fi
 
   # -- empty input: use live/image, or explain the first-run build
   if [ -z "$_in" ]; then

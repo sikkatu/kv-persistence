@@ -256,21 +256,30 @@ def read_lmcache_build(ident_json_path: str = "") -> str:
     # /etc/kvp-lmcache-identity.json (it lives INSIDE the image) -- the build
     # recorded it as KVP_LMC_VERSION (= md.version("lmcache")) in
     # live/image-identity.env at build time, and the launchers export that as
-    # KVP_LMCACHE_BUILD. Read the env first, then the recorded file.
+    # KVP_LMCACHE_BUILD. Read the env first, then the recorded files.
     ver = (_os.environ.get("KVP_LMCACHE_BUILD")
            or _os.environ.get("KVP_LMC_VERSION", "")).strip()
     if ver:
         return ver
-    env_path = (_os.environ.get("KVP_IMAGE_IDENTITY", "")
-                or DEFAULT_IMAGE_IDENTITY)
-    try:
-        with open(env_path, "r", encoding="utf-8") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if line.startswith("KVP_LMC_VERSION="):
-                    return line.split("=", 1)[1].strip()
-    except OSError:
-        pass
+    # build-image.sh writes KVP_IDENTITY_OUT or $ROOT/live/image-identity.env
+    # -- the launchers export KVP_LIVE_DIR / LIVE_DIR to that same dir.
+    candidates = []
+    if _os.environ.get("KVP_IMAGE_IDENTITY"):
+        candidates.append(_os.environ["KVP_IMAGE_IDENTITY"])
+    for live in (_os.environ.get("KVP_LIVE_DIR", ""),
+                 _os.environ.get("LIVE_DIR", "")):
+        if live:
+            candidates.append(_os.path.join(live, "image-identity.env"))
+    candidates.append(DEFAULT_IMAGE_IDENTITY)
+    for env_path in candidates:
+        try:
+            with open(env_path, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    line = raw.strip()
+                    if line.startswith("KVP_LMC_VERSION="):
+                        return line.split("=", 1)[1].strip()
+        except OSError:
+            continue
     return ""
 
 
