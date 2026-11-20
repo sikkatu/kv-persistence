@@ -13,6 +13,60 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 21 (namespace bound to the running image, honest K6.4 test, test holes)
+* `775cc64` **L1** (P1, K7 bound to the RUNNING image): `check_image_identity.py`
+  `--print-wheel-version` was dead code; `cli model-name` derived `lmcache_build`
+  from `live/image-identity.env` (the LAST build's record, not the image being
+  launched); the gate cross-checked only with an operator pin (empty by default).
+  Now `verify_custom_image` returns `wheel_version`, the CLI prints
+  `KVP_WHEEL_VERSION=`, `_kvp_require_custom_image` captures it and exports
+  `KVP_LMCACHE_BUILD` on every successful resolve path (except
+  `KVP_SKIP_IMAGE_CHECK=1`). `read_lmcache_build` priority: env > baked identity
+  JSON > live/ record. `verify-engine-identity.sh` cross-checks ALWAYS (pin or
+  effective value) vs the container's identity JSON; mismatch -> exit 4 naming
+  `lmcache_build`. Tests: scenario A!=B (live/ says A, image carries B) -- the
+  namespace follows B; the gate without a pin refuses; 3 honest mutations RED
+  (resolver stops exporting / gate only checks with a pin / module copy with
+  live/ preferred).
+* `626dcb1` **L2** (P1, the K6.4 test was green by accident): the r20 stub
+  answered `image inspect` with `{}` -- start-cache.sh refused earlier on the
+  custom-image check and the codec probe was NEVER reached. The stub now
+  answers labels + identity of a real build (the deep check passes) and only
+  the codec probe fails. Asserts: `lossless codec 'zstd' is not available`,
+  `build-image.sh`, NO `MISMATCH`/`NOT the custom`, the server was NEVER
+  started. Mutation: neutralizing the codec probe in a mutant start-cache.sh
+  makes the refusal DISAPPEAR (RED detector).
+* `cc675d8` **L3** (P2, two surviving mutants closed):
+  **K1d** -- `test_b2_same_digest_other_repo_tag_accepted` (the same base
+  digest under another repo:tag is accepted; a different digest is refused) +
+  honest mutation (a COPY of `check_image_identity.py` with string comparison
+  restored -> REFUSES the same-digest case). **K6c** --
+  `test_smoke_runs_for_both_codecs_and_markers_gated` is now BEHAVIOURAL:
+  the stub prints smoke markers for only ONE codec -> build refuses AND
+  `live/image` is NOT written (both zstd-only and none-only).
+* `d98f59c` **L4** (P2, honest error text): the "LMCache build is unknown"
+  message names the REAL fix -- launch via `scripts/start-all.sh` (it resolves
+  the image and exports the build) or run `bash scripts/build-image.sh`.
+  No `/etc` in-image path, no `setup-identity.sh` hint for this cause (that
+  hint stays only for identity.env pin errors). Tests: a complete identity.env
+  without the resolver gives exactly this text; the gate's `lmcache_build`
+  hint block names the real actions.
+* `0f0248d` **L5** (P2, K7 test hygiene): `test_gate_crosschecks_lmcache_build`
+  no longer writes `identity.env.local` into the REAL `configs/` -- it runs on
+  a MINI REPO in tmp (configs copied + pins filled, real repo never touched).
+  `test_mutation_dropping_lmcache_build_from_namespace_is_red` is now an HONEST
+  mutation: a COPY of the identity module with `lmcache_build` removed from the
+  hashed payload -> builds A and B collapse to ONE namespace on the mutant.
+* `189ce4e` **L6** (P3, bare tag in IMAGE): `IMAGE=kvp-lmcache:latest` gets a
+  clear refusal -- "IMAGE must be `repo:tag@sha256:<64hex>` (base pin) or
+  `sha256:<id>` (custom), a bare tag is NOT accepted, take `$(cat live/image)`"
+  -- not the misleading "base pin mismatch, rebuild" advice. A properly pinned
+  stock still resolves (K1 path intact). Tests: behavioural, on the REAL
+  `_kvp_resolve_runtime_image`.
+* Full run: kv-persistence **716 passed, 26 skipped** (all skips environment:
+  promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, hardware-only);
+  recipes **448 passed, 5 skipped** (unchanged this round).
+
 ### Round 20 (launch image resolution, image codecs, cache-namespace build identity)
 **Hardware facts (operator log, 20 Nov 2026):** full build C0-C16 passed (wheel
 `0.5.8rc1.post48+kvp.60dce759ea93`, C11 = 155 passed / 0 skipped), but the
@@ -171,46 +225,6 @@ live/image), the incomplete-KV workload test, GPU regression C13 on request.
 * Full run: kv-persistence **669 passed, 26 skipped** (all skips environment:
   promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, hardware-only);
   recipes **443 passed, 5 skipped** (code unchanged this round).
-### Round 18 (image-step integrity: provenance, wheel, patches)
-* `9030142` **G1** (a failed build left a stale provenance.json next to the
-  new untested wheel): the wheel lands in `$OUT_DIR/wheels` at C5 (long
-  before gates C8-C14) while provenance.json was written at the very END of
-  a successful build -- after any build failing at a gate, build-image.sh
-  would bake an image from a mismatched pair. Now build-lmcache.sh removes
-  provenance.json at the start of the build (next to
-  rerun-prod-hash.txt). Tests: real build + docker stub (rc=1 after
-  dropping the wheel) -> no provenance + real build-image.sh refuses
-  'provenance.json not found'; positive control writes a new one. Mutation
-  (drop the rm) -> RED.
-* `90984c1` **G2** (build-image.sh verified neither the wheel nor the
-  patches against provenance): now, BEFORE docker build -- exactly one
-  *.whl (zero/>1 refused), sha256(WHEEL) == wheel_sha256 from provenance
-  ('wheel does not match provenance.json (rebuild: bash
-  scripts/build-lmcache.sh)'), pr4136/pr5972 patch SHAs == current patch
-  files ('patches changed since the wheel was built: full rebuild
-  required'), tests_skipped must be "0" (refused otherwise; with
-  KVP_ALLOW_UNTESTED_WHEEL=1 a loud warning and the identity is marked
-  `untested-wheel`). Patch SHAs in the image identity come from PROVENANCE,
-  not from the current files (the old source-of-truth made the identity
-  LIE). Tests: two/zero wheels, one-byte wheel change, 4136/5972 edits,
-  tests_skipped refusal / override, consistent-pair control -- each with a
-  mutation detector on the real script.
-* `03fc6bd` **G3**: (1) provenance heredoc duplicate keys removed (7 keys
-  were written twice; strict object_pairs_hook test on the real build);
-  (2) gate_common prod-hash uses `--name-only -z` + core.quotepath=off --
-  filenames with spaces / non-ASCII (`a b.py`, `тест.py`) now influence the
-  hash correctly (tests on real trees); (3) the gate rerun returns workspace
-  ownership: rerun-lmcache-gate.sh passes KVP_HOST_UID/KVP_HOST_GID,
-  _rerun_incontainer.sh chowns the work dirs back via a fail-soft EXIT trap
-  (runs even when a gate aborts).
-* `202a2a5` follow-up: older build-image harnesses (test_live_image_record,
-  test_base_image_pin, test_docker_stdin_delivery) get realistic provenance
-  fixtures (like the real build) so the G2 checks pass on consistent pairs.
-* Full run: kv-persistence **657 passed, 26 skipped** (all skips
-  environment); recipes **443 passed, 5 skipped** (code unchanged this
-  round). Hardware status unchanged: C0-C10 passed on the operator's host
-  (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16 ("verified
-  without hardware, hardware confirmation pending"), C12-C16 pending.
 ### Round 16 (4136 test fixtures, junit gates, engine-pin blind spot, fast rerun)
 * `c354ba9` **P0** (hardware log 19.11 18:53: C0-C10 passed on the new base,
   C11 = 150 passed / 5 failed): all five failures in

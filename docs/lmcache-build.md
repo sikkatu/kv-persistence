@@ -192,6 +192,15 @@ operator's first `start-cache`.
   `IdentityError` (uncertain -> cache miss). `verify-engine-identity.sh`
   cross-checks a `KVP_LMCACHE_BUILD` pin against the running image's
   `wheel_version` (MISMATCH -> exit 4).
+* Bind to the RUNNING image (r21 L1): the resolver (`_kvp_require_custom_image`)
+  captures `KVP_WHEEL_VERSION=` from the deep check of the RESOLVED image and
+  exports it as `KVP_LMCACHE_BUILD` on every successful path (except
+  `KVP_SKIP_IMAGE_CHECK=1`). Priority in `read_lmcache_build`: env (the
+  running image) > baked identity JSON > the `live/` build record (used only
+  when the resolver did not run). `verify-engine-identity.sh` cross-checks
+  ALWAYS (pin or effective value), not only with a pin. When the build cannot
+  be read, the message names the real fix: launch via `scripts/start-all.sh`
+  or run `bash scripts/build-image.sh`.
 
 **A `STORE_END` event is not proof of a persistent write.** The STORE/RETRIEVE
 diagnostics distinguish: store requested → worker/adapter completion → object

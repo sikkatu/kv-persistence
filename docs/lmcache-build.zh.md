@@ -179,6 +179,14 @@ wheel SHA-256）——仅凭 wheel 版本号（`0.5.8rc1.post48`）无法区分�
   为空/不可读 → `IdentityError`（不确定 → cache miss）。
   `verify-engine-identity.sh` 将 `KVP_LMCACHE_BUILD` pin 与运行镜像的
   `wheel_version` 交叉校验（MISMATCH → exit 4）。
+* 绑定到**运行**镜像（r21 L1）：解析器（`_kvp_require_custom_image`）从
+  **已解析**镜像的 deep 检查中捕获 `KVP_WHEEL_VERSION=` 并在每条成功路径上
+  导出为 `KVP_LMCACHE_BUILD`（`KVP_SKIP_IMAGE_CHECK=1` 除外）。
+  `read_lmcache_build` 优先级：env（运行镜像）> baked identity JSON >
+  `live/` 构建记录（仅当解析器未运行时使用）。`verify-engine-identity.sh`
+  **始终**交叉校验（pin 或有效值），而非仅在有 pin 时。无法读取构建时，
+  消息给出真实动作：通过 `scripts/start-all.sh` 启动或执行
+  `bash scripts/build-image.sh`。
 
 **`STORE_END` 事件不是持久写入的证据。** STORE/RETRIEVE 诊断区分：
 store 已请求 → worker/适配器完成 → 对象被 L2 接受 → L2 写入成功/失败 →

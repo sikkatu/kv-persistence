@@ -203,6 +203,15 @@ PyPI) копируется в контекст сборки и устанавл�
   → `IdentityError` (неопределённость → cache miss).
   `verify-engine-identity.sh` кросс-проверяет пин `KVP_LMCACHE_BUILD` с
   `wheel_version` работающего образа (MISMATCH → exit 4).
+* Привязка к ЗАПУСКАЕМОМУ образу (r21 L1): резолвер (`_kvp_require_custom_image`)
+  перехватывает `KVP_WHEEL_VERSION=` из deep-проверки РЕШЁННОГО образа и
+  экспортирует его как `KVP_LMCACHE_BUILD` на каждом успешном пути (кроме
+  `KVP_SKIP_IMAGE_CHECK=1`). Приоритет в `read_lmcache_build`: env (запускаемый
+  образ) > baked identity JSON > запись сборки в `live/` (используется только
+  когда резолвер не работал). `verify-engine-identity.sh` сверяет ВСЕГДА (пин
+  или эффективное значение), а не только при пине. Когда сборку прочитать
+  нельзя, сообщение называет реальное действие: запустите через
+  `scripts/start-all.sh` или выполните `bash scripts/build-image.sh`.
 
 **Событие `STORE_END` — не доказательство персистентной записи.**
 Диагностика STORE/RETRIEVE различает: store запрошен → завершение на
