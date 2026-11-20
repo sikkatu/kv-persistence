@@ -416,47 +416,221 @@ def test_mutation_smoke_markers_cut_is_red(tmp_path):
 # start-cache refusal text (K6.4)
 # ---------------------------------------------------------------------------
 def test_start_cache_codec_refusal_names_the_rebuild(tmp_path):
-    """start-cache.sh with a docker stub whose codec probe fails with
-    ModuleNotFoundError -> rc != 0, the text names build-image.sh and does
-    NOT tell the user to 'install the codec into the image' (impossible)."""
+    """r21 L2: the codec-refusal test must reach the CODEC PROBE, not die
+    earlier on the custom-image check (r20's stub answered `image inspect`
+    with {} -- the refusal then fired for the WRONG reason and the test was
+    green by accident). The stub now answers labels + identity of a REAL
+    build (the deep check passes) and only the codec probe fails with
+    ModuleNotFoundError. Assert: rc != 0; `lossless codec 'zstd' is not
+    available` present; `build-image.sh` present; NO `MISMATCH` / `NOT the
+    custom` (the refusal is about the codec, not the image); the server was
+    NEVER started."""
+    import hashlib
+    import json as _json
+    real_patch_dir = ROOT / "vendor" / "patches" / "lmcache"
+
+    def _sha(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    labels = _json.dumps({
+        "org.kvp.lmc-base": ("vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d"
+                             "96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134"
+                             "e04b883623f8adcbd8e3a0ec3140a193abcf"),
+        "org.kvp.lmc-patch-4136": _sha(real_patch_dir / "4136-mp-retrieve-abort.patch"),
+        "org.kvp.lmc-patch-5972": _sha(real_patch_dir / "5972-incomplete-kv-objects.patch"),
+    })
+    wv = "0.5.8rc1.post48+kvp.60dce759ea93"
+    ident = _json.dumps({
+        "module": "kvp-custom-lmcache-identity",
+        "lmcache_source_commit": "07f1c6bb642f4772606a36eab730ae009ddce08f",
+        "pr4136_patch_sha256": _sha(real_patch_dir / "4136-mp-retrieve-abort.patch"),
+        "pr5972_patch_sha256": _sha(real_patch_dir / "5972-incomplete-kv-objects.patch"),
+        "wheel": f"lmcache-{wv}-cp312-cp312-linux_x86_64.whl",
+        "wheel_sha256": "a" * 64,
+        "wheel_version": wv,
+    })
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    docker_log = tmp_path / "docker.log"
     (bin_dir / "docker").write_text('''#!/usr/bin/env bash
+echo "$*" >> "DOCKERLOG"
 cmd="${1:-}"; shift || true
+_all="$*"
 case "$cmd" in
+  image)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      inspect) echo 'LABELSJSON' ;;
+    esac ;;
   run)
-    _probe=""
-    while [ "$#" -gt 0 ]; do case "$1" in -c) _probe="$2"; shift 2 ;; *) shift ;; esac; done
-    case "$_probe" in
+    case "$_all" in
       *check_codec_available*)
         echo "ModuleNotFoundError: No module named 'zstandard'" >&2
         exit 1 ;;
+      *importlib.metadata*) echo "WHEELVER"; exit 0 ;;
+      *find_spec*) exit 0 ;;
+    esac
+    case "$_all" in
+      *--entrypoint*cat*) cat <<'IDENTEOF'
+IDENTJSON
+IDENTEOF
+        exit 0 ;;
     esac
     exit 0 ;;
-  inspect) echo "sha256:''' + "a" * 64 + '''" ;;
-  image) echo "{}" ;;
+  exec) cat <<'IDENTEOF'
+IDENTJSON
+IDENTEOF
+    ;;
+  inspect) echo "sha256:AAAA" ;;
   ps) exit 0 ;;
   *) exit 0 ;;
 esac
-''')
+'''.replace("DOCKERLOG", str(docker_log))
+        .replace("LABELSJSON", labels)
+        .replace("IDENTJSON", ident)
+        .replace("WHEELVER", wv)
+        .replace("AAAA", "a" * 64))
     (bin_dir / "docker").chmod(0o755)
     live = tmp_path / "live"
     live.mkdir()
     (live / "image").write_text("sha256:" + "c" * 64 + "\n")
+    (tmp_path / "cache").mkdir()
     env = dict(os.environ,
                PATH=f"{bin_dir}:{os.environ.get('PATH','')}",
                KVP_LIVE_DIR=str(live),
+               KVP_CACHE_ROOT=str(tmp_path / "cache"),
+               KVP_CACHE_BUDGET_GB="1",
                KVP_LAUNCH_MODE="docker",
                LMCACHE_L2_SERDE="zstd",
                KVP_SKIP_IPC_TEST="1")
-    for var in ("IMAGE", "DOCKER_IMAGE"):
+    for var in ("IMAGE", "DOCKER_IMAGE", "KVP_LMCACHE_BUILD", "KVP_SKIP_LMC_IDENTITY",
+                "KVP_SKIP_IMAGE_CHECK", "KVP_MODEL_CONFIG"):
         env.pop(var, None)
     r = subprocess.run(["bash", str(START_CACHE)], capture_output=True,
                        text=True, timeout=60, env=env, cwd=str(tmp_path))
     out = r.stdout + r.stderr
     assert r.returncode != 0, (
         f"a missing codec in the image must refuse the cache start:\n{out[-1200:]}")
+    assert "lossless codec 'zstd' is not available" in out, (
+        f"the refusal must come from the CODEC probe:\n{out[-1200:]}")
     assert "build-image.sh" in out, (
         f"the refusal must name the image rebuild:\n{out[-1200:]}")
+    assert "MISMATCH" not in out and "NOT the custom" not in out, (
+        f"the custom-image check must PASS (the refusal is about the codec, "
+        f"not the image):\n{out[-1200:]}")
     assert "install the codec into the image" not in out, (
         f"the impossible 'install the codec into the image' hint must be GONE:\n{out[-1200:]}")
+    # the server must NEVER be started (the --help probe is allowed)
+    dlog = docker_log.read_text() if docker_log.exists() else ""
+    for line in dlog.splitlines():
+        if "kvpersist.launch" in line and "server" in line and "--help" not in line:
+            raise AssertionError(f"the cache server must not start on a codec "
+                                 f"refusal:\n{dlog[-800:]}")
+
+
+# ---------------------------------------------------------------------------
+# r21 L2 mutation
+# ---------------------------------------------------------------------------
+def test_mutation_codec_probe_neutralized_is_red(tmp_path):
+    """r21 L2 mutation: neutralize the codec probe in a MUTANT start-cache.sh
+    (replace the docker probe call with `true`) -> the codec refusal
+    DISAPPEARS on the mutant (the mutant starts the server instead of
+    refusing). Proves the honest K6.4 test's refusal really comes from the
+    codec probe, not from an earlier check."""
+    # an honest mutant: the docker-mode codec probe is neutralized
+    src = START_CACHE.read_text()
+    marker = 'CODEC_PROBE="$(docker run'
+    assert marker in src, "codec probe marker not found in start-cache.sh"
+    mutant = src.replace(marker, 'CODEC_PROBE="$(true && cat <<__NEUTRALIZED__\n'
+                         '# __NEUTRALIZED__')
+    # close the heredoc before the original command's closing quote
+    mutant = mutant.replace('__NEUTRALIZED__\n"', '__NEUTRALIZED__\n)"', 1)
+    assert mutant != src, "mutation produced no change"
+    mutant_sh = tmp_path / "start-cache-mutant.sh"
+    mutant_sh.write_text(mutant)
+    mutant_sh.chmod(0o755)
+    # run the mutant with the same honest stub as the real test
+    import hashlib
+    import json as _json
+    real_patch_dir = ROOT / "vendor" / "patches" / "lmcache"
+
+    def _sha(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    labels = _json.dumps({
+        "org.kvp.lmc-base": ("vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d"
+                             "96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134"
+                             "e04b883623f8adcbd8e3a0ec3140a193abcf"),
+        "org.kvp.lmc-patch-4136": _sha(real_patch_dir / "4136-mp-retrieve-abort.patch"),
+        "org.kvp.lmc-patch-5972": _sha(real_patch_dir / "5972-incomplete-kv-objects.patch"),
+    })
+    wv = "0.5.8rc1.post48+kvp.60dce759ea93"
+    ident = _json.dumps({
+        "module": "kvp-custom-lmcache-identity",
+        "lmcache_source_commit": "07f1c6bb642f4772606a36eab730ae009ddce08f",
+        "pr4136_patch_sha256": _sha(real_patch_dir / "4136-mp-retrieve-abort.patch"),
+        "pr5972_patch_sha256": _sha(real_patch_dir / "5972-incomplete-kv-objects.patch"),
+        "wheel": f"lmcache-{wv}-cp312-cp312-linux_x86_64.whl",
+        "wheel_sha256": "a" * 64,
+        "wheel_version": wv,
+    })
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "docker").write_text('''#!/usr/bin/env bash
+cmd="${1:-}"; shift || true
+_all="$*"
+case "$cmd" in
+  image)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      inspect) echo 'LABELSJSON' ;;
+    esac ;;
+  run)
+    case "$_all" in
+      *check_codec_available*)
+        echo "ModuleNotFoundError: No module named 'zstandard'" >&2
+        exit 1 ;;
+      *importlib.metadata*) echo "WHEELVER"; exit 0 ;;
+      *find_spec*) exit 0 ;;
+    esac
+    case "$_all" in
+      *--entrypoint*cat*) cat <<'IDENTEOF'
+IDENTJSON
+IDENTEOF
+        exit 0 ;;
+    esac
+    exit 0 ;;
+  exec) cat <<'IDENTEOF'
+IDENTJSON
+IDENTEOF
+    ;;
+  inspect) echo "sha256:AAAA" ;;
+  ps) exit 0 ;;
+  *) exit 0 ;;
+esac
+'''.replace("LABELSJSON", labels)
+        .replace("IDENTJSON", ident)
+        .replace("WHEELVER", wv)
+        .replace("AAAA", "a" * 64))
+    (bin_dir / "docker").chmod(0o755)
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "image").write_text("sha256:" + "c" * 64 + "\n")
+    (tmp_path / "cache").mkdir()
+    env = dict(os.environ,
+               PATH=f"{bin_dir}:{os.environ.get('PATH','')}",
+               KVP_LIVE_DIR=str(live),
+               KVP_CACHE_ROOT=str(tmp_path / "cache"),
+               KVP_CACHE_BUDGET_GB="1",
+               KVP_LAUNCH_MODE="docker",
+               LMCACHE_L2_SERDE="zstd",
+               KVP_SKIP_IPC_TEST="1")
+    for var in ("IMAGE", "DOCKER_IMAGE", "KVP_LMCACHE_BUILD", "KVP_SKIP_LMC_IDENTITY",
+                "KVP_SKIP_IMAGE_CHECK", "KVP_MODEL_CONFIG"):
+        env.pop(var, None)
+    r = subprocess.run(["bash", str(mutant_sh)], capture_output=True,
+                       text=True, timeout=60, env=env, cwd=str(tmp_path))
+    out = r.stdout + r.stderr
+    # the mutant must NOT refuse on the codec (the probe is neutralized) --
+    # either it passes the codec check (and fails later on the server start)
+    # or it succeeds; either way the codec refusal is GONE
+    assert "lossless codec 'zstd' is not available" not in out, (
+        f"the neutralized probe must NOT produce the codec refusal:\n{out[-1200:]}")
