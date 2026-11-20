@@ -156,6 +156,18 @@ codecs were only described for the host venv and never entered the image
 'zstandard'` from `check_codec_available` at `start-cache` -- the default
 zstd path could not work once).
 
+**Server smoke at image build (r20 K6.3):** after the import markers,
+`build-image.sh` starts the REAL cache server INSIDE the image for both
+codecs (`zstd` the default, `none` byte-exact raw) via
+`scripts/_smoke_cache_server.sh`: the rendered L2 adapter and the
+`kvpersist.launch server` argument list come from the ONE shared source
+(`env.sh` `_kvp_render_l2_adapter` + `_kvp_server_argv`, the same helpers
+`start-cache.sh` uses), then `kvpersist.mp_ping`, SIGTERM, clean exit. The
+strict markers `KVP_SMOKE_<CODEC>_READY=OK` / `KVP_SMOKE_<CODEC>_EXIT=0` are
+required -- the build refuses and `live/image` is not written without them.
+This catches codec/nixl/otel/adapter failures at build time instead of the
+operator's first `start-cache`.
+
 ## 3. Persistent cache: L1/L2, identity, diagnostics
 
 * L1 = host DRAM (`LMCACHE_L1_SIZE_GB=64`, translated to the server's actual

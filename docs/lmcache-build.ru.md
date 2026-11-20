@@ -167,6 +167,18 @@ PyPI) копируется в контекст сборки и устанавл�
 `check_codec_available` в `start-cache` — дефолтный zstd-путь не мог
 работать ни разу).
 
+**Серверный smoke при сборке образа (r20 K6.3):** после маркеров импортов
+`build-image.sh` поднимает НАСТОЯЩИЙ cache-сервер ВНУТРИ образа для обоих
+кодеков (`zstd` по умолчанию, `none` — byte-exact raw) через
+`scripts/_smoke_cache_server.sh`: отрендеренный L2-адаптер и список аргументов
+`kvpersist.launch server` берутся из ЕДИНОГО источника (хелперы `env.sh`
+`_kvp_render_l2_adapter` + `_kvp_server_argv`, те же, что использует
+`start-cache.sh`), затем `kvpersist.mp_ping`, SIGTERM, чистый выход.
+Строгие маркеры `KVP_SMOKE_<CODEC>_READY=OK` / `KVP_SMOKE_<CODEC>_EXIT=0`
+обязательны — без них сборка отказывает и `live/image` не записывается.
+Сбои кодеков/nixl/otel/адаптера ловятся на сборке, а не при первом
+`start-cache` у оператора.
+
 ## 3. Персистентный кэш: L1/L2, идентичность, диагностика
 
 * L1 = DRAM хоста (`LMCACHE_L1_SIZE_GB=64`; проверяйте фактическую опцию

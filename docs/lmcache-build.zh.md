@@ -148,6 +148,16 @@ wheel SHA-256）——仅凭 wheel 版本号（`0.5.8rc1.post48`）无法区分�
 `ModuleNotFoundError: No module named 'zstandard'` —— 默认 zstd 路径一次
 也不可能工作过）。
 
+**镜像构建时的服务器 smoke（r20 K6.3）：** 导入标记之后，`build-image.sh` 在
+镜像**内部**为两种编解码器（`zstd` 默认、`none` 字节精确 raw）通过
+`scripts/_smoke_cache_server.sh` 启动**真实**缓存服务器：渲染后的 L2 适配器
+和 `kvpersist.launch server` 参数列表取自统一来源（`env.sh` 的
+`_kvp_render_l2_adapter` + `_kvp_server_argv`，与 `start-cache.sh` 使用的
+辅助函数相同），然后 `kvpersist.mp_ping`、SIGTERM、干净退出。严格标记
+`KVP_SMOKE_<CODEC>_READY=OK` / `KVP_SMOKE_<CODEC>_EXIT=0` 是必需的——缺少
+则构建拒绝且 `live/image` 不写入。编解码器/nixl/otel/适配器故障在构建时
+捕获，而不是操作员首次 `start-cache` 时。
+
 ## 3. 持久缓存：L1/L2、身份、诊断
 
 * L1 = 主机 DRAM（`LMCACHE_L1_SIZE_GB=64`；请在 `lmcache-server.log` 中

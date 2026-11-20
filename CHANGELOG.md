@@ -78,8 +78,18 @@ was never in the image, so the docker path could not have worked once.
   into the image". Mutations (drop `--require-hashes` / drop the `==` pin /
   drop a package / drop the COPY / cut the markers from the verify output)
   -> RED. **Honest test limit:** that `pip` really installs the packages
-  into the image is verifiable on hardware only (the markers + the server
-  smoke).
+  into the image is verifiable on hardware only -- the image-build server
+  smoke (below) runs the REAL server in the image and catches codecs/nixl/
+  adapter failures, but only on a real GPU build.
+* `fc8a78b` + `eedd109` **K6.3** (P1, server smoke at image build): the real
+  cache server must START in the freshly built image. ONE command source:
+  `env.sh` gains `_kvp_render_l2_adapter` + `_kvp_server_argv`, used by BOTH
+  `start-cache.sh` (production) and `scripts/_smoke_cache_server.sh` (run
+  INSIDE the image by `build-image.sh`). For TWO codecs (zstd default, none
+  raw): render the adapter, start the server, wait for `kvpersist.mp_ping`,
+  SIGTERM, clean exit. Strict markers `KVP_SMOKE_<CODEC>_READY=OK` /
+  `KVP_SMOKE_<CODEC>_EXIT=0`; the build gate refuses without them.
+  Mutation: a smoke printing no markers -> refusal (RED detector).
 * `d5fc90b` + `767826e` **K7** (P0, the cache namespace must distinguish
   LMCache builds): `CacheIdentity` gained a MANDATORY `lmcache_build` field
   (= `wheel_version` from `/etc/kvp-lmcache-identity.json`,
@@ -98,7 +108,7 @@ was never in the image, so the docker path could not have worked once.
 * `6dd98f0` (recipes): test fixtures carry the new mandatory field and
   record `live/image-identity.env` exactly as `build-image.sh` does on a
   real machine.
-* Full run: kv-persistence **702 passed, 26 skipped** (all skips
+* Full run: kv-persistence **704 passed, 26 skipped** (all skips
   environment: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache,
   hardware-only); recipes **448 passed, 5 skipped** (after the K7 fixture
   update; 443/5 before this round's fixture change).
