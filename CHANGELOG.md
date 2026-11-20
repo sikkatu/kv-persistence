@@ -50,6 +50,28 @@ live/image), the incomplete-KV workload test, GPU regression C13 on request.
   sourcing under `set -e` succeeds and KVP_CUSTOM_IMAGE_ID round-trips; raw
   log saved separately. RED before the fix (2 failed on HEAD), GREEN after;
   mutation (cat verify.txt into the .env) -> RED.
+* `1fe83bb` **H4.1**: the r18 G1 test ran build-image.sh on a DIFFERENT,
+  empty dir (KVP_BUILD_DIR=build vs the build's KVP_OUT_DIR=out) -- the
+  'provenance.json not found' refusal fired ALWAYS, even without the fix.
+  Now both scripts run on the SAME dir (like production live/lmcache-build),
+  plus an end-to-end test: real build -> its own provenance -> real
+  build-image reaches docker build -> failing rebuild -> refusal. Mutation
+  (drop the rm) -> both controls RED.
+* `1a5ae22` **H4.2**: _rerun_incontainer.sh printed 'ownership returned'
+  even when chown failed (`|| true` swallowed the error). Now a failed chown
+  prints `WARNING: could not return ownership (rc=N): the work dir may stay
+  root-owned` and never claims success; the script exit code is unchanged.
+  Test: the REAL _kvp_chown_back with a failing chown stub; mutation
+  (unconditional echo) -> RED.
+* `01f1092` **H4.3**: verify-engine-identity.sh now LOUDLY warns
+  `WARNING: this image carries an UNTESTED LMCache wheel` when the baked
+  identity has a non-empty `untested_wheel` (KVP_ALLOW_UNTESTED_WHEEL=1
+  images); empty/missing field (old images) stays silent. Printed BEFORE the
+  heavy checks so it is visible on every outcome. Test: the REAL gate script
+  with three identity variants; mutation (suppress the warning) -> RED.
+* Full run: kv-persistence **669 passed, 26 skipped** (all skips environment:
+  promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, hardware-only);
+  recipes **443 passed, 5 skipped** (code unchanged this round).
 ### Round 18 (image-step integrity: provenance, wheel, patches)
 * `9030142` **G1** (a failed build left a stale provenance.json next to the
   new untested wheel): the wheel lands in `$OUT_DIR/wheels` at C5 (long
