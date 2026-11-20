@@ -12,6 +12,14 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 19 轮（「镜像」步骤：Dockerfile 中的 wheel 文件名、identity 作为 env 文件）
+**硬件事实（操作员日志，2026 年 11 月 20 日）** —— 取代第 18 轮「等待硬件确认」的说法：
+* 快速重跑 `scripts/rerun-lmcache-gate.sh --trust-wheel`（第 4 次运行的 wheel）：C8-C12 通过，C11 = 155 passed / 0 failed / 0 errors / 0 skipped；
+* 完整 `scripts/build-lmcache.sh`：C0-C16 通过，wheel `0.5.8rc1.post48+kvp.60dce759ea93`，sha256 `daff4af1016e956c351f054dd67d6f45d85a5c4c6165b0f0867833cdd56b118a`，C11 = 155 passed / 0 skipped，C14「engine identity OK」，C13（GPU）默认跳过（未设 KVP_BUILD_GPU_TESTS），最后一行 `DONE`；
+* `scripts/build-image.sh`：第 18 轮全部完整性校验通过，`docker build` 在 [4/4] 步失败（见下方 H1）。镜像**未构建**；镜像内 GPU 检查未运行。
+**仍待硬件验证：** build-image.sh 到底（镜像内 GPU 检查、live/image）、incomplete-KV 修复的负载测试、按需的 GPU 回归 C13。
+* `666e322` **H1**（P0，镜像无法构建）：Dockerfile 把 wheel 重命名为 `/tmp/kvp-lmcache.whl`；pip 按 `{name}-{version}-{python}-{abi}-{platform}.whl` 解析本地 `.whl` 名并拒绝它 —— `docker build` [4/4] 步报 `ERROR: Invalid wheel filename (wrong number of parts): 'kvp-lmcache'`。现在 wheel 在镜像中保留**真实**文件名（`WHEEL_BASENAME` 用于 COPY、pip install 和 rm；路径带引号，本地版本含 `+`）。测试（test_r19_h1_wheel_name.py）：安装路径 basename == 真实 wheel 名且通过 packaging.utils.parse_wheel_filename；同 name-version 的最小 wheel 可执行安装成功，`kvp-lmcache.whl` 名以硬件原样错误失败；夹具 wheel 名与真实构建一致（含 `+kvp.60dce759ea93`、cp312 标签）。修复前红（HEAD 上 3 failed），修复后绿；变异（恢复固定名）→ 红。
+* `256cd70` **H2**：image-identity.env 现在是真正的 env 文件 —— 仅 `^KVP_[A-Z0-9_]+=` 行（原始校验输出含日志噪音和 `KVP_GPU_SMOKE[N]` 行，其变量名对 shell 非法，破坏 `set -e; . live/image-identity.env`）。原始输出保存为 live/image-verify.txt；.env 保留聚合值（KVP_GPU_COUNT、KVP_GPU_SMOKE_OK_COUNT、KVP_GPU_CC）。测试：写实的「嘈杂」verify.txt，`set -e` 下 source 成功且 KVP_CUSTOM_IMAGE_ID 往返一致；原始日志另行保存。修复前红（HEAD 上 2 failed），修复后绿；变异（cat verify.txt 进 .env）→ 红。
 ### 第 18 轮（「镜像」步骤的完整性：provenance、wheel、补丁）
 * `9030142` **G1**（失败的构建把过期 provenance.json 留在新未测 wheel 旁）：wheel 在 C5 就进入 `$OUT_DIR/wheels`（远早于 C8-C14 门禁），而 provenance.json 只在成功构建的**末尾**写入——任何在门禁上失败的构建之后，build-image.sh 会用不匹配的配对烘焙镜像。现在 build-lmcache.sh 在构建开始时删除 provenance.json（与 rerun-prod-hash.txt 一起）。测试：真实构建 + docker 桩（放下 wheel 后 rc=1）→ 无 provenance，真实 build-image.sh 拒绝 'provenance.json not found'；正控写入新的。变异（去掉 rm）→ 红。
 * `90984c1` **G2**（build-image.sh 不校验 wheel 和补丁与 provenance 一致）：现在在 docker build **之前** —— 恰好一个 *.whl（零/多个 → 拒绝），sha256(WHEEL) == provenance 的 wheel_sha256（`wheel does not match provenance.json (rebuild: bash scripts/build-lmcache.sh)`），pr4136/pr5972 补丁 SHA == 当前补丁文件（`patches changed since the wheel was built: full rebuild required`），tests_skipped 必须为 "0"（否则拒绝；KVP_ALLOW_UNTESTED_WHEEL=1 时响亮警告并在 identity 标记 `untested-wheel`）。镜像 identity 中的补丁 SHA 取自 PROVENANCE，而非当前文件（旧的真值来源让标识**说谎**）。测试：两个/零 wheel、wheel 改一字节、4136/5972 编辑、tests_skipped 拒绝/放行、一致配对——每个带真实脚本上的变异检测器。

@@ -13,6 +13,43 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 19 (image step: wheel filename in Dockerfile, env-file identity)
+**Hardware facts (operator logs, 20 Nov 2026)** -- replacing the "confirmation
+pending" wording of round 18:
+* fast rerun `scripts/rerun-lmcache-gate.sh --trust-wheel` on the wheel from
+  run 4: C8-C12 passed, C11 = 155 passed / 0 failed / 0 errors / 0 skipped;
+* full `scripts/build-lmcache.sh`: C0-C16 passed, wheel
+  `0.5.8rc1.post48+kvp.60dce759ea93`, sha256
+  `daff4af1016e956c351f054dd67d6f45d85a5c4c6165b0f0867833cdd56b118a`,
+  C11 = 155 passed / 0 skipped, C14 "engine identity OK", C13 (GPU) skipped by
+  default (KVP_BUILD_GPU_TESTS unset), final line `DONE`;
+* `scripts/build-image.sh`: all round-18 integrity checks passed,
+  `docker build` failed at step [4/4] (H1 below). The image is NOT built; the
+  in-image GPU check did not run.
+**Still waiting for hardware:** build-image.sh to the end (in-image GPU check,
+live/image), the incomplete-KV workload test, GPU regression C13 on request.
+* `666e322` **H1** (P0, the image would not build): the Dockerfile renamed
+  the wheel to `/tmp/kvp-lmcache.whl`; pip parses a local `.whl` name as
+  `{name}-{version}-{python}-{abi}-{platform}.whl` and rejected it --
+  `ERROR: Invalid wheel filename (wrong number of parts): 'kvp-lmcache'` at
+  `docker build` step [4/4]. The wheel keeps its REAL filename in the image
+  (`WHEEL_BASENAME` used for COPY, pip install and rm; quoted path, the
+  local version carries `+`). Tests (test_r19_h1_wheel_name.py): the install
+  path basename == the real wheel name and passes
+  packaging.utils.parse_wheel_filename; an executable pip install of a
+  minimal wheel with the same name-version works, the `kvp-lmcache.whl` name
+  fails with the exact hardware error; fixture wheel named like the real
+  build (with `+kvp.60dce759ea93`, cp312 tags). RED before the fix (3 failed
+  on HEAD), GREEN after; mutation (restore the fixed name) -> RED.
+* `256cd70` **H2**: image-identity.env is a REAL env-file now -- only
+  `^KVP_[A-Z0-9_]+=` lines (the raw verify output carries log noise and
+  `KVP_GPU_SMOKE[N]` rows with invalid shell names that broke `set -e; .
+  live/image-identity.env`). The raw verify output is saved as
+  live/image-verify.txt; the .env keeps the aggregates (KVP_GPU_COUNT,
+  KVP_GPU_SMOKE_OK_COUNT, KVP_GPU_CC). Test: realistic noisy verify.txt,
+  sourcing under `set -e` succeeds and KVP_CUSTOM_IMAGE_ID round-trips; raw
+  log saved separately. RED before the fix (2 failed on HEAD), GREEN after;
+  mutation (cat verify.txt into the .env) -> RED.
 ### Round 18 (image-step integrity: provenance, wheel, patches)
 * `9030142` **G1** (a failed build left a stale provenance.json next to the
   new untested wheel): the wheel lands in `$OUT_DIR/wheels` at C5 (long
