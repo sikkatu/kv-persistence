@@ -956,6 +956,18 @@ _kvp_resolve_runtime_image() {
            return 1; }
     return 0
   fi
+  # r21 L6: a BARE TAG (no @sha256: digest) is a user format error -- the
+  # misleading "base pin mismatch, rebuild" advice must NOT fire for it.
+  case "$_in" in
+    *@sha256:*) ;;  # properly pinned stock/base -- falls through below
+    *)
+      echo "ERROR: IMAGE '$_in' has no digest -- a bare tag is NOT accepted." >&2
+      echo "  IMAGE must be 'repo:tag@sha256:<64hex>' (base pin) or 'sha256:<id>' (custom)." >&2
+      echo "  Take the custom id from:  \$(cat ${_live:-$root/live}/image)" >&2
+      echo "  Or simply run: IMAGE=\"\$(cat ${_live:-$root/live}/image)\" bash scripts/start-all.sh" >&2
+      return 1
+      ;;
+  esac
 
   # -- repo:tag@sha256:... (stock, base pin): must match the custom image's
   # base label; the custom image is the one that runs
