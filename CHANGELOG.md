@@ -13,6 +13,95 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 20 (launch image resolution, image codecs, cache-namespace build identity)
+**Hardware facts (operator log, 20 Nov 2026):** full build C0-C16 passed (wheel
+`0.5.8rc1.post48+kvp.60dce759ea93`, C11 = 155 passed / 0 skipped), but the
+launch chain broke in three places: the active `IMAGE=` stock pin in `tp4.env`
+shadowed `live/image` (6 observability containers came up before the
+refusal), `run-tp4-hotsplit.sh` overwrote `live/image` with the stock digest
+BEFORE the verify gate (the custom image was "forgotten" after one failed
+launch), and the docker cache path died on
+`ModuleNotFoundError: No module named 'zstandard'` -- the default zstd codec
+was never in the image, so the docker path could not have worked once.
+* `ba84356` **K1** (P0, one fail-fast resolution of the launch image):
+  `_kvp_resolve_runtime_image` in `env.sh` resolves the runtime image ONCE,
+  before step 1/3 and before any docker call, in all three launchers
+  (`start-all.sh`, `start-cache.sh` docker mode, both recipe launchers with
+  `KV_PERSIST=1` only). A stock `IMAGE=` is not a user error but the BASE
+  pin: it must match the `org.kvp.lmc-base` label of the custom image in
+  `live/image` (digest comparison via `check_image_identity --expected-base`;
+  same digest under another tag passes, a different digest under the same
+  tag is refused), and the launch runs the CUSTOM one. An explicit
+  `sha256:<64hex>` override still wins (README contract). `KV_PERSIST!=1`
+  (stock recipe runs) does not touch `IMAGE` at all; `KVP_PERSIST_ENABLED=false`
+  skips the resolution entirely (round-81b regression found by the recipes
+  suite and fixed). The test-harness opt-out `KVP_SKIP_IMAGE_CHECK=1` keeps
+  working. Resolution matrix (a)-(h) tested on the REAL scripts with a
+  logging docker stub answering labels/identity from the real patch SHAs;
+  4 behavioral mutations RED.
+* `271cb5c` (recipes) + `bc131af` (recipes) **K2** (P0): `live/image` is
+  written ONLY after a successful custom-image verify, and only with
+  `KV_PERSIST=1` and `KVP_SKIP_IMAGE_CHECK` unset -- the two places allowed
+  to write it are `build-image.sh` (after its verify gate) and the launcher
+  (after the deep check). Sentinel tests: stock refusal leaves the file
+  byte-identical, custom success records the exact id, `KV_PERSIST=0` and
+  `KVP_SKIP_IMAGE_CHECK=1` never touch it; restoring the old order -> RED.
+* `6bfb6fc` **K3** (P0, docker-mode pre-flight): the check now verifies the
+  cache container and the engine run the SAME image (`.Image` vs `.Id`),
+  instead of comparing the host venv's lmcache version with the image's
+  (which refused every launch when the host venv held any other build). The
+  RPC ping runs INSIDE the cache container (exit 3 = refusal there); the
+  host-mode hint names the real wheel path with `--force-reinstall --no-deps`
+  (the `pip install lmcache==...+kvp` hint pointed at a package that does
+  not exist on PyPI). Mutations (host-version compare restored / exec ping
+  dropped / `.Id` compared against a tag name) -> RED.
+* `56662a2` **K4** (P1, r19 test holes closed): the generated Dockerfile is
+  parsed structurally (join `\`-continuations, split RUN on `&&`,
+  `shlex.split`) -- COPY src == the real wheel basename, COPY dst == the pip
+  install path == the rm -f path, the name passes
+  `packaging.utils.parse_wheel_filename`, `--no-deps` is present; the
+  executable test runs the REAL pip install command cut from the Dockerfile
+  against a minimal wheel with the real cp312 tags; launch-chain tests
+  strengthened. 4 mutation detectors (COPY dst only / pip path only / rm
+  path only / `--no-deps` dropped) -> RED.
+* `2b51670` **K6** (P0, the codecs ship IN the image):
+  `requirements-image-codecs.txt` (SINGLE SOURCE of the pins --
+  `zstandard==0.25.0`, `lz4==4.4.5`, cp312 manylinux x86_64 wheels from
+  PyPI, exact `--hash=sha256`) is copied into the build context and
+  installed with `--no-deps --only-binary=:all: --require-hashes`; the file
+  SHA and pinned versions enter `/etc/kvp-lmcache-identity.json` and
+  `image-identity.env` (`image_codecs_sha256` / `KVP_IMAGE_CODECS_SHA256`).
+  `_verify_image.py` emits the STRICT markers `KVP_ZSTD_IMPORT=OK` /
+  `KVP_LZ4_IMPORT=OK` (versions on separate `KVP_*_VERSION=` lines) and
+  `build-image.sh` refuses without them. `start-cache.sh`'s codec refusal
+  now says "rebuild the image" instead of the impossible "install the codec
+  into the image". Mutations (drop `--require-hashes` / drop the `==` pin /
+  drop a package / drop the COPY / cut the markers from the verify output)
+  -> RED. **Honest test limit:** that `pip` really installs the packages
+  into the image is verifiable on hardware only (the markers + the server
+  smoke).
+* `d5fc90b` + `767826e` **K7** (P0, the cache namespace must distinguish
+  LMCache builds): `CacheIdentity` gained a MANDATORY `lmcache_build` field
+  (= `wheel_version` from `/etc/kvp-lmcache-identity.json`,
+  `0.5.8rc1.post48+kvp.<12hex>`); empty/unreadable -> `IdentityError`
+  (uncertain -> cache miss). Before this, the stock build 0.5.6 and the
+  custom build derived the SAME namespace (`kvp-7a26d4bf...`) and a new
+  server read the old cache. ONE source for every consumer:
+  `kvpersist.identity.read_lmcache_build()` (bash reads the same value via
+  `check_image_identity.py --print-wheel-version`, so bash and Python can
+  never disagree); `verify-engine-identity.sh` cross-checks the
+  `KVP_LMCACHE_BUILD` pin against the running image's `wheel_version`
+  (MISMATCH -> exit 4). Tests: empty build -> `IdentityError`, different
+  builds -> different namespaces, the identity JSON is the value that is
+  hashed, the gate cross-check on the REAL script with a docker stub, and a
+  mutation dropping the field from the hashed payload -> RED.
+* `6dd98f0` (recipes): test fixtures carry the new mandatory field and
+  record `live/image-identity.env` exactly as `build-image.sh` does on a
+  real machine.
+* Full run: kv-persistence **702 passed, 26 skipped** (all skips
+  environment: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache,
+  hardware-only); recipes **448 passed, 5 skipped** (after the K7 fixture
+  update; 443/5 before this round's fixture change).
 ### Round 19 (image step: wheel filename in Dockerfile, env-file identity)
 **Hardware facts (operator logs, 20 Nov 2026)** -- replacing the "confirmation
 pending" wording of round 18:
@@ -112,55 +201,6 @@ live/image), the incomplete-KV workload test, GPU regression C13 on request.
   round). Hardware status unchanged: C0-C10 passed on the operator's host
   (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16 ("verified
   without hardware, hardware confirmation pending"), C12-C16 pending.
-### Round 17 (three hardware build blockers: C8 import path, C14 engine filter, rerun/build tie)
-* `5c65ce0` **B1** (`No module named 'kvpersist'` on the FIRST container
-  command): both in-container scripts ran `python3 -P -m
-  kvpersist.gate_common check-imports` with `PYTHONPATH=$KVP_SCRIPTS` only,
-  but the `kvpersist` package lives in `implementation/` (`/kvp-impl` in the
-  container). `PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL"` added (in both C8
-  commands); the python3 shim in test_r12_c14_after_tests.py now passes the
-  caller's environment through AS-IS (it used to set PYTHONPATH itself and
-  stub check-imports -- that is why the tests missed the break). New test
-  test_r17_b1_c8_imports.py extracts the REAL C8 command from BOTH scripts
-  and runs it as written against a fake installed lmcache distribution in a
-  dist-packages-like dir (PYTHONUSERBASE user-site, as `site` does).
-  Mutation (drop `:$KVP_IMPL`) -> RED on both scripts.
-* `c12e71e` **B2** (C14 refused EVERY real build): the r16 engine_pins
-  rewrite dropped the engine-name filter and compared EVERY pip package --
-  while the build itself changes the freeze (C7 new lmcache, C9
-  pytest+pluggy+iniconfig, C4 setuptools-scm): `BUILD REFUSED: engine
-  packages changed ... iniconfig / lmcache / pluggy / pytest /
-  setuptools-scm`. Filter restored AFTER PEP 503 normalisation (torch*,
-  vllm*, numpy*, triton* -- torchvision, vllm-flash-attn, triton-kernels
-  included); the OK line prints only the engine pins. Fixtures carry real
-  build noise; the r12 harness pip shim mirrors the real freeze churn.
-  Mutation (drop the filter) -> RED.
-* `8fd30ff` **B3** (rerun never found the wheel, gate tied to nothing):
-  build-lmcache.sh writes the wheel to `$OUT_DIR/wheels` while rerun
-  searched `$WORK_DIR/wheels` + `/tmp/kvp-lmc-build.*`; and
-  `rerun-prod-hash.txt` was recorded by the FIRST rerun, not by the build.
-  Now: shared `kvpersist.gate_common prod-hash SRC` (one algorithm);
-  build-lmcache.sh records `$OUT_DIR/rerun-prod-hash.txt` BEFORE the docker
-  run; rerun takes the wheel from `${KVP_OUT_DIR:-live/lmcache-build}/wheels`
-  (exactly one *.whl), refuses without the hash file (`Need a full build`)
-  and only `--trust-wheel` records a hash (loud `ASSUMING the wheel was
-  built from this production tree` warning). Exact command: `bash
-  scripts/rerun-lmcache-gate.sh` (after a build) / `--trust-wheel` (for a
-  wheel from a pre-r17 build). Mutations (search $WORK_DIR/wheels again;
-  record-on-first-run) -> RED.
-* `d486fe7` **B4**: SOURCES.md GFM blank lines restored (a paragraph after a
-  table row becomes a table row) + test; C4 prints the engine pins and
-  refuses an EMPTY constraints file (`BUILD REFUSED: no engine pins found in
-  baseline freeze`, first-20-lines diagnostic like C14) BEFORE any install.
-  Docs: round 17 + step->test table rows (C8, C14, C4, fast rerun) in
-  docs/lmcache-build{,.ru,.zh}.md, exact rerun command in all three.
-* Full run: kv-persistence **638 passed, 26 skipped** (all skips are
-  environment: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache,
-  hardware-only); recipes **443 passed, 5 skipped** (unchanged code this
-  round, numbers from the fresh run). Hardware status unchanged: C0-C10
-  passed on the operator's host (new base 07f1c6bb6), C11 (4136 test
-  fixtures) fixed in r16 ("verified without hardware, hardware confirmation
-  pending"), C12-C16 pending.
 ### Round 16 (4136 test fixtures, junit gates, engine-pin blind spot, fast rerun)
 * `c354ba9` **P0** (hardware log 19.11 18:53: C0-C10 passed on the new base,
   C11 = 150 passed / 5 failed): all five failures in

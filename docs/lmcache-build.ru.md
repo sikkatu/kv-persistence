@@ -151,6 +151,21 @@ wheel) — по одной только версии wheel (`0.5.8rc1.post48`) �
 Выбор коннектора: используемая версия vLLM требует ЯВНОГО выбора внешнего
 `LMCacheMPConnector` через `--kv-transfer-config` (не рассчитывайте на
 автоопределение).
+**Кодеки в образе (r20 K6):** безпотеряные L2-кодеки (`zstandard`, `lz4`)
+входят В образ — `requirements-image-codecs.txt` (ЕДИНСТВЕННЫЙ источник
+пинов: точные версии `==` с `--hash=sha256` cp312 manylinux x86_64 wheels с
+PyPI) копируется в контекст сборки и устанавливается с
+`--no-deps --only-binary=:all: --require-hashes`. SHA файла и пиновые версии
+попадают в `/etc/kvp-lmcache-identity.json` (`image_codecs_sha256`,
+`image_codecs_versions`) и `live/image-identity.env`
+(`KVP_IMAGE_CODECS_SHA256`, `KVP_IMAGE_CODECS_VERSIONS`). Verify-гейт
+требует СТРОГИЕ маркеры `KVP_ZSTD_IMPORT=OK` / `KVP_LZ4_IMPORT=OK` (версии
+печатаются отдельными строками `KVP_*_VERSION=`) — без них
+`build-image.sh` отказывает и `live/image` не обновляется. До r20 кодеки
+описывались только для host-venv и в образ никогда не попадали (лог железа
+20 ноября 2026: `ModuleNotFoundError: No module named 'zstandard'` из
+`check_codec_available` в `start-cache` — дефолтный zstd-путь не мог
+работать ни разу).
 
 ## 3. Персистентный кэш: L1/L2, идентичность, диагностика
 
@@ -159,10 +174,23 @@ wheel) — по одной только версии wheel (`0.5.8rc1.post48`) �
   потребляется).
 * L2 = постоянный уровень на NVMe (`KVP_CACHE_ROOT=/var/lib/kv-persistence/l2`
   по умолчанию; обязательно локальный NVMe-путь).
-* Кодек — только без потерь: `zstd` (по умолчанию), `lz4`, `none`.
+* Кодек — только без потерь: `zstd` (по умолчанию), `lz4`, `none`. Пакеты
+  кодеков входят В образ (r20 K6, см. раздел 2); копия в host-venv — только
+  для диагностики.
 * Идентичность кэша (namespace, идентичность модели, KV dtype `bfloat16`,
   формат кэша, конфигурация object-group, идентичность бэкенда) проверяется
   на каждом воркере в preflight; любое расхождение останавливает запуск.
+* Идентичность сборки в namespace (r20 K7): `CacheIdentity.lmcache_build` —
+  ОБЯЗАТЕЛЬНОЕ поле = `wheel_version` из `/etc/kvp-lmcache-identity.json`
+  (`0.5.8rc1.post48+kvp.<12hex>`). Оно хешируется в namespace кэша, поэтому
+  две разные сборки LMCache никогда не делят один кэш (до r20 stock-сборка
+  0.5.6 и кастомная давали ОДИН namespace, и новый сервер читал старый
+  кэш). ЕДИНЫЙ источник для всех потребителей:
+  `kvpersist.identity.read_lmcache_build()` (bash читает то же значение
+  через `check_image_identity.py --print-wheel-version`). Пустое/нечитаемое
+  → `IdentityError` (неопределённость → cache miss).
+  `verify-engine-identity.sh` кросс-проверяет пин `KVP_LMCACHE_BUILD` с
+  `wheel_version` работающего образа (MISMATCH → exit 4).
 
 **Событие `STORE_END` — не доказательство персистентной записи.**
 Диагностика STORE/RETRIEVE различает: store запрошен → завершение на

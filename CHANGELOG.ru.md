@@ -13,6 +13,16 @@ LMCache** (база `0.5.7.dev428` = `03ee5b82418b6bd44e424cdd46932d9346f43eb2`,
 downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache-build.ru.md`);
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
+### Раунд 20 (выбор образа запуска, кодеки в образе, идентичность сборки в namespace кэша)
+**Факты с железа (лог оператора, 20 ноября 2026):** полная сборка C0–C16 прошла (wheel `0.5.8rc1.post48+kvp.60dce759ea93`, C11 = 155 passed / 0 skipped), но цепочка запуска сломалась в трёх местах: активный `IMAGE=` (stock-пин) в `tp4.env` затенял `live/image` (до отказа поднялись 6 контейнеров observability), `run-tp4-hotsplit.sh` перезаписывал `live/image` stock-дайджестом ДО verify-гейта (кастомный образ «забывался» после одного неудачного запуска), а docker-путь кэша падал на `ModuleNotFoundError: No module named 'zstandard'` — дефолтный кодек zstd никогда не был в образе, docker-путь не мог работать ни разу.
+* `ba84356` **K1** (P0, один fail-fast выбор образа запуска): `_kvp_resolve_runtime_image` в `env.sh` разрешает образ запуска ОДИН раз, до шага 1/3 и до любого вызова docker, во всех трёх лаунчерах (`start-all.sh`, `start-cache.sh` в docker-режиме, оба лаунчера рецепта только при `KV_PERSIST=1`). Stock-`IMAGE=` — это не ошибка пользователя, а base-пин: он обязан совпасть с label `org.kvp.lmc-base` кастомного образа из `live/image` (сравнение по digest через `check_image_identity --expected-base`; тот же digest под другим тегом проходит, другой digest под тем же тегом отклоняется), а запускается КАСТОМНЫЙ образ. Явный override `sha256:<64hex>` по-прежнему побеждает (контракт README). `KV_PERSIST!=1` (stock-прогоны рецепта) не трогает `IMAGE` вообще; `KVP_PERSIST_ENABLED=false` пропускает разрешение целиком (регрессия round-81b, найдена набором recipes и исправлена). Тестовый opt-out `KVP_SKIP_IMAGE_CHECK=1` работает. Матрица разрешения (a)–(h) проверена на РЕАЛЬНЫХ скриптах с логирующей docker-заглушкой, отвечающей labels/identity из реальных SHA патчей; 4 поведенческих мутации — красные.
+* `271cb5c` (recipes) + `bc131af` (recipes) **K2** (P0): `live/image` пишется ТОЛЬКО после успешной проверки кастомного образа и только при `KV_PERSIST=1` без `KVP_SKIP_IMAGE_CHECK` — два места, которым позволено писать файл: `build-image.sh` (после своего verify-гейта) и лаунчер (после deep-проверки). Sentinel-тесты: отказ на stock не меняет файл ни на байт, успешный кастомный запуск записывает точный id, `KV_PERSIST=0` и `KVP_SKIP_IMAGE_CHECK=1` не трогают файл; восстановление старого порядка → красный.
+* `6bfb6fc` **K3** (P0, pre-flight в docker-режиме): проверка теперь сверяет, что кэш-контейнер и движок работают с ОДНИМ образом (`.Image` против `.Id`), вместо сравнения версии lmcache в host-venv с версией в образе (что отказывало в каждом запуске, если в host-venv стояла любая другая сборка). RPC-ping выполняется ВНУТРИ кэш-контейнера (exit 3 = отказ там); подсказка для host-режима называет реальный путь к wheel с `--force-reinstall --no-deps` (подсказка `pip install lmcache==...+kvp` вела на несуществующий на PyPI пакет). Мутации (возврат host-сравнения / убранный exec-ping / сравнение `.Id` с именем тега) → красные.
+* `56662a2` **K4** (P1, закрыты дыры тестов r19): сгенерированный Dockerfile разбирается структурно (склейка `\`-продолжений, разделение RUN по `&&`, `shlex.split`) — COPY src == реальное имя wheel, COPY dst == путь установки pip == путь rm -f, имя проходит `packaging.utils.parse_wheel_filename`, `--no-deps` присутствует; исполняемый тест запускает РЕАЛЬНУЮ команду pip install, вырезанную из Dockerfile, на минимальном wheel с реальными cp312-тегами; тесты цепочки запуска усилены. 4 мутационных детектора (только COPY dst / только путь pip / только путь rm / убранный `--no-deps`) → красные.
+* `2b51670` **K6** (P0, кодеки входят В образ): `requirements-image-codecs.txt` (ЕДИНСТВЕННЫЙ источник пинов — `zstandard==0.25.0`, `lz4==4.4.5`, cp312 manylinux x86_64 wheels с PyPI, точные `--hash=sha256`) копируется в контекст сборки и устанавливается с `--no-deps --only-binary=:all: --require-hashes`; SHA файла и пиновые версии попадают в `/etc/kvp-lmcache-identity.json` и `image-identity.env` (`image_codecs_sha256` / `KVP_IMAGE_CODECS_SHA256`). `_verify_image.py` печатает СТРОГИЕ маркеры `KVP_ZSTD_IMPORT=OK` / `KVP_LZ4_IMPORT=OK` (версии — отдельными строками `KVP_*_VERSION=`), без них `build-image.sh` отказывает. Отказ `start-cache.sh` по кодеку теперь говорит «пересоберите образ» вместо невозможного «установите кодек в образ». Мутации (убрать `--require-hashes` / снять пин `==` / убрать пакет / убрать COPY / вырезать маркеры из verify-вывода) → красные. **Честный предел тестов:** то, что `pip` реально ставит пакеты в образ, проверяет только железо (маркеры + серверный smoke).
+* `d5fc90b` + `767826e` **K7** (P0, namespace кэша должен различать сборки LMCache): `CacheIdentity` получил ОБЯЗАТЕЛЬНОЕ поле `lmcache_build` (= `wheel_version` из `/etc/kvp-lmcache-identity.json`, `0.5.8rc1.post48+kvp.<12hex>`); пустое/нечитаемое → `IdentityError` (неопределённость → cache miss). До этого stock-сборка 0.5.6 и кастомная давали ОДИН namespace (`kvp-7a26d4bf...`) и новый сервер читал старый кэш. ЕДИНЫЙ источник для всех потребителей: `kvpersist.identity.read_lmcache_build()` (bash читает то же значение через `check_image_identity.py --print-wheel-version`, так что bash и Python не могут разойтись); `verify-engine-identity.sh` кросс-проверяет пин `KVP_LMCACHE_BUILD` с `wheel_version` работающего образа (MISMATCH → exit 4). Тесты: пустая сборка → `IdentityError`, разные сборки → разные namespace, хешируется значение из identity JSON, кросс-проверка гейта на РЕАЛЬНОМ скрипте с docker-заглушкой, мутация без поля в хешируемой нагрузке → красная.
+* `6dd98f0` (recipes): фикстуры тестов несут новое обязательное поле и записывают `live/image-identity.env` ровно так, как `build-image.sh` делает на реальной машине.
+* Полный прогон: kv-persistence **702 passed, 26 skipped** (все skip — окружение: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, только железо); recipes **448 passed, 5 skipped** (после обновления фикстур K7; 443/5 было до изменения фикстур этого раунда).
 ### Раунд 19 (шаг «образ»: имя wheel в Dockerfile, identity как env-файл)
 **Факты с железа (логи оператора, 20 ноября 2026)** — вместо формулировки раунда 18 «подтверждение на железе в ожидании»:
 * быстрый прогон `scripts/rerun-lmcache-gate.sh --trust-wheel` на wheel из 4-го запуска: C8-C12 прошли, C11 = 155 passed / 0 failed / 0 errors / 0 skipped;
@@ -31,53 +41,6 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 * `03fc6bd` **G3**: (1) дублирующиеся ключи в heredoc provenance убраны (7 ключей писались дважды; строгий тест object_pairs_hook на настоящей сборке); (2) gate_common prod-hash использует `--name-only -z` + core.quotepath=off — имена файлов с пробелами/не-ASCII (`a b.py`, `тест.py`) теперь корректно влияют на хэш (тесты на настоящих деревьях); (3) перезапуск гейта возвращает права рабочих каталогов: rerun-lmcache-gate.sh передаёт KVP_HOST_UID/KVP_HOST_GID, _rerun_incontainer.sh делает chown обратно через fail-soft trap на EXIT (выполняется даже при падении гейта).
 * `202a2a5` продолжение: старые harness'ы build-image (test_live_image_record, test_base_image_pin, test_docker_stdin_delivery) получили реалистичные фикстуры provenance (как у настоящей сборки), чтобы проверки G2 проходили на согласованных парах.
 * Полный прогон: kv-persistence **657 passed, 26 skipped** (все скипы — окружение); recipes **443 passed, 5 skipped** (код в этом раунде не менялся). Статус железа без изменений: C0-C10 passed on the operator's host (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16 («проверено без железа, подтверждение на железе в ожидании»), C12-C16 pending.
-### Раунд 17 (три блокера железной сборки: путь импорта C8, фильтр C14, связка rerun/сборка)
-* `5c65ce0` **B1** (`No module named 'kvpersist'` на ПЕРВОЙ же команде
-  контейнерной фазы): оба in-container скрипта вызывали `python3 -P -m
-  kvpersist.gate_common check-imports` только с `PYTHONPATH=$KVP_SCRIPTS`, а
-  пакет `kvpersist` лежит в `implementation/` (в контейнере `/kvp-impl`).
-  Добавлено `PYTHONPATH="$KVP_SCRIPTS:$KVP_IMPL"` (в обе команды C8); шим
-  python3 в test_r12_c14_after_tests.py теперь передаёт окружение вызывающего
-  КАК ЕСТЬ (раньше сам выставлял PYTHONPATH и подменял check-imports — поэтому
-  тесты не заметили поломку). Новый тест test_r17_b1_c8_imports.py извлекает
-  РЕАЛЬНУЮ команду C8 из ОБОИХ скриптов и выполняет её как написана против
-  фейкового установленного дистрибутива lmcache в dist-packages-подобном
-  каталоге (PYTHONUSERBASE user-site, как это делает `site`). Мутация (убрать
-  `:$KVP_IMPL`) -> RED на обоих скриптах.
-* `c12e71e` **B2** (C14 отказывал КАЖДОЙ реальной сборке): переписывание
-  engine_pins в r16 потеряло фильтр имён движка — гейт сравнивал КАЖДЫЙ пакет
-  pip, а сама сборка меняет freeze (C7 новый lmcache, C9
-  pytest+pluggy+iniconfig, C4 setuptools-scm): `BUILD REFUSED: engine packages
-  changed ... iniconfig / lmcache / pluggy / pytest / setuptools-scm`. Фильтр
-  восстановлен ПОСЛЕ PEP 503-нормализации (torch*, vllm*, numpy*, triton* —
-  включая torchvision, vllm-flash-attn, triton-kernels); OK-строка печатает
-  только пины движка. Фикстуры несут реальный шум сборки; pip-шим r12-harness
-  повторяет реальное изменение freeze. Мутация (убрать фильтр) -> RED.
-* `8fd30ff` **B3** (rerun не находил wheel, гейт ни с чем не был связан):
-  build-lmcache.sh пишет wheel в `$OUT_DIR/wheels`, а rerun искал
-  `$WORK_DIR/wheels` + `/tmp/kvp-lmc-build.*`; `rerun-prod-hash.txt` писал
-  ПЕРВЫЙ ЗАПУСК rerun, а не сборка. Теперь: общий
-  `kvpersist.gate_common prod-hash SRC` (один алгоритм); build-lmcache.sh
-  записывает `$OUT_DIR/rerun-prod-hash.txt` ДО docker run; rerun берёт wheel из
-  `${KVP_OUT_DIR:-live/lmcache-build}/wheels` (ровно один *.whl), без файла
-  хеша отказывает (`Need a full build`) и только `--trust-wheel` пишет хеш
-  (громкое предупреждение `ASSUMING the wheel was built from this production
-  tree`). Точная команда: `bash scripts/rerun-lmcache-gate.sh` (после сборки) /
-  `--trust-wheel` (для wheel из сборки до r17). Мутации (поиск в
-  $WORK_DIR/wheels снова; запись при первом запуске) -> RED.
-* `d486fe7` **B4**: пустые строки GFM в SOURCES.md восстановлены (абзац после
-  строки таблицы становится строкой таблицы) + тест; C4 печатает пины движка и
-  отказывает при ПУСТЫХ constraints (`BUILD REFUSED: no engine pins found in
-  baseline freeze`, диагностика первых 20 строк как в C14) ДО любой установки.
-  Доки: раунд 17 + строки таблицы «шаг → тест» (C8, C14, C4, быстрый перезапуск)
-  в docs/lmcache-build{,.ru,.zh}.md, точная команда rerun во всех трёх.
-* Полный прогон: kv-persistence **638 passed, 26 skipped** (все скипы —
-  окружение: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, только
-  железо); recipes **443 passed, 5 skipped** (код в этом раунде не менялся,
-  числа свежего прогона). Статус железа без изменений: C0-C10 passed on the
-  operator's host (new base 07f1c6bb6), C11 (4136 test fixtures) fixed in r16
-  («проверено без железа, подтверждение на железе в ожидании»), C12-C16
-  pending.
 ### Раунд 16 (фикстуры 4136, junit-гейты, слепая зона engine-pin, быстрый перезапуск)
 * `c354ba9` **P0** (лог оператора 19.11 18:53: C0-C10 прошли на новой базе,
   C11 = 150 passed / 5 failed): все пять падений в

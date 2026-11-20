@@ -140,6 +140,21 @@ identity (`kvpersist.lmc_identity` compares the baked identity file against
 Connector selection: the deployed vLLM version requires the external
 `LMCacheMPConnector` to be selected explicitly via `--kv-transfer-config`
 (never assumed from auto-detection).
+**Image codecs (r20 K6):** the lossless L2 codecs (`zstandard`, `lz4`) ship
+IN the image -- `requirements-image-codecs.txt` (the single source of the
+pins: exact `==` versions with `--hash=sha256` of the cp312 manylinux
+x86_64 wheels from PyPI) is copied into the build context and installed
+with `--no-deps --only-binary=:all: --require-hashes`. The file SHA and the
+pinned versions enter `/etc/kvp-lmcache-identity.json` (`image_codecs_sha256`,
+`image_codecs_versions`) and `live/image-identity.env`
+(`KVP_IMAGE_CODECS_SHA256`, `KVP_IMAGE_CODECS_VERSIONS`). The verify gate
+requires the STRICT markers `KVP_ZSTD_IMPORT=OK` / `KVP_LZ4_IMPORT=OK`
+(versions printed on separate `KVP_*_VERSION=` lines) -- without them
+`build-image.sh` refuses and `live/image` is not updated. Before r20 the
+codecs were only described for the host venv and never entered the image
+(hardware log 20 Nov 2026: `ModuleNotFoundError: No module named
+'zstandard'` from `check_codec_available` at `start-cache` -- the default
+zstd path could not work once).
 
 ## 3. Persistent cache: L1/L2, identity, diagnostics
 
@@ -148,10 +163,23 @@ Connector selection: the deployed vLLM version requires the external
   consumed).
 * L2 = persistent NVMe tier (`KVP_CACHE_ROOT=/var/lib/kv-persistence/l2` by
   default; MUST be a local NVMe path).
-* Codec: lossless only — `zstd` (default), `lz4`, `none`.
+* Codec: lossless only — `zstd` (default), `lz4`, `none`. The codec packages
+  ship IN the image (r20 K6, see section 2); the host-venv copy is
+  diagnostic only.
 * Cache identity (namespace, model identity, KV dtype `bfloat16`, cache format,
   object-group config, backend identity) is checked per-worker in preflight;
   any mismatch fails startup.
+* Build identity in the namespace (r20 K7): `CacheIdentity.lmcache_build` is
+  a MANDATORY field = `wheel_version` from `/etc/kvp-lmcache-identity.json`
+  (`0.5.8rc1.post48+kvp.<12hex>`). It is hashed into the cache namespace, so
+  two different LMCache builds never share one cache (before r20 the stock
+  build 0.5.6 and the custom build derived the SAME namespace and a new
+  server read the old cache). ONE source for every consumer:
+  `kvpersist.identity.read_lmcache_build()` (bash reads the same value via
+  `check_image_identity.py --print-wheel-version`). Empty/unreadable ->
+  `IdentityError` (uncertain -> cache miss). `verify-engine-identity.sh`
+  cross-checks a `KVP_LMCACHE_BUILD` pin against the running image's
+  `wheel_version` (MISMATCH -> exit 4).
 
 **A `STORE_END` event is not proof of a persistent write.** The STORE/RETRIEVE
 diagnostics distinguish: store requested → worker/adapter completion → object

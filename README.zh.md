@@ -35,6 +35,17 @@ bash scripts/start-all.sh
   （先经 `start-observability.sh` 启动监控，再启动缓存）和配方启动器使用。
   记录在 `live/image`；显式
   `export IMAGE=<sha256:...>` 优先。
+**`IMAGE` 的语义取决于启动模式（第 20 轮）：**
+* `bash scripts/start-all.sh`（持久化开启）：`tp4.env` 遗留的 stock `IMAGE=`
+  被当作 base pin，按 digest 与 `live/image` 中自定义镜像的 `org.kvp.lmc-base`
+  标签核对，实际启动的是自定义镜像。显式 `IMAGE=sha256:<64hex>` 覆盖仍优先。
+  拒绝发生在任何容器启动**之前**（fail-fast：什么都没启动，失败的运行
+  绝不触碰 `live/image`）。
+* `KV_PERSIST=0` 的 stock 配方运行（无缓存）：`IMAGE` 完全不解析、不检查 ——
+  stock vLLM 镜像按配方 README 描述的方式运行。
+* `live/image` **仅**在成功验证自定义镜像后写入：由 `build-image.sh`
+  （其 verify 门禁之后）和配方启动器（deep 校验之后，`KV_PERSIST=1`）写入。
+  失败的启动绝不能覆写已记录的自定义镜像。
 
 **📖 文档（EN / RU / ZH）位于 Wiki：**
 [首页](https://github.com/sikkatu/kv-persistence/wiki) ·

@@ -39,6 +39,21 @@ No `export IMAGE` anywhere: the base vLLM image is pinned once in
   time by `start-all.sh` (which starts monitoring via `start-observability.sh`
   and only then the cache) and the recipe launchers. Recorded
   in `live/image`; an explicit `export IMAGE=<sha256:...>` still wins.
+**`IMAGE` semantics depend on the launch mode (round 20):**
+* `bash scripts/start-all.sh` (persistence ON): a stock `IMAGE=` left over
+  from `tp4.env` is treated as the BASE pin, checked against the
+  `org.kvp.lmc-base` label of the custom image in `live/image` (by digest),
+  and the CUSTOM image is what actually launches. An explicit
+  `IMAGE=sha256:<64hex>` override wins as before. Refusal happens BEFORE any
+  container starts (fail-fast, nothing is launched and `live/image` is never
+  touched by a failed run).
+* `KV_PERSIST=0` stock recipe runs (no cache): `IMAGE` is NOT resolved or
+  checked at all -- the stock vLLM image runs exactly as the recipe README
+  describes.
+* `live/image` is written ONLY after a successful custom-image verify:
+  by `build-image.sh` (after its verify gate) and by the recipe launchers
+  (after the deep check, `KV_PERSIST=1`). A failed launch can never overwrite
+  the recorded custom image.
 
 **📖 Documentation (EN / RU / ZH) lives in the Wiki:**
 [Home](https://github.com/sikkatu/kv-persistence/wiki) ·

@@ -133,6 +133,20 @@ wheel SHA-256）——仅凭 wheel 版本号（`0.5.8rc1.post48`）无法区分�
 
 连接器选择：部署的 vLLM 版本要求通过 `--kv-transfer-config` **显式**选择
 外部 `LMCacheMPConnector`（不要依赖自动检测）。
+**镜像内置编解码器（r20 K6）：** 无损 L2 编解码器（`zstandard`、`lz4`）
+随镜像发布 —— `requirements-image-codecs.txt`（pins 的唯一来源：精确
+`==` 版本 + cp312 manylinux x86_64 wheels 的 `--hash=sha256`，来自 PyPI）
+被拷入构建上下文并以 `--no-deps --only-binary=:all: --require-hashes`
+安装。文件 SHA 与固定版本进入 `/etc/kvp-lmcache-identity.json`
+（`image_codecs_sha256`、`image_codecs_versions`）和
+`live/image-identity.env`（`KVP_IMAGE_CODECS_SHA256`、
+`KVP_IMAGE_CODECS_VERSIONS`）。verify 门禁要求严格标记
+`KVP_ZSTD_IMPORT=OK` / `KVP_LZ4_IMPORT=OK`（版本打印在单独的
+`KVP_*_VERSION=` 行），否则 `build-image.sh` 拒绝且 `live/image`
+不更新。r20 之前编解码器只对 host venv 描述过，从未进入镜像（2026 年
+11 月 20 日硬件日志：`start-cache` 中 `check_codec_available` 报
+`ModuleNotFoundError: No module named 'zstandard'` —— 默认 zstd 路径一次
+也不可能工作过）。
 
 ## 3. 持久缓存：L1/L2、身份、诊断
 
@@ -140,10 +154,21 @@ wheel SHA-256）——仅凭 wheel 版本号（`0.5.8rc1.post48`）无法区分�
   核实服务器的实际选项——不要假设环境变量被消费）。
 * L2 = NVMe 持久层（默认 `KVP_CACHE_ROOT=/var/lib/kv-persistence/l2`；
   必须是本地 NVMe 路径）。
-* 编解码器仅限无损：`zstd`（默认）、`lz4`、`none`。
+* 编解码器仅限无损：`zstd`（默认）、`lz4`、`none`。编解码器包随镜像发布
+  （r20 K6，见第 2 节）；host venv 中的副本仅用于诊断。
 * 缓存身份（namespace、模型标识、KV dtype `bfloat16`、缓存格式、
   object-group 配置、后端标识）在每个 worker 的预检中核验；任何不一致都
   会终止启动。
+* namespace 中的构建标识（r20 K7）：`CacheIdentity.lmcache_build` 是
+  **强制**字段 = `/etc/kvp-lmcache-identity.json` 的 `wheel_version`
+  （`0.5.8rc1.post48+kvp.<12hex>`）。它被哈希进缓存 namespace，因此两个
+  不同的 LMCache 构建绝不共用一个缓存（r20 之前 stock 构建 0.5.6 与自定义
+  构建派生出**相同**的 namespace，新服务器读取旧缓存）。所有消费者的统一
+  来源：`kvpersist.identity.read_lmcache_build()`（bash 通过
+  `check_image_identity.py --print-wheel-version` 读取同一值）。
+  为空/不可读 → `IdentityError`（不确定 → cache miss）。
+  `verify-engine-identity.sh` 将 `KVP_LMCACHE_BUILD` pin 与运行镜像的
+  `wheel_version` 交叉校验（MISMATCH → exit 4）。
 
 **`STORE_END` 事件不是持久写入的证据。** STORE/RETRIEVE 诊断区分：
 store 已请求 → worker/适配器完成 → 对象被 L2 接受 → L2 写入成功/失败 →
