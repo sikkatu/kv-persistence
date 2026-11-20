@@ -157,22 +157,31 @@ def check_dockerfile(store: pathlib.Path, wheel_basename: str) -> list[str]:
                 if part:
                     run_parts.append(shlex.split(part))
 
-    install_path = rm_path = None
+    install_path = rm_path = codec_install_path = None
     for argv in run_parts:
         if not argv:
             continue
         if "pip" in argv and "install" in argv:
-            # the positional arg after the flags is the wheel path
+            # the positional arg after the flags is the wheel (or -r) path
             i = argv.index("install")
             pos = [a for a in argv[i + 1:] if not a.startswith("-")]
             if pos:
-                install_path = pos[0]
+                # r20 K6: the RUN block has TWO pip installs -- the wheel and
+                # the codec requirements (-r). The wheel path is the one
+                # ending in .whl; the codec install is checked for --no-deps
+                # too (both installs must be dependency-free).
+                if pos[0].endswith(".whl"):
+                    install_path = pos[0]
+                elif "-r" in argv:
+                    codec_install_path = pos[0]
+                else:
+                    install_path = pos[0]
             if "--no-deps" not in argv:
                 viol.append("pip install lacks --no-deps (pip would pull "
                             "dependencies into the base image)")
         if "rm" in argv and "-f" in argv:
             pos = [a for a in argv[2:] if not a.startswith("-")]
-            if pos:
+            if pos and pos[0].endswith(".whl"):
                 rm_path = pos[0]
 
     if install_path is None:
@@ -257,13 +266,16 @@ def test_pip_install_command_from_dockerfile_actually_runs(tmp_path):
         z.writestr(
             "lmcache-0.5.8rc1.post48+kvp.60dce759ea93.dist-info/RECORD", "")
 
-    # -- cut the REAL pip install command out of the RUN line
+    # -- cut the REAL wheel pip install command out of the RUN line (r20 K6:
+    # the block also installs the codec requirements with -r -- the wheel
+    # install is the one carrying a .whl positional arg)
     install_argv = None
     for ln in _logical_lines(df):
         if ln.startswith("RUN "):
             for part in ln[4:].split("&&"):
                 toks = shlex.split(part.strip())
-                if "pip" in toks and "install" in toks:
+                if ("pip" in toks and "install" in toks
+                        and any(t.endswith(".whl") for t in toks)):
                     install_argv = toks
                     break
         if install_argv:

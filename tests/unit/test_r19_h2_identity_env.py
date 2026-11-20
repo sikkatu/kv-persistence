@@ -40,6 +40,10 @@ KVP_LMC_VERSION=0.5.8rc1.post48+kvp.60dce759ea93
 KVP_PY_IMPORTS=OK
 KVP_CUDA_OPS_IMPORT=OK
 KVP_NATIVE_IMPORT=OK
+KVP_ZSTD_IMPORT=OK
+KVP_ZSTD_VERSION=0.25.0
+KVP_LZ4_IMPORT=OK
+KVP_LZ4_VERSION=4.4.5
 KVP_IDENTITY_FILE=OK
 KVP_IDENTITY_BASE=07f1c6bb642f4772606a36eab730ae009ddce08f
 KVP_GPU_SMOKE[0] dev=0000:01:00.0 cc=12.0 OK
@@ -185,7 +189,13 @@ def test_mutation_cat_verify_into_env_is_red(tmp_path):
         marker,
         '  cat "$TMPD/verify.txt"\n} > "$IDENTITY"', 1)
     assert mutant_src != src
-    mutant = tmp_path / "build-image-mutant.sh"
+    # r20 K6: the mutant must be RUNNABLE -- build-image.sh reads
+    # $ROOT/requirements-image-codecs.txt (repo layout: scripts/ + root)
+    mdir = tmp_path / "scripts"
+    mdir.mkdir(exist_ok=True)
+    (tmp_path / "requirements-image-codecs.txt").write_text(
+        (ROOT / "requirements-image-codecs.txt").read_text())
+    mutant = mdir / "build-image-mutant.sh"
     mutant.write_text(mutant_src)
     mutant.chmod(0o755)
 

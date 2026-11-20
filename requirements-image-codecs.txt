@@ -1,0 +1,15 @@
+# Image codec dependencies -- installed INTO the custom derivative image by
+# scripts/build-image.sh (r20 K6). The lossless L2 codecs (zstd default, lz4
+# optional) must live in the IMAGE: the cache server runs in a container from
+# this image and `check_codec_available` imports them there. The host-venv
+# copy (requirements-lmcache.txt) is diagnostic only -- these two packages
+# were never in the image and the default zstd path could not work at all
+# (hardware log 20 Nov 2026: ModuleNotFoundError: No module named
+# 'zstandard' from check_codec_available at start-cache).
+#
+# SINGLE SOURCE OF THE PINS: build-image.sh copies THIS file into the build
+# context and installs it with --require-hashes (cp312 manylinux x86_64
+# wheels from PyPI). Every line is an exact `==` pin with the wheel's
+# --hash=sha256 (pip refuses any file whose hash is not listed here).
+zstandard==0.25.0 --hash=sha256:5a56ba0db2d244117ed744dfa8f6f5b366e14148e00de44723413b2f3938a902
+lz4==4.4.5 --hash=sha256:24092635f47538b392c4eaeff14c7270d2c8e806bf4be2a6446a378591c5e69e

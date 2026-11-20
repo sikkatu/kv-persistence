@@ -91,6 +91,19 @@ TMPD="$(mktemp -d /tmp/kvp-image.XXXXXX)"
 trap 'rm -rf "$TMPD"' EXIT
 
 cp "$WHEEL" "$TMPD/"
+# r20 K6: the codec requirements file is copied INTO the build context from
+# the repo (SINGLE SOURCE of the pins -- requirements-image-codecs.txt at the
+# repo root; the Dockerfile COPYs it and installs the codecs with
+# --require-hashes). Exact `==` pins with --hash=sha256 (cp312 manylinux
+# x86_64 wheels from PyPI, ranges in requirements-lmcache.txt:
+# zstandard>=0.22,<1, lz4>=4.3,<5).
+CODECS_REQ="$ROOT/requirements-image-codecs.txt"
+[ -f "$CODECS_REQ" ] || die "codec requirements missing: $CODECS_REQ"
+cp "$CODECS_REQ" "$TMPD/requirements-image-codecs.txt"
+CODECS_SHA="$(sha256sum "$TMPD/requirements-image-codecs.txt" | awk '{print $1}')"
+# the pinned versions come FROM THE FILE (never a second hardcoded copy)
+CODECS_VERSIONS="$(grep -E '^[a-zA-Z0-9]' "$TMPD/requirements-image-codecs.txt" \
+  | awk '{print $1}' | tr '\n' ' ' | sed 's/ $//')"
 
 # r19 H1: the wheel keeps its REAL filename in the image. pip parses a local
 # `.whl` name as {name}-{version}-{python}-{abi}-{platform}.whl -- the old
@@ -156,16 +169,19 @@ fi
 
 cat > "$TMPD/Dockerfile" <<EOF
 # Custom derivative of the pinned vLLM runtime.
-# Adds ONLY the custom LMCache wheel (built in-image by build-lmcache.sh).
+# Adds ONLY the custom LMCache wheel (built in-image by build-lmcache.sh) and
+# the two lossless L2 codecs (zstandard, lz4 -- requirements-image-codecs.txt).
 # Everything else -- vLLM, PyTorch, CUDA, Python -- is preserved bit-for-bit.
 FROM $BASE_IMAGE
-LABEL org.kvp.lmc-base="$BASE_IMAGE" \
-      org.kvp.lmc-patch-4136="$PR4136_SHA" \
+LABEL org.kvp.lmc-base="$BASE_IMAGE" \\
+      org.kvp.lmc-patch-4136="$PR4136_SHA" \\
       org.kvp.lmc-patch-5972="$PR5972_SHA"
 COPY $WHEEL_BASENAME /tmp/$WHEEL_BASENAME
+COPY requirements-image-codecs.txt /tmp/requirements-image-codecs.txt
 COPY kvp-lmcache-identity.json /etc/kvp-lmcache-identity.json
 RUN python3 -m pip install --no-cache-dir --no-deps "/tmp/$WHEEL_BASENAME" \\
- && rm -f "/tmp/$WHEEL_BASENAME" \\
+ && python3 -m pip install --no-cache-dir --no-deps --only-binary=:all: --require-hashes -r /tmp/requirements-image-codecs.txt \\
+ && rm -f "/tmp/$WHEEL_BASENAME" /tmp/requirements-image-codecs.txt \\
  && python3 -c "import lmcache, lmcache.integration.vllm.lmcache_mp_connector; print('LMCache', lmcache.__version__ if hasattr(lmcache,'__version__') else 'installed')"
 EOF
 
@@ -192,6 +208,8 @@ cat > "$TMPD/kvp-lmcache-identity.json" <<EOF
   "wheel_version": "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("wheel_version","unknown"))' "$BUILD_INFO" 2>/dev/null || echo unknown)",
   "tests_skipped": "$_prov_tests_skipped",
   "untested_wheel": "${UNTESTED_WHEEL_MARK:-}",
+  "image_codecs_sha256": "$CODECS_SHA",
+  "image_codecs_versions": "$CODECS_VERSIONS",
   "base_image": "$BASE_IMAGE"
 }
 EOF
@@ -215,7 +233,7 @@ docker run --rm --gpus all -v "$HERE":/kvp-scripts:ro \
 
 # r6-7 A-2 gate: every success marker must be present BEFORE anything is
 # recorded. An empty or partial verify.txt means the verification never ran.
-for _marker in KVP_CUDA_OPS_IMPORT=OK KVP_NATIVE_IMPORT=OK KVP_PY_IMPORTS=OK KVP_IDENTITY_FILE=OK; do
+for _marker in KVP_CUDA_OPS_IMPORT=OK KVP_NATIVE_IMPORT=OK KVP_PY_IMPORTS=OK KVP_IDENTITY_FILE=OK KVP_ZSTD_IMPORT=OK KVP_LZ4_IMPORT=OK; do
   grep -q "^${_marker}$" "$TMPD/verify.txt" 2>/dev/null \
     || die "verify FAILED (docker run rc=$VERIFY_RC) -- marker '${_marker}' missing in verify.txt:
 $(tail -n 20 "$TMPD/verify.txt" 2>/dev/null)"
@@ -241,6 +259,8 @@ IMAGE_ID="$(docker inspect --format='{{.Id}}' "$OUT_IMAGE" | sed 's/sha256://')"
   echo "KVP_CUSTOM_IMAGE=$OUT_IMAGE"
   echo "KVP_CUSTOM_IMAGE_ID=sha256:$IMAGE_ID"
   echo "KVP_LMC_BASE_IMAGE=$BASE_IMAGE"
+  echo "KVP_IMAGE_CODECS_SHA256=$CODECS_SHA"
+  echo "KVP_IMAGE_CODECS_VERSIONS=$CODECS_VERSIONS"
   grep -E '^KVP_[A-Z0-9_]+=' "$TMPD/verify.txt" || true
 } > "$IDENTITY"
 

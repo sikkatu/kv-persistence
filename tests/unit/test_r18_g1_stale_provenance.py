@@ -226,6 +226,8 @@ def test_end_to_end_build_then_image_and_failed_rebuild(tmp_path):
         '    echo "KVP_PY_IMPORTS=OK"\n',
         '    echo "KVP_CUDA_OPS_IMPORT=OK"\n',
         '    echo "KVP_NATIVE_IMPORT=OK"\n',
+        '    echo "KVP_ZSTD_IMPORT=OK"\n',
+        '    echo "KVP_LZ4_IMPORT=OK"\n',
         '    echo "KVP_IDENTITY_FILE=OK"\n',
         '    echo "KVP_GPU_COUNT=4"\n',
         '    echo "KVP_GPU_SMOKE_OK_COUNT=4"\n',

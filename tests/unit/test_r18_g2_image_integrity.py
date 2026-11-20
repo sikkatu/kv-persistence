@@ -229,7 +229,14 @@ def test_identity_patch_shas_come_from_provenance(tmp_path):
 def _mutant(tmp_path: pathlib.Path, old: str, new: str) -> pathlib.Path:
     src = SCRIPT.read_text()
     assert old in src, f"mutation marker not found: {old[:60]!r}"
-    m = tmp_path / "build-image-mutant.sh"
+    # r20 K6: the mutant must be RUNNABLE -- build-image.sh reads
+    # $ROOT/requirements-image-codecs.txt, so the mutant lives in
+    # <tmp>/scripts/ with the requirements file at <tmp>/ (repo layout)
+    mdir = tmp_path / "scripts"
+    mdir.mkdir(exist_ok=True)
+    (tmp_path / "requirements-image-codecs.txt").write_text(
+        (ROOT / "requirements-image-codecs.txt").read_text())
+    m = mdir / "build-image-mutant.sh"
     m.write_text(src.replace(old, new, 1))
     m.chmod(0o755)
     return m

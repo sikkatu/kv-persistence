@@ -91,7 +91,7 @@ case "$cmd" in
   inspect) echo sha256:{"0" * 56}abcdef; exit 0 ;;
   run) echo "KVP_LMC_VERSION=stub
 KVP_PY_IMPORTS=OK
-KVP_CUDA_OPS_IMPORT=OK\nKVP_NATIVE_IMPORT=OK
+KVP_CUDA_OPS_IMPORT=OK\nKVP_NATIVE_IMPORT=OK\nKVP_ZSTD_IMPORT=OK\nKVP_LZ4_IMPORT=OK
 KVP_IDENTITY_FILE=OK
 KVP_GPU_COUNT=4
 KVP_GPU_SMOKE_OK_COUNT=4"; exit 0 ;;
@@ -200,7 +200,14 @@ def _mutate_revert_order(tmp_path: pathlib.Path) -> str:
     sha_block = lines[sha_start:sha_end]
     df_block = lines[df_start:df_end]
     new_lines = lines[:sha_start] + df_block + sha_block + lines[sha_end:]
-    mutant = tmp_path / "build-image-mutant.sh"
+    # r20 K6: the mutant must be RUNNABLE -- build-image.sh reads
+    # $ROOT/requirements-image-codecs.txt, so the mutant lives in
+    # <tmp>/scripts/ with the requirements file at <tmp>/ (repo layout)
+    mdir = tmp_path / "scripts"
+    mdir.mkdir(exist_ok=True)
+    (tmp_path / "requirements-image-codecs.txt").write_text(
+        (ROOT / "requirements-image-codecs.txt").read_text())
+    mutant = mdir / "build-image-mutant.sh"
     mutant.write_text("".join(new_lines))
     mutant.chmod(0o755)
     return mutant

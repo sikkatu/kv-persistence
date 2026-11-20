@@ -28,6 +28,19 @@ print("KVP_CUDA_OPS_IMPORT=OK")
 # backend). Require it explicitly and emit the strict-gate marker.
 import lmcache.lmcache_native  # noqa: F401
 print("KVP_NATIVE_IMPORT=OK")
+# r20 K6: the lossless L2 codecs (zstd default, lz4 optional) must be
+# IMPORTABLE in the image -- the cache server runs here and
+# check_codec_available imports them (hardware log 20 Nov 2026: the default
+# zstd path died 'No module named zstandard' at start-cache). Strict
+# markers (exactly `=OK`, the versions on separate KVP_ lines): without them
+# build-image.sh refuses and live/image is not updated.
+import zstandard  # noqa: F401
+print("KVP_ZSTD_IMPORT=OK")
+print("KVP_ZSTD_VERSION=" + str(getattr(zstandard, "__version__", "unknown")))
+import lz4  # noqa: F401
+import lz4.frame  # noqa: F401
+print("KVP_LZ4_IMPORT=OK")
+print("KVP_LZ4_VERSION=" + str(getattr(lz4, "VERSION", getattr(lz4, "__version__", "unknown"))))
 _smoke_ok = []
 for _i in range(torch.cuda.device_count()):
     with torch.cuda.device(_i):
