@@ -92,6 +92,14 @@ trap 'rm -rf "$TMPD"' EXIT
 
 cp "$WHEEL" "$TMPD/"
 
+# r19 H1: the wheel keeps its REAL filename in the image. pip parses a local
+# `.whl` name as {name}-{version}-{python}-{abi}-{platform}.whl -- the old
+# rename to /tmp/kvp-lmcache.whl broke that and `docker build` died at step
+# [4/4]: ERROR: Invalid wheel filename (wrong number of parts): 'kvp-lmcache'.
+# The name is taken ONCE and used for COPY, pip install and rm (quoted --
+# the local version carries '+').
+WHEEL_BASENAME="$(basename "$WHEEL")"
+
 # r3 P0-1 fix: compute these BEFORE the Dockerfile/identity heredocs expand
 # $PR4136_SHA/$PR5972_SHA/$WHEEL_SHA_ID -- under `set -u` a heredoc referencing
 # an unassigned var aborts the whole script with 'unbound variable' on first
@@ -154,10 +162,10 @@ FROM $BASE_IMAGE
 LABEL org.kvp.lmc-base="$BASE_IMAGE" \
       org.kvp.lmc-patch-4136="$PR4136_SHA" \
       org.kvp.lmc-patch-5972="$PR5972_SHA"
-COPY $(basename "$WHEEL") /tmp/kvp-lmcache.whl
+COPY $WHEEL_BASENAME /tmp/$WHEEL_BASENAME
 COPY kvp-lmcache-identity.json /etc/kvp-lmcache-identity.json
-RUN python3 -m pip install --no-cache-dir --no-deps /tmp/kvp-lmcache.whl \\
- && rm /tmp/kvp-lmcache.whl \\
+RUN python3 -m pip install --no-cache-dir --no-deps "/tmp/$WHEEL_BASENAME" \\
+ && rm -f "/tmp/$WHEEL_BASENAME" \\
  && python3 -c "import lmcache, lmcache.integration.vllm.lmcache_mp_connector; print('LMCache', lmcache.__version__ if hasattr(lmcache,'__version__') else 'installed')"
 EOF
 
