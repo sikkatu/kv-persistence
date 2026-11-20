@@ -69,20 +69,20 @@ def _with_labels(labels: dict | None):
 
 def test_accepts_fully_labeled_custom_image():
     with _with_labels(_good_labels()):
-        ok, msgs = cii.verify_custom_image(GOOD_ID_SPEC, PATCH_DIR)
+        ok, msgs, _wv = cii.verify_custom_image(GOOD_ID_SPEC, PATCH_DIR)
     assert ok, msgs
 
 
 def test_refuses_stock_image_without_labels():
     with _with_labels({}):  # stock vllm-openai has none of our labels
-        ok, msgs = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR)
+        ok, msgs, _wv = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR)
     assert not ok
     assert any("NOT the custom LMCache" in m for m in msgs), msgs
 
 
 def test_refuses_when_docker_cannot_inspect():
     with _with_labels(None):
-        ok, msgs = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR)
+        ok, msgs, _wv = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR)
     assert not ok
     assert any("docker cannot inspect" in m for m in msgs)
 
@@ -91,7 +91,7 @@ def test_refuses_drifted_patch_sha():
     labels = _good_labels()
     labels[cii.LABEL_5972] = "0" * 64
     with _with_labels(labels):
-        ok, msgs = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR)
+        ok, msgs, _wv = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR)
     assert not ok
     assert any("5972-incomplete-kv-objects.patch" in m for m in msgs)
 
@@ -100,13 +100,13 @@ def test_refuses_drifted_base_label():
     labels = _good_labels()
     base = labels[cii.LABEL_BASE]
     with _with_labels(labels):
-        ok, msgs = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR, expect_base="other@sha256:" + "c" * 64)
+        ok, msgs, _wv = cii.verify_custom_image(GOOD_SPEC, PATCH_DIR, expect_base="other@sha256:" + "c" * 64)
     assert not ok
     assert any("base label" in m for m in msgs)
 
 
 def test_rejects_bad_format_before_touching_docker():
-    ok, msgs = cii.verify_custom_image("kvp-lmcache:latest", PATCH_DIR)
+    ok, msgs, _wv = cii.verify_custom_image("kvp-lmcache:latest", PATCH_DIR)
     assert not ok
     assert any("pinned by digest" in m for m in msgs)
 

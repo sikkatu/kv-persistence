@@ -851,8 +851,23 @@ _kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root
   local _verify_args=()
   [ "${KVP_VERIFY_SHALLOW:-0}" = "1" ] || _verify_args+=(--deep)
   [ -n "$exp_base" ] && _verify_args+=(--expected-base "$exp_base")
-  PYTHONPATH="$root/implementation${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m kvpersist.check_image_identity "$img" "$root/vendor/patches/lmcache" "${_verify_args[@]}" || rc=$?
+  # r21 L1: the deep check reads the baked identity JSON -- capture the build
+  # identity it prints (KVP_WHEEL_VERSION=) and export it as
+  # KVP_LMCACHE_BUILD. This ties the cache namespace to the image that will
+  # ACTUALLY run (the last build's record in live/image-identity.env is a
+  # build HISTORY, not the running image).
+  local _out
+  _out="$(PYTHONPATH="$root/implementation${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m kvpersist.check_image_identity "$img" "$root/vendor/patches/lmcache" "${_verify_args[@]}")" || rc=$?
+  if [ -n "$_out" ]; then
+    printf '%s\n' "$_out"
+    local _wv
+    _wv="$(printf '%s\n' "$_out" | sed -n 's/^KVP_WHEEL_VERSION=//p' | tail -1)"
+    if [ -n "$_wv" ]; then
+      KVP_LMCACHE_BUILD="$_wv"
+      export KVP_LMCACHE_BUILD
+    fi
+  fi
   return "$rc"
 }
 
@@ -900,6 +915,13 @@ _kvp_resolve_runtime_image() {
     if [ -n "$_live_image" ]; then
       IMAGE="$_live_image"
       export IMAGE
+      # r21 L1: every successful path exports the BUILD identity of the image
+      # that will run (deep check reads the baked identity JSON and prints
+      # KVP_WHEEL_VERSION, captured into KVP_LMCACHE_BUILD).
+      _kvp_require_custom_image "$IMAGE" "$root" \
+        || { echo "ERROR: IMAGE '$IMAGE' recorded in $_live/image is NOT the custom LMCache derivative." >&2
+             echo "  Fix: rebuild with bash scripts/build-lmcache.sh && bash scripts/build-image.sh" >&2
+             return 1; }
       echo "NOTE: IMAGE not set -- using the custom image recorded in $_live/image: $IMAGE"
       return 0
     fi

@@ -229,19 +229,34 @@ DEFAULT_IMAGE_IDENTITY = "/var/lib/kv-persistence/image-identity.env"
 
 
 def read_lmcache_build(ident_json_path: str = "") -> str:
-    """Read the LMCache build identity (``wheel_version``) from the baked
-    identity JSON.
+    """Read the LMCache build identity (``wheel_version``) of the image that
+    will actually run.
+
+    Priority (r21 L1):
+      1. ``KVP_LMCACHE_BUILD`` from the ENVIRONMENT -- the resolver
+         (``_kvp_require_custom_image``) exports it from the deep check of the
+         resolved image, so it is the build of the RUNNING image, not of the
+         last build.
+      2. the baked ``/etc/kvp-lmcache-identity.json`` (explicit path,
+         ``KVP_LMCACHE_IDENTITY``, or the default) -- the image's own record.
+      3. the build HISTORY in ``live/image-identity.env`` (``KVP_LMC_VERSION``)
+         -- only for when the resolver did NOT run (manual ``cli.py`` calls,
+         tests).
 
     Args:
         ident_json_path: explicit path; when empty, ``KVP_LMCACHE_IDENTITY``
             from the environment, else ``/etc/kvp-lmcache-identity.json``.
 
     Returns:
-        the recorded ``wheel_version`` string (``""`` when the file is
-        missing or unreadable -- the caller then treats the identity as
-        uncertain).
+        the recorded ``wheel_version`` string (``""`` when it could not be
+        read -- the caller then treats the identity as uncertain).
     """
     import os as _os
+    # 1. env (the resolver ties this to the RUNNING image)
+    ver = (_os.environ.get("KVP_LMCACHE_BUILD") or "").strip()
+    if ver:
+        return ver
+    # 2. the baked identity JSON of the image itself
     path = (ident_json_path or _os.environ.get("KVP_LMCACHE_IDENTITY", "")
             or DEFAULT_LMCACHE_IDENTITY)
     try:
@@ -252,17 +267,7 @@ def read_lmcache_build(ident_json_path: str = "") -> str:
             return ver
     except (OSError, ValueError):
         pass
-    # Fallback (the SAME value, a different reader): the host has no
-    # /etc/kvp-lmcache-identity.json (it lives INSIDE the image) -- the build
-    # recorded it as KVP_LMC_VERSION (= md.version("lmcache")) in
-    # live/image-identity.env at build time, and the launchers export that as
-    # KVP_LMCACHE_BUILD. Read the env first, then the recorded files.
-    ver = (_os.environ.get("KVP_LMCACHE_BUILD")
-           or _os.environ.get("KVP_LMC_VERSION", "")).strip()
-    if ver:
-        return ver
-    # build-image.sh writes KVP_IDENTITY_OUT or $ROOT/live/image-identity.env
-    # -- the launchers export KVP_LIVE_DIR / LIVE_DIR to that same dir.
+    # 3. build history in live/image-identity.env (when the resolver did not run)
     candidates = []
     if _os.environ.get("KVP_IMAGE_IDENTITY"):
         candidates.append(_os.environ["KVP_IMAGE_IDENTITY"])

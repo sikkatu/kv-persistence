@@ -141,9 +141,8 @@ def probe_cuda_ops(image: str) -> bool | None:
 
 def verify_custom_image(image: str, patch_dir: pathlib.Path,
                         expect_base: str | None = None,
-                        deep: bool = False) -> tuple[bool, list[str]]:
+                        deep: bool = False) -> tuple[bool, list[str], str]:
     """Check <image> carries the custom LMCache identity labels matching the repo.
-
     Args:
         image: the IMAGE spec that is about to be launched.
         patch_dir: repo directory holding the two downstream patch files.
@@ -151,14 +150,17 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
         deep: run the additional no-GPU checks inside the image (r3 P1-3) --
             read the baked /etc/kvp-lmcache-identity.json and probe
             find_spec('lmcache.cuda_ops'). A LABEL alone is forgeable.
-
     Returns:
-        (ok, messages). ok==False means the image must NOT be launched.
+        (ok, messages, wheel_version). ok==False means the image must NOT be
+        launched. wheel_version is the build identity read from the image's
+        baked identity JSON (r21 L1) -- empty when it could not be read; the
+        caller (the resolver) exports it as KVP_LMCACHE_BUILD so the cache
+        namespace follows the image that ACTUALLY runs.
     """
     msgs: list[str] = []
     ok, fmtmsg = is_pinned_image_spec(image)
     if not ok:
-        return False, [fmtmsg]
+        return False, [fmtmsg], ""
 
     labels = read_image_labels(image)
     if labels is None:
@@ -166,7 +168,7 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
             f"docker cannot inspect image '{image}' -- is it built and available "
             "locally? Build it with scripts/build-lmcache.sh + scripts/build-image.sh "
             "or `docker pull` first."
-        ]
+        ], ""
 
     for key in REQUIRED_LABELS:
         if not labels.get(key):
@@ -175,7 +177,7 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
                 "derive. Launching it reverts to upstream LMCache without the #4136 "
                 "retrieve/abort fix and the #5972 incomplete-object fix. Build the "
                 "custom derivative with scripts/build-image.sh."
-            ]
+            ], ""
 
     from .lmc_identity import sha256_file  # local import to avoid cycles
 
@@ -216,11 +218,11 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
             ok = False
 
     if not ok:
-        return ok, msgs
+        return ok, msgs, ""
 
     # ---- r3 P1-3 deep: prove the wheel is really baked in, not just labeled.
     if not deep:
-        return True, msgs
+        return True, msgs, ""
 
     ident = read_identity_json(image)
     if ident is None:
@@ -229,10 +231,10 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
             "identity file is missing or unreadable. The LABELs alone do NOT prove "
             "our wheel is baked in (any derivative can forge a LABEL). Build with "
             "scripts/build-image.sh."
-        ]
+        ], ""
     for key in ("pr4136_patch_sha256", "pr5972_patch_sha256", "wheel_sha256"):
         if not ident.get(key):
-            return False, [f"{IDENT_JSON_PATH} is missing key {key}"]
+            return False, [f"{IDENT_JSON_PATH} is missing key {key}"], ""
     for key, fname in (("pr4136_patch_sha256", "4136-mp-retrieve-abort.patch"),
                        ("pr5972_patch_sha256", "5972-incomplete-kv-objects.patch")):
         fpath = patch_dir / fname
@@ -241,20 +243,20 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
             if ident[key] != expected:
                 return False, [
                     f"{IDENT_JSON_PATH}: {key}={ident[key]} != repo patch sha {expected}"
-                ]
+                ], ""
 
     res = probe_cuda_ops(image)
     if res is None:
         return False, [
             f"image '{image}': probe of 'lmcache.cuda_ops' failed to run -- cannot "
             "confirm the compiled extension is present"
-        ]
+        ], ""
     if not res:
         return False, [
             f"image '{image}': importlib.util.find_spec('lmcache.cuda_ops') is empty -- "
             "the wheel lacks the compiled CUDA extension (silent pure-Python fallback). "
             "Rebuild with scripts/build-lmcache.sh (nvcc + CUDA dev packages required)."
-        ]
+        ], ""
 
     # r4 P0-3: the identity JSON can CLAIM any wheel_version. Cross-check the
     # REAL installed metadata (importlib.metadata.version('lmcache')) against
@@ -266,21 +268,21 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
         return False, [
             f"{IDENT_JSON_PATH}: wheel_version '{wheel_version}' lacks the '+kvp.' "
             "local part -- this identity was NOT produced by scripts/build-lmcache.sh"
-        ]
+        ], ""
     actual_version = probe_lmcache_version(image)
     if actual_version is None:
         return False, [
             f"image '{image}': cannot read importlib.metadata.version('lmcache') -- "
             "the wheel is not installed (or metadata is missing); refusing"
-        ]
+        ], ""
     if actual_version != wheel_version:
         return False, [
             f"image '{image}': installed lmcache version '{actual_version}' != "
             f"identity wheel_version '{wheel_version}' -- the baked identity "
             "describes a different build than the one actually installed"
-        ]
+        ], ""
 
-    return True, msgs
+    return True, msgs, wheel_version
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -316,10 +318,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.image is None or args.patch_dir is None:
         ap.error("image and patch_dir are required unless --print-wheel-version")
-    ok, msgs = verify_custom_image(args.image, pathlib.Path(args.patch_dir),
+    ok, msgs, wheel_version = verify_custom_image(args.image, pathlib.Path(args.patch_dir),
                                    args.expected_base, deep=args.deep)
     if ok:
         print(f"custom LMCache image verified: {args.image}")
+        # r21 L1: the BUILD identity of the image that will actually run --
+        # the resolver (env.sh) captures this line and exports it as
+        # KVP_LMCACHE_BUILD so the cache namespace follows the RUNNING image,
+        # not the last build's record in live/image-identity.env.
+        if wheel_version:
+            print(f"KVP_WHEEL_VERSION={wheel_version}")
         return 0
     print(f"MISMATCH: refused image '{args.image}':", file=sys.stderr)
     for m in msgs:

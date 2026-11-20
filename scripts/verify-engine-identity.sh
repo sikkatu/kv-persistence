@@ -391,16 +391,27 @@ else:
         else f"--kv-transfer-config does not reference {want_conn!r}"
     )
 engine_checks.append(("connector", want_conn, connector_seen))
-# r20 K7: the LMCache BUILD identity cross-check. The cache namespace now
-# hashes `lmcache_build` = wheel_version from the baked identity JSON. When
-# the operator pins KVP_LMCACHE_BUILD (identity.env[.local]), the RUNNING
-# image must actually carry that build -- otherwise a cache written by one
-# build is read by another. Cross-check against the image's
-# /etc/kvp-lmcache-identity.json (docker exec cat, same as the untested-wheel
-# warning). Empty pin -> nothing to prove (the namespace still hashes the
-# build read from the image); no container -> UNAVAILABLE/INCONCLUSIVE.
+# r20 K7 / r21 L1: the LMCache BUILD identity cross-check. The cache
+# namespace hashes `lmcache_build` = wheel_version of the image that runs.
+# The EXPECTED value is the operator pin KVP_LMCACHE_BUILD (identity.env[.local])
+# when set, else the EFFECTIVE value -- exactly what the namespace was hashed
+# from (KVP_LMCACHE_BUILD from the environment, or read_lmcache_build()).
+# The check runs ALWAYS when a container is present (not only with a pin):
+# an engine on a different image than the namespace was computed from must be
+# a MISMATCH (exit 4), never a silent wrong-read. Cross-check against the
+# container's /etc/kvp-lmcache-identity.json (docker exec cat, same as the
+# untested-wheel warning).
 if not check_config_only and container:
     _build_expect = (vals.get("KVP_LMCACHE_BUILD", "") or "").strip()
+    if not _build_expect:
+        # no pin: the namespace's effective value (the same source it hashes)
+        _build_expect = (os.environ.get("KVP_LMCACHE_BUILD", "") or "").strip()
+    if not _build_expect:
+        try:
+            from kvpersist.identity import read_lmcache_build as _rlb
+            _build_expect = (_rlb() or "").strip()
+        except Exception:
+            _build_expect = ""
     if _build_expect:
         try:
             _bj = subprocess.run(
