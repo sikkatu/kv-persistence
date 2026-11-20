@@ -1,0 +1,714 @@
+{
+  "dist": {
+    "file": "lmcache/v1/distributed/config.py",
+    "flags": [
+      {
+        "flags": [
+          "--l1-manager"
+        ]
+      },
+      {
+        "default": null,
+        "flags": [
+          "--l1-size-gb"
+        ],
+        "type": "float"
+      },
+      {
+        "default": true,
+        "flags": [
+          "--l1-use-lazy"
+        ]
+      },
+      {
+        "default": 20,
+        "flags": [
+          "--l1-init-size-gb"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 4096,
+        "flags": [
+          "--l1-align-bytes"
+        ],
+        "type": "int"
+      },
+      {
+        "default": false,
+        "flags": [
+          "--l1-use-hugepages"
+        ]
+      },
+      {
+        "default": null,
+        "flags": [
+          "--l1-devdax-path"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 0.0,
+        "flags": [
+          "--l1-devdax-offset-gb"
+        ],
+        "type": "float"
+      },
+      {
+        "flags": [
+          "--l1-mlock"
+        ]
+      },
+      {
+        "default": null,
+        "flags": [
+          "--gds-l1-path"
+        ],
+        "type": "str"
+      },
+      {
+        "default": true,
+        "flags": [
+          "--gds-l1-use-direct-io"
+        ]
+      },
+      {
+        "choices": [
+          "auto"
+        ],
+        "default": "auto",
+        "flags": [
+          "--gds-l1-backend"
+        ]
+      },
+      {
+        "default": 600,
+        "flags": [
+          "--l1-write-ttl-seconds"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 300,
+        "flags": [
+          "--l1-read-ttl-seconds"
+        ],
+        "type": "int"
+      },
+      {
+        "choices": [
+          "LRU",
+          "ARC",
+          "IsolatedLRU",
+          "noop"
+        ],
+        "default": null,
+        "flags": [
+          "--eviction-policy"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 0.8,
+        "flags": [
+          "--eviction-trigger-watermark"
+        ],
+        "type": "float"
+      },
+      {
+        "default": 0.2,
+        "flags": [
+          "--eviction-ratio"
+        ],
+        "type": "float"
+      },
+      {
+        "default": "default",
+        "flags": [
+          "--l2-store-policy"
+        ],
+        "type": "str"
+      },
+      {
+        "default": "default",
+        "flags": [
+          "--l2-prefetch-policy"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 0.5,
+        "flags": [
+          "--l2-prefetch-inflight-watermark"
+        ],
+        "type": "float"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--l2-prefetch-max-in-flight"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 5,
+        "flags": [
+          "--periodic-notifier-interval-ms"
+        ],
+        "type": "int"
+      }
+    ]
+  },
+  "l2": {
+    "file": "lmcache/v1/distributed/l2_adapters/config.py",
+    "flags": [
+      {
+        "flags": [
+          "--l2-adapter"
+        ],
+        "type": "str"
+      }
+    ]
+  },
+  "mp": {
+    "file": "lmcache/v1/multiprocess/config.py",
+    "flags": [
+      {
+        "default": null,
+        "flags": [
+          "--instance-id"
+        ],
+        "type": "str"
+      },
+      {
+        "choices": [
+          "zmq",
+          "grpc"
+        ],
+        "default": "zmq",
+        "flags": [
+          "--transport"
+        ]
+      },
+      {
+        "default": "localhost",
+        "flags": [
+          "--host"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 5555,
+        "flags": [
+          "--port"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 256,
+        "flags": [
+          "--chunk-size"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 0,
+        "flags": [
+          "--null-block-id"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 1,
+        "flags": [
+          "--max-workers"
+        ],
+        "type": "int"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--max-gpu-workers"
+        ],
+        "type": "int"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--max-cpu-workers"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 32,
+        "flags": [
+          "--grpc-server-workers"
+        ],
+        "type": "int"
+      },
+      {
+        "choices": [
+          "sync",
+          "aio",
+          "native"
+        ],
+        "default": "sync",
+        "flags": [
+          "--grpc-server-mode"
+        ]
+      },
+      {
+        "default": "blake3",
+        "flags": [
+          "--hash-algorithm"
+        ],
+        "type": "str"
+      },
+      {
+        "choices": [
+          "default",
+          "blend"
+        ],
+        "default": "default",
+        "flags": [
+          "--engine-type"
+        ],
+        "type": "str"
+      },
+      {
+        "choices": [
+          "lmcache_driven",
+          "engine_driven",
+          "auto"
+        ],
+        "default": "lmcache_driven",
+        "flags": [
+          "--supported-transfer-mode"
+        ],
+        "type": "str"
+      },
+      {
+        "flags": [
+          "--rocm-host-event-wait"
+        ]
+      },
+      {
+        "default": false,
+        "flags": [
+          "--isolated-ipc"
+        ]
+      },
+      {
+        "flags": [
+          "--runtime-plugin-locations"
+        ],
+        "type": "str"
+      },
+      {
+        "default": "{}",
+        "flags": [
+          "--runtime-plugin-config"
+        ],
+        "type": "str"
+      },
+      {
+        "default": "",
+        "flags": [
+          "--shm-name"
+        ],
+        "type": "str"
+      },
+      {
+        "flags": [
+          "--script-allowed-imports"
+        ],
+        "type": "str"
+      },
+      {
+        "default": false,
+        "flags": [
+          "--run-script-api-enabled"
+        ]
+      },
+      {
+        "default": true,
+        "flags": [
+          "--separate-object-groups"
+        ]
+      },
+      {
+        "default": 120.0,
+        "flags": [
+          "--worker-reap-timeout-seconds"
+        ],
+        "type": "float"
+      },
+      {
+        "default": 600.0,
+        "flags": [
+          "--session-ttl-seconds"
+        ],
+        "type": "float"
+      },
+      {
+        "default": "DEFAULT",
+        "flags": [
+          "--kv-load-policy"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 3600.0,
+        "flags": [
+          "--worker-registration-grace-seconds"
+        ],
+        "type": "float"
+      },
+      {
+        "flags": [
+          "--enable-segmented-prefix"
+        ]
+      },
+      {
+        "flags": [
+          "--enable-dedup-content-fingerprint"
+        ]
+      },
+      {
+        "flags": [
+          "--enable-dedup-content"
+        ]
+      },
+      {
+        "flags": [
+          "--enable-dedup-content-kv"
+        ]
+      },
+      {
+        "flags": [
+          "--enable-blend-reorder"
+        ]
+      },
+      {
+        "flags": [
+          "--kv-event-log-size"
+        ],
+        "type": "int"
+      },
+      {
+        "flags": [
+          "--server-module"
+        ]
+      },
+      {
+        "default": "",
+        "flags": [
+          "--p2p-advertise-url"
+        ],
+        "type": "str"
+      },
+      {
+        "default": "",
+        "flags": [
+          "--p2p-listen-url"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 0,
+        "flags": [
+          "--p2p-rpc-port"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 30.0,
+        "flags": [
+          "--p2p-lookup-timeout"
+        ],
+        "type": "float"
+      },
+      {
+        "default": 30.0,
+        "flags": [
+          "--p2p-load-timeout"
+        ],
+        "type": "float"
+      },
+      {
+        "default": "nixl",
+        "flags": [
+          "--p2p-transfer-engine"
+        ],
+        "type": "str"
+      },
+      {
+        "flags": [
+          "--enable-p2p-write"
+        ]
+      },
+      {
+        "default": 0.7,
+        "flags": [
+          "--p2p-write-l1-usage-threshold"
+        ],
+        "type": "float"
+      },
+      {
+        "default": 30.0,
+        "flags": [
+          "--p2p-store-timeout"
+        ],
+        "type": "float"
+      },
+      {
+        "default": "127.0.0.1",
+        "flags": [
+          "--http-host"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 8080,
+        "flags": [
+          "--http-port"
+        ],
+        "type": "int"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--coordinator-url"
+        ],
+        "type": "str"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--coordinator-advertise-ip"
+        ],
+        "type": "str"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--coordinator-heartbeat-interval"
+        ],
+        "type": "float"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--coordinator-event-reporting"
+        ]
+      },
+      {
+        "default": null,
+        "flags": [
+          "--coordinator-event-flush-interval"
+        ],
+        "type": "float"
+      },
+      {
+        "choices": [
+          "http",
+          "kafka"
+        ],
+        "default": "http",
+        "flags": [
+          "--coordinator-event-transport"
+        ]
+      },
+      {
+        "default": "",
+        "flags": [
+          "--coordinator-kafka-bootstrap-servers"
+        ],
+        "type": "str"
+      },
+      {
+        "flags": [
+          "--coordinator-kafka-topic"
+        ],
+        "type": "str"
+      },
+      {
+        "flags": [
+          "--coordinator-kafka-delivery-timeout"
+        ],
+        "type": "float"
+      },
+      {
+        "flags": [
+          "--coordinator-blend-timeout"
+        ],
+        "type": "float"
+      },
+      {
+        "flags": [
+          "--coordinator-blend-match-concurrency"
+        ],
+        "type": "int"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--coordinator-l2-event-reporting"
+        ]
+      },
+      {
+        "default": null,
+        "flags": [
+          "--coordinator-l2-event-flush-interval"
+        ],
+        "type": "float"
+      }
+    ]
+  },
+  "obs": {
+    "file": "lmcache/v1/mp_observability/config.py",
+    "flags": [
+      {
+        "default": false,
+        "flags": [
+          "--disable-observability"
+        ]
+      },
+      {
+        "default": false,
+        "flags": [
+          "--disable-metrics"
+        ]
+      },
+      {
+        "default": false,
+        "flags": [
+          "--disable-grpc-metrics"
+        ]
+      },
+      {
+        "default": false,
+        "flags": [
+          "--disable-logging"
+        ]
+      },
+      {
+        "default": false,
+        "flags": [
+          "--enable-tracing"
+        ]
+      },
+      {
+        "default": false,
+        "flags": [
+          "--enable-token-trace"
+        ]
+      },
+      {
+        "default": null,
+        "flags": [
+          "--otlp-endpoint"
+        ],
+        "type": "str"
+      },
+      {
+        "default": 10000,
+        "flags": [
+          "--event-bus-queue-size"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 9090,
+        "flags": [
+          "--prometheus-port"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 0.01,
+        "flags": [
+          "--metrics-sample-rate"
+        ],
+        "type": "float"
+      },
+      {
+        "default": "",
+        "flags": [
+          "--lookup-hash-log-dir"
+        ],
+        "type": "str"
+      },
+      {
+        "flags": [
+          "--lookup-hash-log-rotation-interval"
+        ],
+        "type": "int"
+      },
+      {
+        "flags": [
+          "--lookup-hash-log-rotation-max-size"
+        ],
+        "type": "int"
+      },
+      {
+        "default": 100,
+        "flags": [
+          "--lookup-hash-log-max-files"
+        ],
+        "type": "int"
+      },
+      {
+        "default": false,
+        "flags": [
+          "--enable-gc-monitor"
+        ]
+      },
+      {
+        "default": 1.0,
+        "flags": [
+          "--gc-monitor-min-pause-ms"
+        ],
+        "type": "float"
+      },
+      {
+        "default": 0,
+        "flags": [
+          "--gc-monitor-top-objects"
+        ],
+        "type": "int"
+      },
+      {
+        "default": false,
+        "flags": [
+          "--enable-extra-logging"
+        ]
+      },
+      {
+        "default": 10.0,
+        "flags": [
+          "--extra-logging-interval"
+        ],
+        "type": "float"
+      },
+      {
+        "choices": [
+          "storage",
+          "events"
+        ],
+        "default": null,
+        "flags": [
+          "--trace-level"
+        ],
+        "type": "str"
+      },
+      {
+        "default": null,
+        "flags": [
+          "--trace-output"
+        ],
+        "type": "str"
+      }
+    ]
+  }
+}

@@ -27,10 +27,17 @@ def main() -> int:
     timeout = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
     url = f"tcp://{host}:{port}"
     try:
-        from lmcache.v1.multiprocess.transport.factory import RequestClientFactory
-    except Exception as exc:  # noqa: BLE001 - slim install / no lmcache here
-        print(f"mp_ping: lmcache not importable ({exc.__class__.__name__}) -- skipped")
-        return 3
+        # r22 B2: the pin (07f1c6bb) has NO lmcache.v1.multiprocess.transport --
+        # the factory lives in lmcache.v1.client.transport.factory (verified
+        # against the pin source). Try the pin path FIRST, fall back to the
+        # pre-r22 path for older checkouts; neither available -> code 3.
+        from lmcache.v1.client.transport.factory import RequestClientFactory
+    except ImportError:
+        try:
+            from lmcache.v1.multiprocess.transport.factory import RequestClientFactory
+        except Exception as exc:  # noqa: BLE001 - slim install / no lmcache here
+            print(f"mp_ping: lmcache not importable ({exc.__class__.__name__}) -- skipped")
+            return 3
     try:
         client = RequestClientFactory.create(url)
     except Exception as exc:  # noqa: BLE001

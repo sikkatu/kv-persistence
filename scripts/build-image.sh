@@ -264,7 +264,7 @@ for _codec in zstd none; do
   docker run --rm --gpus all --ipc host \
     -v "$ROOT":/kvp-repo:ro -v "$ROOT/implementation":/kvp-impl:ro \
     --entrypoint bash "$OUT_IMAGE" /kvp-repo/scripts/_smoke_cache_server.sh \
-      "$_codec" "/tmp/kvp-smoke-$_codec" 5555 \
+      "$_codec" "/tmp/kvp-smoke-$_codec" "${KVP_SMOKE_PORT:-15555}" \
     > "$_smoke_out" 2>&1 || _smoke_rc=$?
   [ "$_smoke_rc" = 0 ] || die "server smoke FAILED for codec '$_codec' (rc=$_smoke_rc):
 $(tail -n 30 "$_smoke_out" 2>/dev/null)"

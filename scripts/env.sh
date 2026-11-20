@@ -256,28 +256,61 @@ _kvp_render_l2_adapter() { # _kvp_render_l2_adapter <out.json> <repo-root> <cach
     | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)' \
     > "$_out"
 }
-_kvp_server_argv() { # _kvp_server_argv <host> <port> <l1-gb> <chunk-gb> <adapter-json> [http-host]
-  # Prints the `kvpersist.launch server ...` arguments, ONE per line (the
-  # --l2-adapter JSON carries spaces -- never word-split it in the caller).
+_kvp_normalize_eviction_policy() { # _kvp_normalize_eviction_policy <value> -> canonical LRU|ARC|IsolatedLRU|noop
+  # r22 B1: the pin parser (lmcache/v1/distributed/config.py:984) accepts
+  # EXACTLY LRU|ARC|IsolatedLRU|noop (case-sensitive). Normalize before
+  # passing to the server; refuse unknown values with all four choices.
+  local _p="${1:-LRU}"
+  case "$_p" in
+    LRU|ARC|IsolatedLRU|noop) printf '%s' "$_p" ;;
+    lru|Lru) printf 'LRU' ;;
+    arc|Arc) printf 'ARC' ;;
+    isolatedlru|Isolatedlru|isolatedLru|IsolatedlRU) printf 'IsolatedLRU' ;;
+    Noop|NOOP) printf 'noop' ;;
+    *)
+      echo "ERROR(_kvp_server_argv): LMCACHE_EVICTION_POLICY=$_p is not a valid policy." >&2
+      echo "  Allowed values (case-sensitive on the pin): LRU, ARC, IsolatedLRU, noop" >&2
+      echo "  Set LMCACHE_EVICTION_POLICY to one of these, or leave it unset (default: LRU)." >&2
+      return 1 ;;
+  esac
+}
+_kvp_server_argv_read() { # _kvp_server_argv_read <array-name> -- read NUL-separated argv into an array
+  # r22 B4: ONE consumer-side reader for the NUL-separated argv. The three
+  # former copies (smoke, docker branch, host branch of start-cache.sh) all
+  # call this -- the line-splitting defect cannot live in more than one place.
+  local _arr="$1"
+  mapfile -d '' -t "$_arr"
+}
+_kvp_server_argv() { # _kvp_server_argv <host> <port> <l1-gb> <chunk-size> <adapter-json> [http-host]
+  # Prints the `kvpersist.launch server ...` arguments separated by NUL
+  # (r22 B4: the adapter JSON carries spaces AND newlines -- never word-split
+  # or line-split it in the caller; read with `mapfile -d '' -t`).
   # docker mode binds 0.0.0.0 INSIDE the container (the -p mapping is the
   # host-side gate); host mode binds the loopback -- pass the right host.
   local _host="$1" _port="$2" _l1="$3" _chunk="$4" _adapter="$5" _http_host="${6:-}"
   local _wm="${LMCACHE_EVICTION_TRIGGER_WATERMARK:-${KVP_EVICT_TRIGGER_WATERMARK:-0.9}}"
   local _ratio="${LMCACHE_EVICTION_RATIO:-${KVP_EVICT_RATIO:-0.1}}"
-  printf '%s\n' \
+  local _policy
+  _policy="$(_kvp_normalize_eviction_policy "${LMCACHE_EVICTION_POLICY:-LRU}")" || return 1
+  # r22 B4: compact the adapter JSON to a single line (the pretty-printed
+  # file is kept for inspection; the argv value must be ONE element).
+  local _adapter_compact
+  _adapter_compact="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])),separators=(",",":")))' "$_adapter")" \
+    || { echo "ERROR(_kvp_server_argv): cannot compact adapter JSON: $_adapter" >&2; return 1; }
+  printf '%s\0' \
     "server" \
     "--host" "$_host" \
     "--port" "$_port" \
     "--l1-size-gb" "$_l1" \
-    "--eviction-policy" "${LMCACHE_EVICTION_POLICY:-lru}" \
+    "--eviction-policy" "$_policy" \
     "--eviction-trigger-watermark" "$_wm" \
     "--eviction-ratio" "$_ratio" \
     "--chunk-size" "$_chunk" \
-    "--l2-adapter" "$(cat "$_adapter")"
+    "--l2-adapter" "$_adapter_compact"
   # Optional flags: keep only those THIS build's --help understands.
-  [ -n "$_http_host" ] && printf '%s\n' "--http-host" "$_http_host"
-  [ -n "${LMCACHE_HTTP_PORT:-}" ] && printf '%s\n' "--http-port" "$LMCACHE_HTTP_PORT"
-  [ -n "${LMCACHE_OTLP_ENDPOINT:-}" ] && printf '%s\n' "--otlp-endpoint" "$LMCACHE_OTLP_ENDPOINT" "--enable-tracing"
+  [ -n "$_http_host" ] && printf '%s\0' "--http-host" "$_http_host"
+  [ -n "${LMCACHE_HTTP_PORT:-}" ] && printf '%s\0' "--http-port" "$LMCACHE_HTTP_PORT"
+  [ -n "${LMCACHE_OTLP_ENDPOINT:-}" ] && printf '%s\0' "--otlp-endpoint" "$LMCACHE_OTLP_ENDPOINT" "--enable-tracing"
   return 0
 }
 

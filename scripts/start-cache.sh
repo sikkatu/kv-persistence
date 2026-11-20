@@ -270,7 +270,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   # r20 K6.3: the server arg list is built by _kvp_server_argv (env.sh) --
   # the SAME source the image-build server smoke uses. docker binds 0.0.0.0
   # inside the container (the 127.0.0.1 -p mapping is the host-side gate).
-  mapfile -t _srv < <(_kvp_server_argv 0.0.0.0 "$LMCACHE_PORT" "$LMCACHE_L1_SIZE_GB" "$LMCACHE_CHUNK_SIZE" "$ADAPTER_JSON" "${LMCACHE_HTTP_HOST:+0.0.0.0}")
+  _kvp_server_argv_read _srv < <(_kvp_server_argv 0.0.0.0 "$LMCACHE_PORT" "$LMCACHE_L1_SIZE_GB" "$LMCACHE_CHUNK_SIZE" "$ADAPTER_JSON" "${LMCACHE_HTTP_HOST:+0.0.0.0}")
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   # Review round 13 (docker mode fixes):
   #  * The server must bind 0.0.0.0 INSIDE the container: binding 127.0.0.1
@@ -294,7 +294,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     "$DOCKER_IMAGE" python3 -m kvpersist.launch "${_srv[@]}" \
     >>"$LOG" 2>&1 &
 else
-  mapfile -t _srv < <(_kvp_server_argv "$LMCACHE_HOST" "$LMCACHE_PORT" "$LMCACHE_L1_SIZE_GB" "$LMCACHE_CHUNK_SIZE" "$ADAPTER_JSON" "${LMCACHE_HTTP_HOST:-}")
+  _kvp_server_argv_read _srv < <(_kvp_server_argv "$LMCACHE_HOST" "$LMCACHE_PORT" "$LMCACHE_L1_SIZE_GB" "$LMCACHE_CHUNK_SIZE" "$ADAPTER_JSON" "${LMCACHE_HTTP_HOST:-}")
   # PYTHONFAULTHANDLER=1 (round 44): if a server thread hangs, SIGABRT dumps
   # every thread stack to the log -- a hang becomes identifiable by stack,
   # not by silence (the register_kv_caches timeout gave no clue).
