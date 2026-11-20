@@ -521,43 +521,119 @@ _kvp_pre_flights(){
   fi
   # (c2) lmcache version match -- mixed minor versions break the MP-connector
   # protocol silently at register_kv_caches (round 42).
-  local _kvp_py="$(_kvp_python)"
-  local _host_lmcache
-  _host_lmcache="$("$_kvp_py" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
-  local _img_lmcache
-  _img_lmcache="$(docker run --rm --entrypoint python3 "$_image" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
-  if [ "$_host_lmcache" != "UNKNOWN" ] && [ "$_img_lmcache" != "UNKNOWN" ]; then
-    if [ "$_host_lmcache" != "$_img_lmcache" ]; then
-      echo "ERROR: LMCACHE VERSION MISMATCH (pre-flight): the host serves lmcache $_host_lmcache" >&2
-      echo "but the vLLM image ships lmcache $_img_lmcache. Mixed minor versions break the" >&2
-      echo "MP-connector protocol -- register_kv_caches will silently time out (300s)." >&2
-      echo "Align both sides to the SAME version:" >&2
-      echo "  host (server):  ~/.venvs/lmcache/bin/pip install lmcache==$_img_lmcache" >&2
+  # r20 K3: the check MODE-DEPENDS. In docker mode (the default) the cache
+  # server runs in a container from the SAME image as the engine -- the
+  # host-venv copy is only the mp_ping client (requirements-lmcache.txt calls
+  # it "diagnostic"). Comparing the host-venv version against the image
+  # version always refused (host 0.5.6 vs image 0.5.8rc1.post48+kvp...) with
+  # an unrunnable `pip install lmcache==...+kvp...` hint (no such package on
+  # PyPI). In docker mode the REAL invariant is "server and engine run ONE
+  # image" -- verify it, and run the RPC ping INSIDE the cache container.
+  local _kvp_cache_container="${KVP_CACHE_CONTAINER:-lmcache-kvp-server}"
+  if [ "$_mode" = "docker" ]; then
+    # (c2-d) server image == engine image?
+    local _srv_img="" _eng_img=""
+    _srv_img="$(docker inspect --format '{{.Image}}' "$_kvp_cache_container" 2>/dev/null || true)"
+    _eng_img="$(docker inspect --format '{{.Id}}' "$_image" 2>/dev/null || true)"
+    if [ -z "$_srv_img" ]; then
+      if timeout 2 bash -c "exec 3<>/dev/tcp/$_host/$_port" 2>/dev/null; then
+        echo "NOTE: cache container '$_kvp_cache_container' not found but the TCP port is open -- server/engine image check skipped"
+      else
+        :  # (c0) already refused the dead server above
+      fi
+    elif [ -n "$_eng_img" ] && [ "$_srv_img" != "$_eng_img" ]; then
+      echo "ERROR: the cache server and the engine run DIFFERENT images (pre-flight):" >&2
+      echo "  cache container '$_kvp_cache_container' image: $_srv_img" >&2
+      echo "  engine image '$_image': $_eng_img" >&2
+      echo "  The MP server and every worker must run the SAME custom build -- mixed" >&2
+      echo "  builds break the MP-connector protocol and can corrupt the cache." >&2
+      echo "  Fix: bash scripts/stop-cache.sh && bash scripts/start-cache.sh" >&2
       return 1
+    elif [ -n "$_eng_img" ]; then
+      echo "pre-flight: cache server and engine run the same image (${_eng_img:0:24}...)"
+    else
+      echo "NOTE: cannot read the engine image id ($_image) -- server/engine image check skipped"
     fi
-    echo "pre-flight: lmcache version matches on both sides ($_host_lmcache)"
   else
-    echo "NOTE: could not determine lmcache version (host=$_host_lmcache, image=$_img_lmcache) -- skipping version check"
+    # host mode: the host DOES serve lmcache -- the version must match the
+    # image (the round-42 check, unchanged in logic)
+    local _kvp_py="$(_kvp_python)"
+    local _host_lmcache
+    _host_lmcache="$("$_kvp_py" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
+    local _img_lmcache
+    _img_lmcache="$(docker run --rm --entrypoint python3 "$_image" -c 'import importlib.metadata; print(importlib.metadata.version("lmcache"))' 2>/dev/null || echo UNKNOWN)"
+    if [ "$_host_lmcache" != "UNKNOWN" ] && [ "$_img_lmcache" != "UNKNOWN" ]; then
+      if [ "$_host_lmcache" != "$_img_lmcache" ]; then
+        # r20 K3: the fix hint must be RUNNABLE -- `pip install lmcache==<+kvp
+        # version>` names a package that does not exist on PyPI. Point at the
+        # EXACT wheel this repo built (the only place that version exists).
+        local _kvp_wheel=""
+        _kvp_wheel="$(ls "${KVP_LIVE_DIR:-$_root/live}/lmcache-build/wheels/"*.whl 2>/dev/null | head -1 || true)"
+        echo "ERROR: LMCACHE VERSION MISMATCH (pre-flight): this launch serves lmcache $_host_lmcache" >&2
+        echo "  from the host venv but the vLLM image ships lmcache $_img_lmcache. Mixed minor" >&2
+        echo "  versions break the MP-connector protocol -- register_kv_caches will silently" >&2
+        echo "  time out (300s)." >&2
+        if [ -n "$_kvp_wheel" ]; then
+          echo "  Align the host copy to the built wheel:" >&2
+          echo "    ~/.venvs/lmcache/bin/pip install --force-reinstall --no-deps $_kvp_wheel" >&2
+        else
+          echo "  Build the wheel first (bash scripts/build-lmcache.sh), then:" >&2
+          echo "    ~/.venvs/lmcache/bin/pip install --force-reinstall --no-deps <the single *.whl in live/lmcache-build/wheels/>" >&2
+        fi
+        echo "  (host mode serves lmcache from the host venv; in docker mode this check is" >&2
+        echo "  replaced by the server/engine same-image check)" >&2
+        return 1
+      fi
+      echo "pre-flight: lmcache version matches on both sides ($_host_lmcache)"
+    else
+      echo "NOTE: could not determine lmcache version (host=$_host_lmcache, image=$_img_lmcache) -- skipping version check"
+    fi
   fi
   # (a) lmcache RPC probe -- an open TCP port does not prove the RequestClient
   # protocol register_kv_caches rides. Exit 3 = lmcache not importable (honest
   # skip: the system python lacks it; use the venv python for a real probe).
+  # r20 K3: in docker mode run the ping INSIDE the cache container -- the
+  # image carries our wheel (PYTHONPATH=/kvp-impl is mounted, lmcache is our
+  # build); exit 3 there is a REFUSAL too (an unreadable lmcache in the image
+  # is a hidden defect, never an honest skip).
   if [ -d "$_root/implementation" ]; then
-    _ping_out="$(PYTHONPATH="$_root/implementation" python3 -m kvpersist.mp_ping "$_host" "$_port" 10 2>&1)" || _ping_rc=$?
-    case "$_ping_rc" in
-      0)
-        echo "  $_ping_out" ;;
-      3)
-        echo "  $_ping_out"
-        echo "  NOTE: lmcache not importable on the host python -- protocol ping skipped" ;;
-      *)
-        echo "ERROR: the cache server did not answer the RPC ping (register_kv_caches would hang):" >&2
-        echo "  $_ping_out" >&2
-        echo "  The server accepted TCP on $_host:$_port but its RPC channel is dead." >&2
-        echo "  Fix: restart the cache service (bash scripts/stop-cache.sh && bash scripts/start-cache.sh)" >&2
-        echo "       and check its log: tail -40 ${_croot}/lmcache-server.log" >&2
-        return 1 ;;
-    esac
+    if [ "$_mode" = "docker" ]; then
+      _ping_out="$(docker exec "$_kvp_cache_container" \
+        python3 -m kvpersist.mp_ping "$_host" "$_port" 10 2>&1)" || _ping_rc=$?
+      case "$_ping_rc" in
+        0)
+          echo "  $_ping_out" ;;
+        3)
+          echo "  $_ping_out" >&2
+          echo "ERROR: lmcache is NOT importable inside the cache container (pre-flight):" >&2
+          echo "  'skipped' would hide a broken image -- the wheel must import there." >&2
+          echo "  Fix: rebuild/redeploy the image (bash scripts/build-lmcache.sh && bash scripts/build-image.sh)" >&2
+          return 1 ;;
+        *)
+          echo "ERROR: the cache server did not answer the RPC ping (register_kv_caches would hang):" >&2
+          echo "  $_ping_out" >&2
+          echo "  The server accepted TCP on $_host:$_port but its RPC channel is dead." >&2
+          echo "  Fix: restart the cache service (bash scripts/stop-cache.sh && bash scripts/start-cache.sh)" >&2
+          echo "       and check its log: tail -40 ${_croot}/lmcache-server.log" >&2
+          return 1 ;;
+      esac
+    else
+      _ping_out="$(PYTHONPATH="$_root/implementation" python3 -m kvpersist.mp_ping "$_host" "$_port" 10 2>&1)" || _ping_rc=$?
+      case "$_ping_rc" in
+        0)
+          echo "  $_ping_out" ;;
+        3)
+          echo "  $_ping_out"
+          echo "  NOTE: lmcache not importable on the host python -- protocol ping skipped" ;;
+        *)
+          echo "ERROR: the cache server did not answer the RPC ping (register_kv_caches would hang):" >&2
+          echo "  $_ping_out" >&2
+          echo "  The server accepted TCP on $_host:$_port but its RPC channel is dead." >&2
+          echo "  Fix: restart the cache service (bash scripts/stop-cache.sh && bash scripts/start-cache.sh)" >&2
+          echo "       and check its log: tail -40 ${_croot}/lmcache-server.log" >&2
+          return 1 ;;
+      esac
+    fi
   fi
   # (b) CUDA IPC boundary -- the EXACT step that killed register_kv_cache
   # (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle). The consumer must match

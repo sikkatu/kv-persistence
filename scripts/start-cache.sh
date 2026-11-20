@@ -181,8 +181,9 @@ if [ "$LMCACHE_L2_SERDE" = "zstd" ] || [ "$LMCACHE_L2_SERDE" = "lz4" ]; then
       -e PYTHONPATH=/kvp-impl --entrypoint python3 "$DOCKER_IMAGE" \
       -c "from kvpersist.compress_serde import check_codec_available; check_codec_available('$LMCACHE_L2_SERDE')" 2>&1)" \
       || die "lossless codec '$LMCACHE_L2_SERDE' is not available inside the docker image.
-$CODEC_PROBE
-Either install the codec into the image, or fall back to LMCACHE_L2_SERDE=none."
+The codecs (zstandard, lz4) ship IN the image -- a user cannot add them after the
+fact. Rebuild the image: bash scripts/build-image.sh (the codecs are part of it),
+or fall back to LMCACHE_L2_SERDE=none."
   else
     PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}" \
       "$KVP_PY" -c "from kvpersist.compress_serde import check_codec_available; check_codec_available('$LMCACHE_L2_SERDE')" 2>&1 \

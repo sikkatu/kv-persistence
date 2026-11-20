@@ -315,7 +315,12 @@ case "$KVP_ENGINE" in
     _kvp_pre_flights "$ROOT" "$KV_PERSIST_HOST" "$KV_PERSIST_PORT" \
       "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}" "$IMAGE" \
       "$(id -u)" "$(id -g)" "${KVP_SAME_UID:-1}" "${KVP_LAUNCH_MODE:-host}" || {
-        echo "ERROR: pre-flight failed -- refusing the delegated launch (nothing was started)" >&2
+        # r20 K3: the cache server was ALREADY started at step 2 -- 'nothing
+        # was started' is false here. stop-cache.sh is only needed when the
+        # CODEC changes; a rerun with the same codec reuses the running cache.
+        echo "ERROR: pre-flight failed -- the engine was NOT started (the cache service" >&2
+        echo "  from step 2/3 remains running; a rerun with the same codec reuses it)." >&2
+        echo "  Run stop-cache.sh first ONLY if you are changing the codec." >&2
         exit 1
       }
 
