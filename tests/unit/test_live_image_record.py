@@ -112,27 +112,131 @@ def test_failed_smoke_never_touches_live_image(tmp_path):
 
 
 def test_start_all_uses_live_image_without_env(tmp_path):
-    """start-all.sh with empty IMAGE must resolve $KVP_LIVE_DIR/image."""
+    """start-all.sh with empty IMAGE must resolve $KVP_LIVE_DIR/image AND
+    hand that EXACT id to the recipe launcher (r20 K4.5: the old test
+    accepted ANY outcome except one string -- a wrong-image launch passed
+    green; the K1 defect (stock IMAGE shadowing live/image) slipped through
+    exactly that hole). The stub recipe prints RECIPE_SAW_IMAGE=$IMAGE."""
     live_dir = tmp_path / "live"
     live_dir.mkdir(exist_ok=True)
     want = f"sha256:{'e' * 64}"
     (live_dir / "image").write_text(want + "\n")
-    # extract just the resolution behaviour: run the script to the first die
-    # (no docker/engines available) and require the resolved IMAGE in output
+    # the stub recipe launcher printing what IMAGE it received
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    recipe_dir = home / "sikkatu-recipes" / "recipes" / "rtx-pro-6000" / \
+        "mimo-v2.6-pro-hotsplit"
+    recipe_dir.mkdir(parents=True, exist_ok=True)
+    (recipe_dir / "scripts").mkdir(exist_ok=True)
+    (recipe_dir / "scripts" / "run-tp4-hotsplit.sh").write_text(
+        '#!/usr/bin/env bash\necho "RECIPE_SAW_IMAGE=$IMAGE"\nexit 0\n')
+    (recipe_dir / "scripts" / "run-tp4-hotsplit.sh").chmod(0o755)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    (bin_dir / "docker").write_text("#!/usr/bin/env bash\ncase \"$1\" in ps) exit 0 ;; *) exit 1 ;; esac\n")
+    # r20 K4.5: the docker stub must answer the DEEP custom-image probes
+    # (labels of a real build + the baked identity + the python probes) --
+    # otherwise the resolver refuses the image and the launcher never runs
+    import hashlib
+    import json as _json
+    kv = tmp_path / "kv"
+    (kv / "vendor" / "patches" / "lmcache").mkdir(parents=True)
+    p4136 = kv / "vendor" / "patches" / "lmcache" / "4136-mp-retrieve-abort.patch"
+    p5972 = kv / "vendor" / "patches" / "lmcache" / "5972-incomplete-kv-objects.patch"
+    p4136.write_bytes(b"PATCH4136-CONTENT\n")
+    p5972.write_bytes(b"PATCH5972-CONTENT\n")
+
+    def _sha(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    # the resolver verifies the labels against $ROOT/vendor/patches/lmcache
+    # (the REAL repo patches) -- use THOSE shas in the labels
+    real_pd = ROOT / "vendor" / "patches" / "lmcache"
+    labels = _json.dumps({
+        "org.kvp.lmc-base": f"x@sha256:{'b' * 64}",
+        "org.kvp.lmc-patch-4136": _sha(real_pd / "4136-mp-retrieve-abort.patch"),
+        "org.kvp.lmc-patch-5972": _sha(real_pd / "5972-incomplete-kv-objects.patch"),
+    })
+    ident = _json.dumps({
+        "module": "kvp-custom-lmcache-identity",
+        "lmcache_source_commit": "07f1c6bb642f4772606a36eab730ae009ddce08f",
+        "pr4136_patch_sha256": _sha(real_pd / "4136-mp-retrieve-abort.patch"),
+        "pr5972_patch_sha256": _sha(real_pd / "5972-incomplete-kv-objects.patch"),
+        "wheel": "lmcache-0.5.8rc1.post48+kvp.60dce759ea93-cp312-cp312-linux_x86_64.whl",
+        "wheel_sha256": "a" * 64,
+        "wheel_version": "0.5.8rc1.post48+kvp.60dce759ea93",
+    })
+    (bin_dir / "docker").write_text(f'''#!/usr/bin/env bash
+cmd="${{1:-}}"; shift || true
+case "$cmd" in
+  image)
+    sub="${{1:-}}"; shift || true
+    case "$sub" in
+      inspect) echo '{labels}' ;;
+    esac ;;
+  run)
+    _entry=""
+    _probe=""
+    while [ "$#" -gt 0 ]; do case "$1" in
+      --entrypoint) _entry="$2"; shift 2 ;;
+      -c) _probe="$2"; shift 2 ;;
+      *) shift ;;
+    esac; done
+    case "$_entry" in
+      cat) echo '{ident}' ;;
+      python3)
+        case "$_probe" in
+          *importlib.metadata*) echo "0.5.8rc1.post48+kvp.60dce759ea93" ;;
+          *find_spec*) exit 0 ;;
+          *) exit 0 ;;
+        esac ;;
+    esac ;;
+  inspect) echo "{want}" ;;
+  ps) echo "obs_otel_collector"; echo "obs_tempo"; echo "obs_prometheus"; echo "obs_grafana" ;;
+  compose) exit 0 ;;
+  *) exit 0 ;;
+esac
+''')
     (bin_dir / "docker").chmod(0o755)
     env = dict(os.environ,
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
+               HOME=str(home),
                KVP_LIVE_DIR=str(live_dir),
-               KVP_PIN_FILE=str(PIN_FILE))
+               RECIPE_DIR=str(recipe_dir),
+               KVP_PIN_FILE=str(PIN_FILE),
+               KVP_PREFLIGHTS_DONE="1",
+               KVP_SKIP_IPC_TEST="1",
+               # the IMAGE resolution is the subject -- the service steps
+               # must not be: report obs already running (docker ps) and
+               # disable the extras deploy
+               KVP_OBS_EXTRAS="0")
+    # the subject is the IMAGE resolution, not the service steps: make
+    # step 2/3 quick -- an already-running cache (live pid) and a live TCP
+    # port for the pre-flight probe
+    import socket
+    _srv = socket.socket()
+    _srv.bind(("127.0.0.1", 0))
+    _srv.listen(1)
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    (cache_root / "lmcache-server.pid").write_text(str(os.getpid()))
+    env["KVP_CACHE_ROOT"] = str(cache_root)
+    env["LMCACHE_HOST"] = "127.0.0.1"
+    env["LMCACHE_PORT"] = str(_srv.getsockname()[1])
+    env["KV_PERSIST_HOST"] = "127.0.0.1"
+    env["KV_PERSIST_PORT"] = str(_srv.getsockname()[1])
+    # MODEL_DIR resolution is not the subject -- give the chain one
+    _model_dir = tmp_path / "models" / "MiMo"
+    _model_dir.mkdir(parents=True, exist_ok=True)
+    (_model_dir / "config.json").write_text('{"hidden_size": 8}\n')
+    env["MODEL_DIR"] = str(_model_dir)
     env.pop("IMAGE", None)
-    r = subprocess.run(["bash", str(START_ALL)], capture_output=True,
-                       text=True, timeout=120, env=env, cwd=str(tmp_path))
+    try:
+        r = subprocess.run(["bash", str(START_ALL)], capture_output=True,
+                           text=True, timeout=120, env=env, cwd=str(tmp_path))
+    finally:
+        _srv.close()
     out = r.stdout + r.stderr
-    # either the run proceeds with the resolved image, or it refuses for an
-    # unrelated reason -- but never with 'no IMAGE set'
     assert "no IMAGE set and no" not in out, (
-        f"start-all must pick up live/image without manual IMAGE:\n{out[-800:]}"
-    )
+        f"start-all must pick up live/image without manual IMAGE:\n{out[-800:]}")
+    # r20 K4.5: the RESOLVED id must reach the recipe launcher exactly
+    assert f"RECIPE_SAW_IMAGE={want}" in out, (
+        f"the recipe must see the live/image id {want}:\n{out[-1200:]}")
