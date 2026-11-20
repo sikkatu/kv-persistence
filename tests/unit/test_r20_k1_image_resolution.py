@@ -463,6 +463,76 @@ def test_b_wrong_base_digest_refused_fail_fast(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# (b2) r21 L3 K1d: the base pin is compared BY DIGEST, not by full string
+# ---------------------------------------------------------------------------
+def test_b2_same_digest_other_repo_tag_accepted(tmp_path):
+    """r21 L3 (K1d): the same base digest under ANOTHER repo name or tag is
+    the SAME base -- accepted (rc 0, custom runs). A different digest under
+    the same repo:tag is a DIFFERENT base -- refused. This is the behavioural
+    test the review needed (the string-comparison mutant must be RED)."""
+    # same digest, different repo and tag: accepted
+    other_repo_tag = STOCK.split("@")[0].replace(
+        "vllm/vllm-openai", "my-registry/vllm-copy").replace("nightly", "mirror")
+    same_digest = "@" + STOCK.split("@")[1]
+    patch_dir = _patches(tmp_path)
+    r, calls, _before, _after = _run_start_all(
+        tmp_path, patch_dir, f'IMAGE="{other_repo_tag}{same_digest}"\n')
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, (
+        f"the same base digest under another repo:tag must be ACCEPTED "
+        f"(digest comparison, not string):\n{out[-1500:]}")
+    assert f"RECIPE_SAW_IMAGE={CUSTOM}" in out, (
+        f"the custom image must still run:\n{out[-1500:]}")
+    # a DIFFERENT digest under the same repo:tag -> refused
+    bad_digest = other_repo_tag + "@" + STOCK_OTHER.split("@")[1]
+    r2, _calls2, before2, after2 = _run_start_all(
+        tmp_path, patch_dir, f'IMAGE="{bad_digest}"\n')
+    out2 = r2.stdout + r2.stderr
+    assert r2.returncode != 0, (
+        f"a different base digest must be refused even under the same "
+        f"repo:tag:\n{out2[-1500:]}")
+    assert before2 == after2, "live/image must not change on a refusal"
+
+
+def test_b2_mutation_string_base_compare_is_red(tmp_path):
+    """r21 L3 (K1d) mutation: check_image_identity compares the base by FULL
+    STRING again -> the same-digest-other-repo case is REFUSED on the mutant
+    (that is the defect -- test_b2 must be RED against it). Honest mutation:
+    a COPY of the module with the digest comparison reverted to string
+    equality, run through the same docker stub."""
+    import importlib.util as _ilu
+    real_src = (ROOT / "implementation" / "kvpersist" /
+                "check_image_identity.py").read_text()
+    digest_block = ('        if _lbl_digest and _exp_digest:\n'
+                    '            base_match = _lbl_digest == _exp_digest\n'
+                    '        else:\n'
+                    '            base_match = _lbl_base == expect_base\n')
+    assert digest_block in real_src, "digest comparison marker not found"
+    mutant_src = real_src.replace(
+        digest_block,
+        '        base_match = _lbl_base == expect_base\n', 1)
+    assert mutant_src != real_src
+    mutant_py = tmp_path / "check_image_identity_mutant.py"
+    mutant_py.write_text(mutant_src)
+    spec = _ilu.spec_from_file_location("cii_mutant", mutant_py)
+    mutant_mod = _ilu.module_from_spec(spec)
+    import sys as _sys
+    _sys.modules[spec.name] = mutant_mod
+    spec.loader.exec_module(mutant_mod)
+    # the same base digest under another repo:tag -- the mutant compares the
+    # FULL strings and must report a mismatch (that is the defect)
+    other_repo_tag = STOCK.split("@")[0].replace(
+        "vllm/vllm-openai", "my-registry/vllm-copy").replace("nightly", "mirror")
+    same_digest = "@" + STOCK.split("@")[1]
+    patch_dir = _patches(tmp_path)
+    from pathlib import Path as _P
+    ok, msgs, _wv = mutant_mod.verify_custom_image(
+        CUSTOM, _P(patch_dir), expect_base=other_repo_tag + same_digest)
+    assert not ok, (
+        "the string-comparison mutant must REFUSE the same digest under "
+        "another repo:tag (proves test_b2 is meaningful)")
+
+# ---------------------------------------------------------------------------
 # (c) explicit sha256:<other custom> override wins
 # ---------------------------------------------------------------------------
 def test_c_explicit_sha256_override_wins(tmp_path):

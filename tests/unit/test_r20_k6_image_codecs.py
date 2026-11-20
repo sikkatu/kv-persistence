@@ -379,23 +379,33 @@ def test_mutation_markers_cut_from_verify_output(tmp_path):
         f"the refusal must name the missing marker:\n{out[-800:]}")
 
 
-def test_smoke_runs_for_both_codecs_and_markers_gated():
-    """(K6.3) build-image.sh must run the server smoke for zstd AND none with
-    the SHARED command source, and gate on the strict smoke markers."""
-    bi = SCRIPT.read_text()
-    assert "_smoke_cache_server" in bi, "build-image.sh must run the smoke script"
-    assert "_kvp_server_argv" in (ROOT / "scripts" / "env.sh").read_text(), \
-        "the server argv must live in env.sh (one source)"
-    assert "_kvp_server_argv" in (ROOT / "scripts" / "start-cache.sh").read_text(), \
-        "start-cache.sh must use the shared server argv"
-    assert "_kvp_server_argv" in (ROOT / "scripts" / "_smoke_cache_server.sh").read_text(), \
-        "the smoke must use the shared server argv"
-    for codec in ("zstd", "none"):
-        assert f"KVP_SMOKE_{codec.upper()}_READY=OK" in bi or \
-            'KVP_SMOKE_${_uc}_READY=OK' in bi, (
-            f"the gate must require the READY marker for {codec}")
-    assert "KVP_SMOKE_${_uc}_READY=OK" in bi and "KVP_SMOKE_${_uc}_EXIT=0" in bi, (
-        "build-image.sh must gate on the strict smoke markers")
+def test_smoke_runs_for_both_codecs_and_markers_gated(tmp_path):
+    """(K6.3, r21 L3 K6c behavioural) build-image.sh must run the server
+    smoke for zstd AND none. If the smoke prints markers for only ONE codec,
+    the build must REFUSE and live/image must NOT be written (a skipped
+    codec's smoke is a hole)."""
+    for only in ("zstd-only", "none-only"):
+        sub = tmp_path / only
+        sub.mkdir(exist_ok=True)
+        patch_dir, build_dir, out_dir, whl = _fixture(sub)
+        # the stub prints smoke markers for ONE codec only -- the other
+        # codec's smoke is a hole (K6c: the "none" loop skipped)
+        if only == "zstd-only":
+            smoke_out = "KVP_SMOKE_ZSTD_READY=OK\nKVP_SMOKE_ZSTD_EXIT=0"
+        else:
+            smoke_out = "KVP_SMOKE_NONE_READY=OK\nKVP_SMOKE_NONE_EXIT=0"
+        r, store = _run_image(sub, patch_dir, build_dir, out_dir,
+                              smoke_extra=smoke_out)
+        out = r.stdout + r.stderr
+        assert r.returncode != 0, (
+            f"the build must refuse when the smoke prints markers for only "
+            f"one codec ({only}):\n{out[-800:]}")
+        assert "KVP_SMOKE" in out and "missing" in out, (
+            f"the refusal must name the missing smoke marker:\n{out[-800:]}")
+        live_image = out_dir / "live" / "image"
+        assert not live_image.exists(), (
+            f"live/image must NOT be written when a codec smoke is missing "
+            f"({only})")
 
 
 def test_mutation_smoke_markers_cut_is_red(tmp_path):
