@@ -454,6 +454,7 @@ _kvp_seed_env_file(){
       _kvp_val="${_kvp_val#"${_kvp_val%%[![:space:]]*}"}"  # leading whitespace
       _kvp_val="${_kvp_val%"${_kvp_val##*[![:space:]]}"}"  # trailing whitespace
       _kvp_val="${_kvp_val//\"/}"                       # surrounding double quotes
+      _kvp_val="${_kvp_val//\'/}"                       # r20 K1: single quotes too (all tp4.env forms parse the same)
       case "$_kvp_val" in
         *'$HOME'*|*'${HOME}'*)
           _kvp_val="${_kvp_val//\$HOME/$HOME}"
@@ -711,8 +712,8 @@ for m in msgs:
 # retrieve/abort race. Every launcher that starts a model worker or the MP
 # server must verify the image identity BEFORE any model load.
 # ---------------------------------------------------------------------------
-_kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root>
-  local img="$1" root="$2" rc=0
+_kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root> [expected-base]
+  local img="$1" root="$2" exp_base="${3:-}" rc=0
   [ -n "$img" ] || { echo "ERROR(_kvp_require_custom_image): no IMAGE given" >&2; return 4; }
   [ -n "$root" ] || { echo "ERROR(_kvp_require_custom_image): no repo root given" >&2; return 4; }
   # r4 P0-3: deep verification runs BY DEFAULT (LABELs alone are forgeable).
@@ -720,7 +721,102 @@ _kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root
   # production (same category as KVP_SKIP_IMAGE_CHECK).
   local _verify_args=()
   [ "${KVP_VERIFY_SHALLOW:-0}" = "1" ] || _verify_args+=(--deep)
+  [ -n "$exp_base" ] && _verify_args+=(--expected-base "$exp_base")
   PYTHONPATH="$root/implementation${PYTHONPATH:+:$PYTHONPATH}" \
     python3 -m kvpersist.check_image_identity "$img" "$root/vendor/patches/lmcache" "${_verify_args[@]}" || rc=$?
   return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# r20 K1: ONE fail-fast resolution of the RUNTIME image. Two images exist in
+# the chain: the BASE pin (stock vLLM, `vendor/pinned-base-image.env`, the
+# recipe's `IMAGE=`) and the CUSTOM derivative (`live/image`, built from the
+# base by build-image.sh). The launch ALWAYS runs the custom one; a stock
+# IMAGE on the input is not a user error -- it is the base pin and must match
+# the `org.kvp.lmc-base` label of the image recorded in live/image.
+#
+#   _kvp_resolve_runtime_image <repo-root> [<image-was-set-in-env:0|1>]
+#
+# No side effects: live/image is NEVER written here. On success the resolved
+# custom image is exported as IMAGE. The optional second argument only
+# affects the NOTE wording (start-all.sh remembers whether IMAGE was set in
+# the environment BEFORE seeding tp4.env).
+#   die (return 1) on an unresolvable / mismatched pair, with the fix text.
+# ---------------------------------------------------------------------------
+_kvp_resolve_runtime_image() {
+  local root="$1" img_from_env="${2:-0}"
+  [ -n "$root" ] || { echo "ERROR(_kvp_resolve_runtime_image): no repo root given" >&2; return 4; }
+  [ -d "$root" ] || { echo "ERROR(_kvp_resolve_runtime_image): repo root not found: $root" >&2; return 4; }
+  # r20 K1: live/ defaults to the GIVEN repo root (the recipe launchers have
+  # no $ROOT of their own); KVP_LIVE_DIR overrides (start-all.sh exports the
+  # canonical one).
+  local _live="${KVP_LIVE_DIR:-$root/live}"
+  local _live_image=""
+  [ -s "$_live/image" ] && _live_image="$(tr -d '[:space:]' < "$_live/image")"
+  local _in="${IMAGE:-}"
+
+  # -- empty input: use live/image, or explain the first-run build
+  if [ -z "$_in" ]; then
+    if [ -n "$_live_image" ]; then
+      IMAGE="$_live_image"
+      export IMAGE
+      echo "NOTE: IMAGE not set -- using the custom image recorded in $_live/image: $IMAGE"
+      return 0
+    fi
+    echo "ERROR: no IMAGE set and no $_live/image -- first run:" >&2
+    echo "  bash scripts/build-lmcache.sh" >&2
+    echo "  bash scripts/build-image.sh" >&2
+    return 1
+  fi
+
+  # -- explicit sha256:<64hex> override: it WINS (README contract "explicit
+  # IMAGE wins"); the deep check below decides whether it is our custom build
+  case "$_in" in
+    sha256:*)
+      if [ -n "$_live_image" ] && [ "$_in" != "$_live_image" ]; then
+        echo "NOTE: IMAGE=$_in overrides live/image ($_live_image)"
+      fi
+      export IMAGE="$_in"
+      _kvp_require_custom_image "$IMAGE" "$root" \
+        || { echo "ERROR: IMAGE '$IMAGE' is NOT the custom LMCache derivative." >&2
+             echo "  Fix: IMAGE=\"\$(cat $_live/image)\" (or unset IMAGE) and rerun." >&2
+             return 1; }
+      return 0
+      ;;
+  esac
+
+  # -- input equals live/image: nothing to decide, ordinary deep check
+  if [ -n "$_live_image" ] && [ "$_in" = "$_live_image" ]; then
+    export IMAGE="$_in"
+    _kvp_require_custom_image "$IMAGE" "$root" \
+      || { echo "ERROR: IMAGE '$IMAGE' is NOT the custom LMCache derivative." >&2
+           echo "  Fix: rebuild with bash scripts/build-lmcache.sh && bash scripts/build-image.sh" >&2
+           return 1; }
+    return 0
+  fi
+
+  # -- repo:tag@sha256:... (stock, base pin): must match the custom image's
+  # base label; the custom image is the one that runs
+  if [ -n "$_live_image" ]; then
+    if _kvp_require_custom_image "$_live_image" "$root" "$_in"; then
+      local _src="tp4.env or the environment"
+      [ "$img_from_env" = "1" ] && _src="the environment"
+      echo "NOTE: IMAGE=$_in ($_src) -- base pin; launching custom $_live_image"
+      IMAGE="$_live_image"
+      export IMAGE
+      return 0
+    fi
+    echo "ERROR: base pin mismatch: IMAGE=$_in does not match the base of the custom image in $_live/image." >&2
+    echo "  The custom image was built FROM a different base (see the digest pair above)." >&2
+    echo "  Fix: rebuild the custom image from the pinned base (bash scripts/build-lmcache.sh && bash scripts/build-image.sh)," >&2
+    echo "  or correct the base pin in tp4.env / the environment." >&2
+    return 1
+  fi
+
+  # -- stock input and no live/image at all: nothing custom to launch
+  echo "ERROR: IMAGE=$_in is a stock/base image and $_live/image does not exist." >&2
+  echo "  The launch chain requires the custom LMCache derivative. First run:" >&2
+  echo "  bash scripts/build-lmcache.sh" >&2
+  echo "  bash scripts/build-image.sh" >&2
+  return 1
 }

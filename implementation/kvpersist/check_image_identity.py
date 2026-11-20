@@ -35,6 +35,17 @@ LABEL_5972 = "org.kvp.lmc-patch-5972"
 REQUIRED_LABELS = (LABEL_BASE, LABEL_4136, LABEL_5972)
 
 ID_RE = re.compile(r"^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$")
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}$")
+
+
+def spec_digest(spec: str) -> str | None:
+    """The digest part of an image spec (r20 K1): `repo:tag@sha256:<64hex>`
+    and bare `sha256:<64hex>` both yield `sha256:<64hex>`. None when the spec
+    carries no digest. The SAME image under another tag / repo name has the
+    same digest -- base-pin comparison must follow the digest, not the full
+    string (a retagged base must not be a false refusal)."""
+    m = DIGEST_RE.search((spec or "").strip())
+    return m.group(0) if m else None
 
 # r3 P1-3: deep verification runs normal sub-processes inside the image read
 # only (no GPU, no model load) -- reading the baked identity file and probing
@@ -184,11 +195,25 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
             )
             ok = False
 
-    if expect_base and labels.get(LABEL_BASE) and labels[LABEL_BASE] != expect_base:
-        msgs.append(
-            f"image base label {labels[LABEL_BASE]} != expected base {expect_base}"
-        )
-        ok = False
+    if expect_base and labels.get(LABEL_BASE):
+        # r20 K1: compare the base pin BY DIGEST -- the same base image under
+        # another tag or repo name is the same base (no false refusal). Full
+        # string equality stays for specs without a digest (old behaviour for
+        # other callers preserved).
+        _lbl_base = labels[LABEL_BASE]
+        _lbl_digest = spec_digest(_lbl_base)
+        _exp_digest = spec_digest(expect_base)
+        if _lbl_digest and _exp_digest:
+            base_match = _lbl_digest == _exp_digest
+        else:
+            base_match = _lbl_base == expect_base
+        if not base_match:
+            msgs.append(
+                f"image base label {_lbl_base} != expected base {expect_base} "
+                f"(base digest {_lbl_digest or '<none>'} != expected digest "
+                f"{_exp_digest or '<none>'})"
+            )
+            ok = False
 
     if not ok:
         return ok, msgs

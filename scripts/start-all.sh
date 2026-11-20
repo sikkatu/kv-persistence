@@ -21,11 +21,27 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # identity.env (env values win over files) BEFORE any decision, so the PID probe
 # below uses the EFFECTIVE KVP_CACHE_ROOT, not the built-in default.
 . "$HERE/env.sh"
+# r20 K1: remember whether IMAGE came from the ENVIRONMENT before tp4.env is
+# seeded (the seed exports IMAGE=stock from tp4.env as the base pin -- the
+# NOTE wording distinguishes the two sources).
+_kvp_image_from_env=0
+[ -n "${IMAGE:-}" ] && _kvp_image_from_env=1
 # tp4.env seeds FIRST (its values beat the config files), then the config layer.
 for _tp4 in "${RECIPE_DIR:-}/tp4.env" "$HOME/sikkatu-recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env" "$HOME/recipes/recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/tp4.env"; do
   [ -f "$_tp4" ] && { _kvp_seed_env_file "$_tp4"; break; }
 done
 _kvp_load_env "$ROOT"
+
+# r20 K1: ONE fail-fast resolution of the RUNTIME image BEFORE anything is
+# started (step 1/3 observability must NOT come up before the launch is
+# proven -- a refusal after 6 containers are up is a side effect for
+# nothing). The stock IMAGE= from tp4.env is the BASE pin: it must match the
+# base of the custom image recorded in live/image; the launch always runs
+# the CUSTOM one. Refusal here exits before the first docker call.
+_kvp_resolve_runtime_image "$ROOT" "$_kvp_image_from_env" || {
+  echo "ERROR: runtime image resolution failed -- refusing to start (nothing was started)" >&2
+  exit 1
+}
 
 # ONE codec decision (review round 58): resolve the effective L2 codec ONCE
 # here and pass the SAME value to both children. start-cache.sh and
@@ -287,18 +303,10 @@ case "$KVP_ENGINE" in
     export KV_PERSIST_PORT="${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}"
     # Round 77 (review): resolve the pinned image the same way the kv launcher
     # does (live/image) -- ipc-test.sh needs it.
-    _kvp_live="${KVP_LIVE_DIR:-$ROOT/live}"
-    if [ -z "${IMAGE:-}" ] && [ -s "$_kvp_live/image" ]; then
-      IMAGE="$(tr -d '[:space:]' < "$_kvp_live/image")"
-    fi
-    IMAGE="${IMAGE:-}"
-    # r6-7 B-2: without a custom image (explicit or recorded) there is nothing
-    # to launch -- say exactly what to run first.
-    if [ -z "$IMAGE" ]; then
-      die "no IMAGE set and no $_kvp_live/image -- first run:
-  bash scripts/build-lmcache.sh
-  bash scripts/build-image.sh"
-    fi
+    # r20 K1: the runtime image is ALREADY resolved by _kvp_resolve_runtime_image
+    # (fail-fast, before step 1/3) -- steps 2 and 3 must NOT decide the image
+    # question on their own. Only assert the resolution is present here.
+    [ -n "${IMAGE:-}" ] || die "IMAGE is empty after _kvp_resolve_runtime_image -- internal error (r20 K1)"
 
     # Round 77 (review): the SAME pre-flights the kv launcher runs before
     # docker run -- lmcache RPC ping + CUDA IPC boundary test. Without them the

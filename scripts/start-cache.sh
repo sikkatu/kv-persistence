@@ -29,31 +29,35 @@ case "$KVP_LAUNCH_MODE" in
   host)
     command -v lmcache >/dev/null || die "lmcache CLI missing — see docs/deployment.md (or set KVP_LAUNCH_MODE=docker)" ;;
   docker)
-    DOCKER_IMAGE="${IMAGE:-${DOCKER_IMAGE:-}}"
-    # r6-7 B-2: no manual IMAGE needed -- the custom image id recorded by
-    # build-image.sh (live/image) is the default runtime image.
-    if [ -z "$DOCKER_IMAGE" ]; then
-      _kvp_live="${KVP_LIVE_DIR:-$ROOT/live}"
-      if [ -s "$_kvp_live/image" ]; then
-        DOCKER_IMAGE="$(tr -d '[:space:]' < "$_kvp_live/image")"
-        echo "IMAGE not set -- using the custom image recorded in $_kvp_live/image: $DOCKER_IMAGE"
-      else
-        die "no IMAGE set and no $_kvp_live/image -- first run:
-  bash scripts/build-lmcache.sh
-  bash scripts/build-image.sh
-(or export IMAGE=<custom image id from 'docker inspect --format {{.Id}}' kvp-lmcache:latest>)"
-      fi
+    # r20 K1: ONE resolution of the runtime image, the same function the
+    # launch chain uses (start-all.sh / the recipe launchers) -- a standalone
+    # scripts/start-cache.sh behaves exactly like the chain. Legacy note: an
+    # explicit DOCKER_IMAGE with an EMPTY IMAGE keeps the old behaviour
+    # (DOCKER_IMAGE is used as-is).
+    if [ -z "${IMAGE:-}" ] && [ -n "${DOCKER_IMAGE:-}" ]; then
+      IMAGE="$DOCKER_IMAGE"
     fi
+    _kvp_resolve_runtime_image "$ROOT" "${_kvp_image_from_env:-0}" \
+      || die "runtime image resolution failed (see above).
+Fix: comment out IMAGE= in tp4.env, or unset IMAGE in the environment, or run
+  IMAGE=\"\$(cat ${KVP_LIVE_DIR:-$ROOT/live}/image)\" bash scripts/start-cache.sh"
+    DOCKER_IMAGE="$IMAGE"
     [ -n "$DOCKER_IMAGE" ] || die "KVP_LAUNCH_MODE=docker requires IMAGE (pinned vLLM digest) or DOCKER_IMAGE"
     command -v docker >/dev/null || die "docker required for KVP_LAUNCH_MODE=docker"
     # r2 P0-1: the shared MP cache server MUST run the custom LMCache build.
     # A stock image would serve upstream LMCache (no #4136/#5972) while workers
     # run the fixed build -> protocol-level inconsistencies and corrupted cache.
+    # r20 K1: _kvp_resolve_runtime_image above already ran the deep custom
+    # check (and resolved the stock base pin to the custom image); this is the
+    # final guard for the legacy direct path.
     _kvp_require_custom_image "$DOCKER_IMAGE" "$ROOT" \
       || die "IMAGE '$DOCKER_IMAGE' is NOT the custom LMCache derivative.
-Build it first (bash scripts/build-lmcache.sh && bash scripts/build-image.sh) and
-point IMAGE at the result (docker inspect --format '{{.Id}}' kvp-lmcache:latest),
-or run: bash scripts/verify-engine-identity.sh for details." ;;
+Where it came from: IMAGE=${IMAGE:-unset} (tp4.env or the environment), DOCKER_IMAGE=${DOCKER_IMAGE:-unset}.
+Fix: comment out IMAGE= in tp4.env (or unset IMAGE), or point IMAGE at the custom
+image recorded in ${KVP_LIVE_DIR:-$ROOT/live}/image:
+  IMAGE=\"\$(cat ${KVP_LIVE_DIR:-$ROOT/live}/image)\" bash scripts/start-cache.sh
+Build it first if needed: bash scripts/build-lmcache.sh && bash scripts/build-image.sh.
+Details: bash scripts/verify-engine-identity.sh" ;;
   *) die "KVP_LAUNCH_MODE must be 'host' or 'docker', got '$KVP_LAUNCH_MODE'" ;;
 esac
 # Optional HTTP / serde flags: keep only those THIS build's --help understands,
