@@ -604,7 +604,15 @@ if bad:
         print("HINT (KV geometry): the identity pins do not match the served model.")
         print("  Rerun: bash scripts/setup-identity.sh \"$MODEL_DIR\"")
         print("  (it now fills KVP_NUM_KV_HEADS / KVP_HEAD_DIM from config.json).")
-    print("Fix configs/*/identity.env(.local) (scripts/setup-identity.sh), rerun.")
+    if "lmcache_build" in _bad_labels:
+        # r21 L4: this field comes from the RUNNING image, not from
+        # identity.env -- the identity-pin fixer does NOT apply here.
+        print("HINT (lmcache_build): the LMCache build is unknown or does not")
+        print("  match the running engine's image. Launch via scripts/start-all.sh")
+        print("  (it resolves the image and exports the build), or run:")
+        print("  bash scripts/build-image.sh")
+    else:
+        print("Fix configs/*/identity.env(.local) (scripts/setup-identity.sh), rerun.")
     sys.exit(4)
 if inconc:
     print("\nINCONCLUSIVE -- values could not be verified; cache reuse is REFUSED by policy:")

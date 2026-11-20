@@ -129,14 +129,17 @@ class CacheIdentity:
             raise IdentityError("connector is empty")
         if not self.connector_version:
             raise IdentityError("connector_version is empty")
-        # r20 K7: the LMCache build must be KNOWN. Empty or an "unknown"
-        # placeholder cannot tell one build from another -> uncertain.
+        # r20 K7 / r21 L4: the LMCache build must be KNOWN. Empty or an "unknown"
+        # placeholder cannot tell one build from another -> uncertain. The
+        # message names the REAL cause and the REAL fix: run via the resolver
+        # (start-all.sh exports KVP_LMCACHE_BUILD) or rebuild the image.
         if not (self.lmcache_build or "").strip() or \
                 (self.lmcache_build or "").strip().lower() == "unknown":
             raise IdentityError(
-                "lmcache_build is empty/unknown (the LMCache build identity "
-                "could not be read from /etc/kvp-lmcache-identity.json -- "
-                "uncertain -> cache miss)")
+                "the LMCache build is unknown (lmcache_build is empty): the "
+                "build identity could not be read. Launch via "
+                "scripts/start-all.sh (it resolves the image and exports the "
+                "build), or run: bash scripts/build-image.sh")
         if not _SHA64.match(self.chat_template_digest or ""):
             raise IdentityError("chat_template_digest must be 64 hex chars (sha256)")
         # Advanced fields: when non-empty, digest-like fields must be 64 hex.
