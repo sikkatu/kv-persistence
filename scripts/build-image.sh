@@ -248,6 +248,33 @@ KVP_GPU_COUNT ('${_gpu_count:-none}') and be > 0 (rc=$VERIFY_RC):
 $(tail -n 20 "$TMPD/verify.txt" 2>/dev/null)"
 
 IMAGE_ID="$(docker inspect --format='{{.Id}}' "$OUT_IMAGE" | sed 's/sha256://')"
+# r20 K6.3: the SERVER SMOKE. The import markers above prove the modules load;
+# this proves the real cache server STARTS in the image (codecs, nixl, otel,
+# the rendered L2 adapter) with the SAME command source as the production
+# launch (env.sh _kvp_server_argv + _kvp_render_l2_adapter, used by
+# start-cache.sh). Two codecs: zstd (the default) and none (byte-exact raw).
+# Wait for the RPC ping, then SIGTERM and demand a clean exit. Without this a
+# broken codec/adapter only surfaced at the operator's first start-cache.
+_note_smoke() { note "server smoke ($1): $2"; }
+for _codec in zstd none; do
+  _uc="$(printf '%s' "$_codec" | tr '[:lower:]' '[:upper:]')"
+  _note_smoke "$_codec" "starting the cache server in the image ..."
+  _smoke_out="$TMPD/smoke-${_codec}.txt"
+  _smoke_rc=0
+  docker run --rm --gpus all --ipc host \
+    -v "$ROOT":/kvp-repo:ro -v "$ROOT/implementation":/kvp-impl:ro \
+    --entrypoint bash "$OUT_IMAGE" /kvp-repo/scripts/_smoke_cache_server.sh \
+      "$_codec" "/tmp/kvp-smoke-$_codec" 5555 \
+    > "$_smoke_out" 2>&1 || _smoke_rc=$?
+  [ "$_smoke_rc" = 0 ] || die "server smoke FAILED for codec '$_codec' (rc=$_smoke_rc):
+$(tail -n 30 "$_smoke_out" 2>/dev/null)"
+  for _m in "KVP_SMOKE_${_uc}_READY=OK" "KVP_SMOKE_${_uc}_EXIT=0"; do
+    grep -q "^${_m}$" "$_smoke_out" 2>/dev/null \
+      || die "server smoke marker '${_m}' missing in the smoke output (codec '$_codec'):
+$(tail -n 30 "$_smoke_out" 2>/dev/null)"
+  done
+  _note_smoke "$_codec" "READY + clean exit"
+done
 
 # r19 H2: image-identity.env must be a REAL env-file. The raw verify.txt
 # carries log noise and rows like `KVP_GPU_SMOKE[0] dev=...` (invalid shell

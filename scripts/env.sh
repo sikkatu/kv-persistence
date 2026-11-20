@@ -227,6 +227,59 @@ _kvp_python(){
   done
   command -v python3 2>/dev/null || echo python3
 }
+# ---------------------------------------------------------------------------
+# r20 K6.3: ONE source for the cache-server launch command. Both
+# scripts/start-cache.sh (production) and the image-build server smoke
+# (scripts/build-image.sh) must run the server with the SAME arguments and
+# the SAME rendered L2 adapter -- otherwise the smoke proves nothing about
+# the real launch. Never duplicate these arg lists.
+# ---------------------------------------------------------------------------
+_kvp_render_l2_adapter() { # _kvp_render_l2_adapter <out.json> <repo-root> <cache-root> <budget-gb> <serde> [model-config]
+  local _out="$1" _repo="$2" _root="$3" _budget="$4" _serde="$5" _mc="${6:-${KVP_MODEL_CONFIG:-mimo-v2.6-pro}}"
+  local _serde_json="" _tpl
+  case "$_serde" in
+    none|raw|"") _serde_json="" ;;
+    zstd|lz4)
+      _serde_json="\"serde\": {\"type\": \"kvp-$_serde\", \"level\": \"${KVP_L2_COMPRESS_LEVEL:-3}\", \"align_bytes\": \"4096\"}," ;;
+    *)
+      echo "ERROR(_kvp_render_l2_adapter): codec '$_serde' is not lossless-supported (none / zstd / lz4)" >&2
+      return 1 ;;
+  esac
+  _tpl="$_repo/configs/${_mc}/l2-adapter.json.in"
+  [ -f "$_tpl" ] || { echo "ERROR(_kvp_render_l2_adapter): template not found: $_tpl" >&2; return 1; }
+  sed -e "s|__KVP_CACHE_ROOT__|$_root|" \
+      -e "s|__KVP_CACHE_BUDGET_GB__|$_budget|" \
+      -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|${LMCACHE_EVICTION_TRIGGER_WATERMARK:-${KVP_EVICT_TRIGGER_WATERMARK:-0.9}}|" \
+      -e "s|__KVP_EVICT_RATIO__|${LMCACHE_EVICTION_RATIO:-${KVP_EVICT_RATIO:-0.1}}|" \
+      -e "s|__KVP_L2_SERDE_JSON__|$_serde_json|" \
+      "$_tpl" \
+    | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)' \
+    > "$_out"
+}
+_kvp_server_argv() { # _kvp_server_argv <host> <port> <l1-gb> <chunk-gb> <adapter-json> [http-host]
+  # Prints the `kvpersist.launch server ...` arguments, ONE per line (the
+  # --l2-adapter JSON carries spaces -- never word-split it in the caller).
+  # docker mode binds 0.0.0.0 INSIDE the container (the -p mapping is the
+  # host-side gate); host mode binds the loopback -- pass the right host.
+  local _host="$1" _port="$2" _l1="$3" _chunk="$4" _adapter="$5" _http_host="${6:-}"
+  local _wm="${LMCACHE_EVICTION_TRIGGER_WATERMARK:-${KVP_EVICT_TRIGGER_WATERMARK:-0.9}}"
+  local _ratio="${LMCACHE_EVICTION_RATIO:-${KVP_EVICT_RATIO:-0.1}}"
+  printf '%s\n' \
+    "server" \
+    "--host" "$_host" \
+    "--port" "$_port" \
+    "--l1-size-gb" "$_l1" \
+    "--eviction-policy" "${LMCACHE_EVICTION_POLICY:-lru}" \
+    "--eviction-trigger-watermark" "$_wm" \
+    "--eviction-ratio" "$_ratio" \
+    "--chunk-size" "$_chunk" \
+    "--l2-adapter" "$(cat "$_adapter")"
+  # Optional flags: keep only those THIS build's --help understands.
+  [ -n "$_http_host" ] && printf '%s\n' "--http-host" "$_http_host"
+  [ -n "${LMCACHE_HTTP_PORT:-}" ] && printf '%s\n' "--http-port" "$LMCACHE_HTTP_PORT"
+  [ -n "${LMCACHE_OTLP_ENDPOINT:-}" ] && printf '%s\n' "--otlp-endpoint" "$LMCACHE_OTLP_ENDPOINT" "--enable-tracing"
+  return 0
+}
 
 # Round 51 (user): ONE MODEL_DIR resolver shared by start-all.sh
 # and verify-engine-identity.sh. A standalone gate in a fresh terminal used

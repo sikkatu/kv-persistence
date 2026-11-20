@@ -103,7 +103,14 @@ def _run_image(tmp_path: pathlib.Path, patch_dir, build_dir, out_dir,
     stub.write_text(f"""#!/usr/bin/env bash
 cmd="${{1:-}}"; shift || true
 case "$cmd" in
-  run) cat > /dev/null; cat "{vbody}"; exit 0 ;;
+  run)
+    case "$*" in
+      *_smoke_cache_server*)
+        echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0"
+        echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0"
+        exit 0 ;;
+    esac
+    cat > /dev/null; cat "{vbody}"; exit 0 ;;
   build) for a in "$@"; do case "$a" in -t) shift ;; *) CTX="$a" ;; esac; done
           mkdir -p "{store}"
           [ -f "$CTX/Dockerfile" ] && cp "$CTX/Dockerfile" "{store}/Dockerfile"

@@ -28,6 +28,12 @@ done
 LOG_DIR="${KVP_TEST_DOCKER_LOG:-/tmp}"
 case "$cmd" in
   run)
+    case "$*" in
+      *_smoke_cache_server*)
+        echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0"
+        echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0"
+        exit 0 ;;
+    esac
     # real-docker behaviour: stdin attached only with -i; a mounted FILE in
     # the argv (A-1 delivery) is what the container actually executes. The
     # stub resolves the container mount point back to the host dir via

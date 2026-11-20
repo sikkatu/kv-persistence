@@ -25,7 +25,14 @@ cmd="${1:-}"; shift || true
 LOG_DIR="${KVP_TEST_DOCKER_LOG:-/tmp}"
 echo "$cmd $*" >> "$LOG_DIR/args.log"
 case "$cmd" in
-  run) cat > /dev/null
+  run)
+    case "$*" in
+      *_smoke_cache_server*)
+        echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0"
+        echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0"
+        exit 0 ;;
+    esac
+    cat > /dev/null
        echo "KVP_STUB_STDIN_BYTES=0"
        echo "KVP_PY_IMPORTS=OK
 KVP_CUDA_OPS_IMPORT=OK

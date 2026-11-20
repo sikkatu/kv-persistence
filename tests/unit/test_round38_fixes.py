@@ -48,17 +48,27 @@ def test_http_host_loopback_enforced():
 
 def test_start_cache_single_watermark_source():
     """Round 38: the rendered JSON, the summary line and the server flag must
-    share ONE resolved watermark variable (was: JSON 0.9 vs server 0.8)."""
+    share ONE resolved watermark variable (was: JSON 0.9 vs server 0.8).
+    r20 K6.3: the render AND the server arg list moved to env.sh
+    (_kvp_render_l2_adapter / _kvp_server_argv) so the image-build smoke runs
+    the exact same launch -- the single-source contract is checked in BOTH."""
     src = (ROOT / "scripts" / "start-cache.sh").read_text()
+    env = (ROOT / "scripts" / "env.sh").read_text()
     assert "EFFECTIVE_WM=" in src, "start-cache.sh needs a single watermark var"
-    # no bare ${KVP_EVICT_TRIGGER_WATERMARK:-0.9} in the sed line any more
-    assert re.search(r'__KVP_EVICT_TRIGGER_WATERMARK__\|\$EFFECTIVE_WM\|', src), (
-        "the sed must use the resolved EFFECTIVE_WM"
+    # the sed in env.sh must use the resolved watermark (never a bare default)
+    assert re.search(r'__KVP_EVICT_TRIGGER_WATERMARK__\|\$\{LMCACHE_EVICTION_TRIGGER_WATERMARK', env), (
+        "env.sh's _kvp_render_l2_adapter must use the resolved watermark"
     )
-    # the server flag and summary must use the same variable (4 refs: def,
-    # sed, echo, 2 flags)
-    assert src.count("EFFECTIVE_WM") >= 4, (
-        "sed, echo and both server flags must reference EFFECTIVE_WM"
+    # start-cache.sh must call the shared helpers (no local sed/arg duplication)
+    assert "_kvp_render_l2_adapter" in src, "start-cache.sh must use the shared render"
+    assert "_kvp_server_argv" in src, "start-cache.sh must use the shared server argv"
+    # start-cache.sh keeps the definition and the summary echo (the server flags
+    # now live in _kvp_server_argv -- one source, see the call-check above)
+    assert src.count("EFFECTIVE_WM") >= 2, (
+        "the definition and the summary must reference EFFECTIVE_WM"
+    )
+    assert re.search(r'soft-watermark \$EFFECTIVE_WM', src), (
+        "the summary line must print the resolved EFFECTIVE_WM"
     )
 
 

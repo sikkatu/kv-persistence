@@ -36,7 +36,14 @@ def _run_build_image(tmp_path: pathlib.Path, verify_body: str, live_dir=None):
     (bin_dir / "docker").write_text(f'''#!/usr/bin/env bash
 cmd="${{1:-}}"; shift || true
 case "$cmd" in
-  run) cat > /dev/null; cat "{vbody}"; exit 0 ;;
+  run)
+    case "$*" in
+      *_smoke_cache_server*)
+        echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0"
+        echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0"
+        exit 0 ;;
+    esac
+    cat > /dev/null; cat "{vbody}"; exit 0 ;;
   inspect) echo "sha256:$(printf 'a%.0s' $(seq 64))"; exit 0 ;;
   build) exit 0 ;;
   *) exit 0 ;;
@@ -175,13 +182,21 @@ case "$cmd" in
   run)
     _entry=""
     _probe=""
+    _codec=""
     while [ "$#" -gt 0 ]; do case "$1" in
       --entrypoint) _entry="$2"; shift 2 ;;
       -c) _probe="$2"; shift 2 ;;
+      zstd|none) _codec="$1"; shift ;;
       *) shift ;;
     esac; done
     case "$_entry" in
       cat) echo '{ident}' ;;
+      bash)
+        [ -n "$_codec" ] || _codec=none
+        case "$_codec" in
+          zstd) echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0" ;;
+          *)    echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0" ;;
+        esac ;;
       python3)
         case "$_probe" in
           *importlib.metadata*) echo "0.5.8rc1.post48+kvp.60dce759ea93" ;;

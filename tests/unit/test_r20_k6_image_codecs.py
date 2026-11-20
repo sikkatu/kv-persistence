@@ -109,13 +109,22 @@ case "$cmd" in
   run)
     _entry=""
     _script=""
+    _codec=""
     while [ "$#" -gt 0 ]; do case "$1" in
       --entrypoint) _entry="$2"; shift 2 ;;
       *verify_image*) _script="$1"; shift ;;
+      zstd|none) _codec="$1"; shift ;;
       *) shift ;;
     esac; done
     case "$_entry" in
       cat) echo '{{"module":"kvp-custom-lmcache-identity","lmcache_source_commit":"07f1c6bb642f4772606a36eab730ae009ddce08f","pr4136_patch_sha256":"{"2" * 64}","pr5972_patch_sha256":"{"3" * 64}","wheel":"lmcache-0.5.8rc1.post48+kvp.60dce759ea93-cp312-cp312-linux_x86_64.whl","wheel_sha256":"{"4" * 64}","wheel_version":"0.5.8rc1.post48+kvp.60dce759ea93"}}' ;;
+      bash)
+        # r20 K6.3: the server smoke (bash _smoke_cache_server.sh <codec> ...)
+        [ -n "$_codec" ] || _codec=none
+        case "$_codec" in
+          zstd) echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0" ;;
+          *)    echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0" ;;
+        esac ;;
       python3)
         if [ -n "$_script" ]; then
           # the verify run: the markers the strict gate checks (r19 H2 noise

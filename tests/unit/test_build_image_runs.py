@@ -89,7 +89,22 @@ case "$cmd" in
     [ -f "$CTX/kvp-lmcache-identity.json" ] && cp "$CTX/kvp-lmcache-identity.json" "{dockerfile_store}/kvp-lmcache-identity.json"
     exit 0 ;;
   inspect) echo sha256:{"0" * 56}abcdef; exit 0 ;;
-  run) echo "KVP_LMC_VERSION=stub
+  run)
+    # r20 K6.3: two kinds of `docker run` now -- the verify probe (python3
+    # _verify_image.py, prints the import markers) and the SERVER SMOKE
+    # (bash _smoke_cache_server.sh, prints the smoke markers). The stub
+    # distinguishes them exactly like the real container would.
+    case "$*" in
+      *_smoke_cache_server*)
+        _codec=none
+        for a in "$@"; do case "$a" in zstd|none) _codec="$a" ;; esac; done
+        case "$_codec" in
+          zstd) echo "KVP_SMOKE_ZSTD_READY=OK"; echo "KVP_SMOKE_ZSTD_EXIT=0" ;;
+          *)    echo "KVP_SMOKE_NONE_READY=OK"; echo "KVP_SMOKE_NONE_EXIT=0" ;;
+        esac
+        exit 0 ;;
+    esac
+    echo "KVP_LMC_VERSION=stub
 KVP_PY_IMPORTS=OK
 KVP_CUDA_OPS_IMPORT=OK\nKVP_NATIVE_IMPORT=OK\nKVP_ZSTD_IMPORT=OK\nKVP_LZ4_IMPORT=OK
 KVP_IDENTITY_FILE=OK

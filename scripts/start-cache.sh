@@ -223,14 +223,11 @@ ADAPTER_JSON="$ROOT_PATH/l2-adapter.rendered.json"
 # the flag used the resolved LMCACHE_* value (JSON 0.9 vs server 0.8).
 EFFECTIVE_WM="${LMCACHE_EVICTION_TRIGGER_WATERMARK:-${KVP_EVICT_TRIGGER_WATERMARK:-0.9}}"
 EFFECTIVE_RATIO="${LMCACHE_EVICTION_RATIO:-${KVP_EVICT_RATIO:-0.1}}"
-sed -e "s|__KVP_CACHE_ROOT__|$ROOT_PATH|" \
-    -e "s|__KVP_CACHE_BUDGET_GB__|$BUDGET_GB|" \
-    -e "s|__KVP_EVICT_TRIGGER_WATERMARK__|$EFFECTIVE_WM|" \
-    -e "s|__KVP_EVICT_RATIO__|$EFFECTIVE_RATIO|" \
-    -e "s|__KVP_L2_SERDE_JSON__|$SERDE_JSON|" \
-    "$ROOT/configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in" \
-  | python3 -c 'import json,re,sys; s=sys.stdin.read(); s=re.sub(r"^\s*//.*$","",s,flags=re.M); json.loads(s); sys.stdout.write(s)' \
-  > "$ADAPTER_JSON" || die "L2 adapter JSON is invalid after render — check configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in"
+# r20 K6.3: the render AND the server arg list live in env.sh so the
+# image-build server smoke (build-image.sh) runs the exact same launch.
+_kvp_render_l2_adapter "$ADAPTER_JSON" "$ROOT" "$ROOT_PATH" "$BUDGET_GB" \
+  "$LMCACHE_L2_SERDE" "${KVP_MODEL_CONFIG:-mimo-v2.6-pro}" \
+  || die "L2 adapter JSON is invalid after render — check configs/${KVP_MODEL_CONFIG}/l2-adapter.json.in"
 echo "L2 adapter rendered: $ADAPTER_JSON"
 echo "  tier   : nixl_store_dynamic / POSIX  persist=${KVP_PERSIST_ENABLED:-true}"
 echo "  path   : $ROOT_PATH"
@@ -269,8 +266,11 @@ fi
 # json.loads(raw) on the value). Passing the file PATH fails with
 # "Invalid JSON for --l2-adapter #1", so the rendered file is passed inline;
 # the file itself is still written for inspection and for the tests.
-ADAPTER_JSON_ARGS="$(cat "$ADAPTER_JSON")"
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+  # r20 K6.3: the server arg list is built by _kvp_server_argv (env.sh) --
+  # the SAME source the image-build server smoke uses. docker binds 0.0.0.0
+  # inside the container (the 127.0.0.1 -p mapping is the host-side gate).
+  mapfile -t _srv < <(_kvp_server_argv 0.0.0.0 "$LMCACHE_PORT" "$LMCACHE_L1_SIZE_GB" "$LMCACHE_CHUNK_SIZE" "$ADAPTER_JSON" "${LMCACHE_HTTP_HOST:+0.0.0.0}")
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   # Review round 13 (docker mode fixes):
   #  * The server must bind 0.0.0.0 INSIDE the container: binding 127.0.0.1
@@ -291,35 +291,14 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     -e PYTHONPATH=/kvp-impl \
     -e "LMCACHE_LOG_LEVEL=${LMCACHE_LOG_LEVEL:-DEBUG}" \
     -e PYTHONFAULTHANDLER=1 \
-    "$DOCKER_IMAGE" python3 -m kvpersist.launch server \
-    --host 0.0.0.0 --port "$LMCACHE_PORT" \
-    --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
-    --eviction-policy "$LMCACHE_EVICTION_POLICY" \
-    --eviction-trigger-watermark "$EFFECTIVE_WM" \
-    --eviction-ratio "$EFFECTIVE_RATIO" \
-    --chunk-size "$LMCACHE_CHUNK_SIZE" \
-    --l2-adapter "$ADAPTER_JSON_ARGS" \
-    ${LMCACHE_HTTP_HOST:+--http-host 0.0.0.0} \
-    ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
-    ${LMCACHE_OTLP_ENDPOINT:+--otlp-endpoint "$LMCACHE_OTLP_ENDPOINT"} \
-    ${LMCACHE_OTLP_ENDPOINT:+--enable-tracing} \
+    "$DOCKER_IMAGE" python3 -m kvpersist.launch "${_srv[@]}" \
     >>"$LOG" 2>&1 &
 else
+  mapfile -t _srv < <(_kvp_server_argv "$LMCACHE_HOST" "$LMCACHE_PORT" "$LMCACHE_L1_SIZE_GB" "$LMCACHE_CHUNK_SIZE" "$ADAPTER_JSON" "${LMCACHE_HTTP_HOST:-}")
   # PYTHONFAULTHANDLER=1 (round 44): if a server thread hangs, SIGABRT dumps
   # every thread stack to the log -- a hang becomes identifiable by stack,
   # not by silence (the register_kv_caches timeout gave no clue).
-  PYTHONFAULTHANDLER=1 setsid nohup "${LAUNCH[@]}" server \
-    --host "$LMCACHE_HOST" --port "$LMCACHE_PORT" \
-    --l1-size-gb "$LMCACHE_L1_SIZE_GB" \
-    --eviction-policy "$LMCACHE_EVICTION_POLICY" \
-    --eviction-trigger-watermark "$EFFECTIVE_WM" \
-    --eviction-ratio "$EFFECTIVE_RATIO" \
-    --chunk-size "$LMCACHE_CHUNK_SIZE" \
-    --l2-adapter "$ADAPTER_JSON_ARGS" \
-    ${LMCACHE_HTTP_HOST:+--http-host "$LMCACHE_HTTP_HOST"} \
-    ${LMCACHE_HTTP_PORT:+--http-port "$LMCACHE_HTTP_PORT"} \
-    ${LMCACHE_OTLP_ENDPOINT:+--otlp-endpoint "$LMCACHE_OTLP_ENDPOINT"} \
-    ${LMCACHE_OTLP_ENDPOINT:+--enable-tracing} \
+  PYTHONFAULTHANDLER=1 setsid nohup "${LAUNCH[@]}" "${_srv[@]}" \
     >>"$LOG" 2>&1 &
 fi
 echo $! > "$PIDF"
