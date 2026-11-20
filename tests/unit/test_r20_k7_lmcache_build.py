@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -146,9 +147,11 @@ def test_check_image_identity_prints_wheel_version(tmp_path):
 
 
 # ------------------------------------------------- (4) gate cross-checks build
-def _gate_env(tmp_path, pin_build, image_build):
-    """REAL verify-engine-identity.sh + a docker stub serving the identity
-    JSON; a KVP_LMCACHE_BUILD pin in identity.env.local."""
+def _gate_repo(tmp_path, pin_build: str, image_build: str):
+    """r21 L5: a MINI REPO in tmp -- the real configs/ is NEVER written.
+    Real verify-engine-identity.sh (copied), implementation/ + vendor/
+    symlinked, configs/ COPIED with the pins filled, live/ present."""
+    import re as _re
     import hashlib
     patch_dir = ROOT / "vendor" / "patches" / "lmcache"
 
@@ -175,63 +178,89 @@ case "$cmd" in
 esac
 """)
     (bin_dir / "docker").chmod(0o755)
-    # pin KVP_LMCACHE_BUILD in identity.env.local (restored by the caller)
-    cfg = ROOT / "configs" / "mimo-v2.6-pro"
-    return bin_dir, cfg
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copy(ROOT / "scripts" / "verify-engine-identity.sh",
+                repo / "scripts" / "verify-engine-identity.sh")
+    for d in ("implementation", "vendor"):
+        (repo / d).symlink_to(ROOT / d)
+    shutil.copytree(ROOT / "configs", repo / "configs")
+    ident_env = repo / "configs" / "mimo-v2.6-pro" / "identity.env"
+    text = ident_env.read_text()
+    for name, value in (("KVP_MODEL_REVISION", "0" * 40),
+                        ("KVP_TOKENIZER_REVISION", "0" * 40),
+                        ("KVP_CHAT_TEMPLATE_DIGEST", "0" * 64)):
+        text = _re.sub(r"^(" + name + r")=.*$", r"\1=" + value, text, flags=_re.M)
+    text += f"\nKVP_LMCACHE_BUILD={pin_build}\n"
+    ident_env.write_text(text)
+    live = repo / "live"
+    live.mkdir()
+    (live / "image").write_text("sha256:" + "c" * 64 + "\n")
+    return repo, bin_dir
 
 
 def test_gate_crosschecks_lmcache_build(tmp_path):
     """> A KVP_LMCACHE_BUILD pin that disagrees with the image's wheel_version
-    must refuse cache reuse (exit 4)."""
-    bin_dir, cfg = _gate_env(tmp_path, BUILD_A, BUILD_B)
-    local = cfg / "identity.env.local"
-    existed = local.exists()
-    backup = local.read_text() if existed else None
-    try:
-        base = (cfg / "identity.env").read_text()
-        import re
-        base = re.sub(r"^(KVP_MODEL_REVISION)=.*$", r"\1=" + "0" * 40,
-                      base, flags=re.M)
-        base = re.sub(r"^(KVP_TOKENIZER_REVISION)=.*$", r"\1=" + "0" * 40,
-                      base, flags=re.M)
-        base = re.sub(r"^(KVP_CHAT_TEMPLATE_DIGEST)=.*$", r"\1=" + "0" * 64,
-                      base, flags=re.M)
-        base += f"\nKVP_LMCACHE_BUILD={BUILD_A}\n"
-        local.write_text(base)
-        env = dict(os.environ,
-                   PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
-                   KVP_LMCACHE_BUILD=BUILD_A)
-        env.pop("KVP_SKIP_LMC_IDENTITY", None)
-        r = subprocess.run(["bash", str(GATE), "test-container"],
-                           capture_output=True, text=True, timeout=60,
-                           env=env, cwd=str(tmp_path))
-        out = r.stdout + r.stderr
-        assert r.returncode == 4, (
-            "a build pin != the image wheel_version must be a MISMATCH "
-            f"(exit 4):\n{out[-1500:]}")
-        assert "lmcache_build" in out or "wheel_version" in out, (
-            f"the refusal must name the build field:\n{out[-800:]}")
-    finally:
-        if existed:
-            local.write_text(backup)
-        elif local.exists():
-            local.unlink()
+    must refuse cache reuse (exit 4). r21 L5: works on a COPY of configs/ in
+    a tmp repo -- the real repository is never touched."""
+    repo, bin_dir = _gate_repo(tmp_path, BUILD_A, BUILD_B)
+    (tmp_path / "cache").mkdir()
+    env = dict(os.environ,
+               PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
+               KVP_REPO_ROOT=str(repo),
+               KVP_LIVE_DIR=str(repo / "live"),
+               KVP_CACHE_ROOT=str(tmp_path / "cache"))
+    env.pop("KVP_SKIP_LMC_IDENTITY", None)
+    r = subprocess.run(["bash", str(repo / "scripts" / "verify-engine-identity.sh"),
+                        "test-container"],
+                       capture_output=True, text=True, timeout=60,
+                       env=env, cwd=str(tmp_path))
+    out = r.stdout + r.stderr
+    assert r.returncode == 4, (
+        "a build pin != the image wheel_version must be a MISMATCH "
+        f"(exit 4):\n{out[-1500:]}")
+    assert "lmcache_build" in out or "wheel_version" in out, (
+        f"the refusal must name the build field:\n{out[-800:]}")
 
 
 # ------------------------------------------------------------------- mutation
 def test_mutation_dropping_lmcache_build_from_namespace_is_red(tmp_path):
-    """> (5) Mutation: drop `lmcache_build` from the namespace payload (make it
-    a namespace_hint-like label) -> the build-difference test must catch it.
-    Proves test (2) is meaningful: the field MUST enter the hashed payload."""
-    import dataclasses
-    assert "lmcache_build" in CacheIdentity.__dataclass_fields__, (
-        "the lmcache_build field must exist")
-    # behavioural: canonical() must carry lmcache_build in the hashed payload
-    ident = make_identity()
-    canon = ident.canonical()
-    assert canon.get("lmcache_build") == BUILD_A, (
-        "lmcache_build must be part of the canonical (hashed) payload")
-    # and the mutation is observable at the namespace level
-    mutated = make_identity(lmcache_build=BUILD_B).namespace()
-    assert mutated != ident.namespace(), (
-        "dropping lmcache_build from the payload would make these equal")
+    """> (5) r21 L5 HONEST mutation: a COPY of the identity module with
+    lmcache_build REMOVED from the hashed payload (canonical) -> builds A and
+    B give the SAME namespace on the mutant. The real module's assertion
+    (A's namespace != B's) would be RED against this mutant -- proves the
+    namespace test is meaningful."""
+    import importlib.util as _ilu
+    import sys as _sys
+    real_src = (IMPL / "kvpersist" / "identity.py").read_text()
+    # drop lmcache_build from the canonical payload (like namespace_hint)
+    marker = '            if f.name == "namespace_hint":\n                continue\n'
+    assert marker in real_src, "canonical() marker not found"
+    mutant_src = real_src.replace(
+        marker,
+        '            if f.name in ("namespace_hint", "lmcache_build"):\n'
+        '                continue\n', 1)
+    assert mutant_src != real_src
+    mutant_py = tmp_path / "identity_mutant.py"
+    mutant_py.write_text(mutant_src)
+    spec = _ilu.spec_from_file_location("identity_ns_mutant", mutant_py)
+    mutant_mod = _ilu.module_from_spec(spec)
+    _sys.modules[spec.name] = mutant_mod
+    spec.loader.exec_module(mutant_mod)
+    base = dict(
+        model_id="XiaomiMiMo/MiMo-V2.6-Pro-MOPD",
+        model_revision="a" * 40,
+        tokenizer_name="XiaomiMiMo/MiMo-V2.6-Pro-MOPD",
+        tokenizer_revision="b" * 40,
+        kv_cache_dtype="fp16",
+        block_size=16, num_kv_heads=8, head_dim=128, tp_size=4,
+        connector="LMCacheMPConnector",
+        connector_version="lmcache-0.5.x@pin",
+        max_model_len=1048576,
+        chat_template_digest="c" * 64,
+    )
+    ident_a = mutant_mod.CacheIdentity(**{**base, "lmcache_build": BUILD_A})
+    ident_b = mutant_mod.CacheIdentity(**{**base, "lmcache_build": BUILD_B})
+    assert ident_a.namespace() == ident_b.namespace(), (
+        "the mutant must collapse A and B to ONE namespace (the defect) -- "
+        "proves the real A!=B namespace test is meaningful")
