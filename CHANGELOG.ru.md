@@ -13,6 +13,27 @@ LMCache** (база `0.5.7.dev428` = `03ee5b82418b6bd44e424cdd46932d9346f43eb2`,
 downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache-build.ru.md`);
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
+### Раунд 24 (железные блокеры F1-F3 + дыры в тестах E1-E4)
+**Журнал железа (22 ноя 2026, HEAD f45f3e3):** кэш-сервер не запускался
+(`vllm: error: unrecognized arguments: -m kvpersist.launch ...`), а гейт
+готовности печатал READY при мёртвом контейнере.
+* **F1** (P0): `--entrypoint python3` для `docker run` сервера (образ с
+  ENTRYPOINT `vllm` отвергал команду); + статический аудит: каждый docker
+  run с не-vllm командой обязан иметь --entrypoint.
+* **F2** (P1): готовность в docker = живой контейнер + RPC-ответ внутри
+  (`docker exec mp_ping`), KVP_CACHE_READY_TIMEOUT=180 — старый гейт
+  проверял лишь pid клиента docker run и порт Docker-прокси.
+* **F3** (P1): единый резолвер режима запуска (дефолт docker, отказ на
+  мусоре) в start-cache / start-all / pre_flights — три разных дефолта
+  давали ложный «LMCACHE VERSION MISMATCH» на голом start-all.
+* **E1** (P2): conftest больше не маскирует нарушения — восстанавливается
+  только allowlist записей лаунчеров; любая другая запись в live/ или
+  observability/extras роняет тест; дешёвый снимок по метаданным;
+  extras-up.sh уважает KVP_OBS_DIR.
+* **E2-E4**: «отказ до запуска» доказан для docker-ветки, смоука и чтения
+  argv (3 выживших мутанта убиты); регрессионный тест identity-dir в
+  build-image; валидация KVP_SMOKE_TERM_TIMEOUT.
+
 ### Раунд 23 (приёмка раунда 22: флаки, загрязнение live/, неверный тип сокета)
 **Ревью (23 ноя 2026):** тесты r22 были флаки (4/12 прогонов красные -- заглушка
 отвечала «готово» до записи argv и установки SIGTERM-ловушки); 7 тестовых
@@ -94,15 +115,6 @@ SIGTERM давало код 143, который смоук называл неш
   на железе + «код 143 после SIGTERM -- норма» в `docs/lmcache-build` ×3.
 * Полный прогон: см. итоговые счётчики в отчёте (kv-persistence и recipes,
   последовательно, 0 failed).
-
-### Раунд 21 (namespace привязан к запускаемому образу, честный тест K6.4, дыры в тестах)
-* `775cc64` **L1** (P1, K7 привязан к ЗАПУСКАЕМОМУ образу): `check_image_identity.py --print-wheel-version` был мёртвым кодом; `cli model-name` брал `lmcache_build` из `live/image-identity.env` (запись ПОСЛЕДНЕЙ сборки, а не образ, который запускается); гейт сверял только при пине оператора (в поставке пустой). Теперь `verify_custom_image` возвращает `wheel_version`, CLI печатает `KVP_WHEEL_VERSION=`, `_kvp_require_custom_image` перехватывает его и экспортирует `KVP_LMCACHE_BUILD` на каждом успешном пути резолва (кроме `KVP_SKIP_IMAGE_CHECK=1`). Приоритет `read_lmcache_build`: env > baked identity JSON > запись в live/. `verify-engine-identity.sh` сверяет ВСЕГДА (пин или эффективное значение) с identity JSON контейнера; несовпадение → exit 4 с именем поля `lmcache_build`. Тесты: сценарий A≠B (live/ несёт A, образ — B) — namespace следует за B; гейт без пина отказывает; 3 честные мутации красные (резолвер не экспортирует / гейт сверяет только при пине / копия модуля с приоритетом live/).
-* `626dcb1` **L2** (P1, тест K6.4 был зелёным по чужой причине): заглушка r20 отвечала на `image inspect` пустым `{}` — start-cache.sh отказывал раньше, на проверке custom-образа, и проба кодека НИКОГДА не выполнялась. Теперь заглушка отвечает метками и identity реальной сборки (deep-проверка проходит), а падает только проба кодека. Проверки: `lossless codec 'zstd' is not available`, `build-image.sh`, НЕТ `MISMATCH`/`NOT the custom`, сервер НЕ запускался. Мутация: нейтрализация пробы кодека в мутанте start-cache.sh убирает отказ (красный детектор).
-* `cc675d8` **L3** (P2, две выжившие мутации закрыты): **K1d** — `test_b2_same_digest_other_repo_tag_accepted` (тот же base digest под другим repo:tag принимается; чужой digest отказывает) + честная мутация (копия `check_image_identity.py` со строковым сравнением → ОТКАЗЫВАЕТ тот же digest). **K6c** — `test_smoke_runs_for_both_codecs_and_markers_gated` теперь ПОВЕДЕНЧЕСКИЙ: заглушка печатает маркеры смоука только для одного кодека → сборка отказывает И `live/image` НЕ записывается (оба случая zstd-only и none-only).
-* `d98f59c` **L4** (P2, честный текст ошибки): сообщение «LMCache build is unknown» называет РЕАЛЬНОЕ действие — запустите через `scripts/start-all.sh` (он резолвит образ и экспортирует сборку) или выполните `bash scripts/build-image.sh`. Без пути `/etc` внутри образа, без подсказки `setup-identity.sh` для этой причины (та подсказка остаётся только для ошибок пинов identity.env). Тесты: полный identity.env без резолвера даёт именно этот текст; блок подсказки `lmcache_build` в гейте называет реальные действия.
-* `0f0248d` **L5** (P2, гигиена тестов K7): `test_gate_crosschecks_lmcache_build` больше НЕ пишет `identity.env.local` в РЕАЛЬНЫЙ `configs/` — он работает на МИНИ-РЕПО во временном каталоге (configs скопированы + пины заполнены, реальный репозиторий не тронут). `test_mutation_dropping_lmcache_build_from_namespace_is_red` теперь ЧЕСТНАЯ мутация: копия модуля identity с убранным `lmcache_build` из хешируемой нагрузки → сборки A и B схлопываются в ОДИН namespace на мутанте.
-* `189ce4e` **L6** (P3, голый тег в IMAGE): `IMAGE=kvp-lmcache:latest` получает ясный отказ — «IMAGE должен быть `repo:tag@sha256:<64hex>` (base pin) или `sha256:<id>` (custom), голый тег НЕ принимается, возьмите `$(cat live/image)`» — вместо вводящего в заблуждение «base pin mismatch, rebuild». Правильно закреплённый stock по-прежнему резолвится (путь K1 цел). Тесты: поведенческие, на РЕАЛЬНОМ `_kvp_resolve_runtime_image`.
-* Полный прогон: kv-persistence **716 passed, 26 skipped** (все skip — окружение: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, только железо); recipes **448 passed, 5 skipped** (в этом раунде код не менялся).
 
 ### Раунд 16 (фикстуры 4136, junit-гейты, слепая зона engine-pin, быстрый перезапуск)
 * `c354ba9` **P0** (лог оператора 19.11 18:53: C0-C10 прошли на новой базе,

@@ -12,6 +12,23 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 24 轮（硬件阻塞 F1-F3 + 测试漏洞 E1-E4）
+**硬件日志（2026 年 11 月 22 日，HEAD f45f3e3）：** 缓存服务器从未启动
+（`vllm: error: unrecognized arguments: -m kvpersist.launch ...`），就绪门
+对已死容器打印 READY。
+* **F1** (P0)：服务器 `docker run` 增加 `--entrypoint python3`（vllm ENTRYPOINT
+  镜像拒绝该命令）；+ 静态审计：每个含非 vllm 命令的 docker run 必须有 --entrypoint。
+* **F2** (P1)：docker 就绪 = 容器存活 + 容器内 RPC pong（`docker exec mp_ping`），
+  KVP_CACHE_READY_TIMEOUT=180 — 旧门只检查 docker run 客户端 pid 和 Docker 代理端口。
+* **F3** (P1)：统一启动模式解析器（默认 docker，无效值拒绝）用于 start-cache /
+  start-all / pre_flights — 三个不同默认值导致裸 start-all 误报
+  「LMCACHE VERSION MISMATCH」。
+* **E1** (P2)：conftest 不再掩盖违规 — 仅恢复启动器记录 allowlist；任何其他
+  live/ 或 observability/extras 写入使测试失败；廉价元数据快照；
+  extras-up.sh 支持 KVP_OBS_DIR。
+* **E2-E4**：docker 分支、smoke、argv 读取的「启动前拒绝」已证实（3 个存活变异体
+  被杀）；build-image identity-dir 回归测试；KVP_SMOKE_TERM_TIMEOUT 校验。
+
 ### 第 23 轮（第 22 轮验收：flake、live/ 污染、socket 类型错误）
 **评审（2026 年 11 月 23 日）：** r22 测试不稳定（12 次运行中 4 次红 -- 桩在 argv
 写完和 SIGTERM trap 安装之前就应答 ready）；7 个测试文件写入仓库真实 `live/`
@@ -48,15 +65,6 @@ rc=1）；3 个存活变异体（B5-4/B5-5/B6-2）。
 * `24d61f1` **M1-M4**（P2/P3）：M1——操作员 pin `KVP_LMCACHE_BUILD` 生效：解析器导出 `KVP_RUNNING_LMCACHE_BUILD`（独立名字），pin 在 `identity_from_env_files` 和门禁中保持优先（pin > KVP_RUNNING > read_lmcache_build，始终交叉校验，不匹配 → exit 4 并给出两个构建）；修复真实缺陷（无文件记录的 env pin 被静默丢弃）；golden namespace `kvp-ef44c5ce3016e00c3f450ccdaac0cf9c`（在 7a9e615 上计算）固定在测试中——该提交的缓存保持有效。M2——`IMAGE=sha256:<id>` 和 `IMAGE == live/image` 路径已测试（stock override 拒绝、显式 custom 胜出、损坏的 live/image 拒绝）+ 2 个变异检测器；修复真实顺序缺陷（`== live/image` 分支被 `sha256:*` 吞掉而不可达）。M3——删除死代码标志 `--print-wheel-version`，文档描述真实机制。M4——r21 的"变异"测试（真实代码任何状态下都绿）替换为真实代码检测器；namespace 测试在解析器之后的同一 shell 中计算。
 * `d67eab7` **文档**：硬件诊断用的单独 smoke 命令 + "SIGTERM 后 143 是正常的"（`docs/lmcache-build` ×3）。
 * 完整运行：报告中的最终计数（kv-persistence 和 recipes，顺序执行，0 failed）。
-
-### 第 21 轮（namespace 绑定到运行镜像、诚实的 K6.4 测试、测试漏洞）
-* `775cc64` **L1**（P1，K7 绑定到**运行**镜像）：`check_image_identity.py --print-wheel-version` 是死代码；`cli model-name` 从 `live/image-identity.env`（**最后**一次构建的记录，而非正在启动的镜像）取 `lmcache_build`；门禁仅在操作员设置 pin 时才交叉校验（默认为空）。现在 `verify_custom_image` 返回 `wheel_version`，CLI 打印 `KVP_WHEEL_VERSION=`，`_kvp_require_custom_image` 捕获它并在每条成功解析路径上导出 `KVP_LMCACHE_BUILD`（`KVP_SKIP_IMAGE_CHECK=1` 除外）。`read_lmcache_build` 优先级：env > baked identity JSON > live/ 记录。`verify-engine-identity.sh` **始终**交叉校验（pin 或有效值）与容器的 identity JSON；不匹配 → exit 4 并给出 `lmcache_build` 字段名。测试：场景 A≠B（live/ 记录 A，镜像携带 B）——namespace 跟随 B；无 pin 的门禁拒绝；3 个诚实变异为红。
-* `626dcb1` **L2**（P1，K6.4 测试曾意外通过）：r20 桩对 `image inspect` 返回 `{}` —— start-cache.sh 更早在自定义镜像检查处拒绝，codec 探测**从未执行**。现在桩返回真实构建的 labels + identity（deep 检查通过），只有 codec 探测失败。断言：`lossless codec 'zstd' is not available`、`build-image.sh`、无 `MISMATCH`/`NOT the custom`、服务器**从未**启动。变异：中和 mutant start-cache.sh 中的 codec 探测使拒绝**消失**（红色检测器）。
-* `cc675d8` **L3**（P2，两个幸存变异已关闭）：**K1d** —— `test_b2_same_digest_other_repo_tag_accepted`（同 base digest 换 repo:tag 接受；不同 digest 拒绝）+ 诚实变异（`check_image_identity.py` 副本恢复字符串比较 → 拒绝同 digest 情况）。**K6c** —— `test_smoke_runs_for_both_codecs_and_markers_gated` 现在是**行为**测试：桩仅为一个 codec 打印 smoke 标记 → 构建拒绝且 `live/image` **不**写入（zstd-only 与 none-only 两种情况）。
-* `d98f59c` **L4**（P2，诚实的错误文本）：「LMCache build is unknown」消息给出**真实**动作——通过 `scripts/start-all.sh` 启动（它解析镜像并导出构建），或执行 `bash scripts/build-image.sh`。不再有镜像内 `/etc` 路径，此原因不再提示 `setup-identity.sh`（该提示仅保留给 identity.env pin 错误）。测试：完整 identity.env 无解析器恰好给出此文；门禁的 `lmcache_build` 提示块给出真实动作。
-* `0f0248d` **L5**（P2，K7 测试卫生）：`test_gate_crosschecks_lmcache_build` 不再写 `identity.env.local` 到真实 `configs/`——它在 tmp 中的迷你仓库上运行（configs 已复制 + pin 已填充，真实仓库绝不触碰）。`test_mutation_dropping_lmcache_build_from_namespace_is_red` 现在是**诚实**变异：去掉 `lmcache_build` 的 identity 模块副本在哈希载荷中 → 构建 A 和 B 在变异体上塌缩为**同一** namespace。
-* `189ce4e` **L6**（P3，IMAGE 中的裸标签）：`IMAGE=kvp-lmcache:latest` 得到清晰拒绝——「IMAGE 必须是 `repo:tag@sha256:<64hex>`（base pin）或 `sha256:<id>`（custom），裸标签**不**接受，请取 `$(cat live/image)`」——而非误导性的「base pin mismatch, rebuild」。正确固定的 stock 仍可解析（K1 路径完好）。测试：行为测试，在**真实** `_kvp_resolve_runtime_image` 上。
-* 完整运行：kv-persistence **716 passed, 26 skipped**（全部 skip 为环境因素：promtool、nginx、zstd/lz4、lmcache CLI、live-LMCache、仅硬件）；recipes **448 passed, 5 skipped**（本轮代码未改动）。
 
 ### 第 16 轮（4136 测试夹具、junit 门禁、engine-pin 盲区、快速重跑）
 * `c354ba9` **P0**（硬件日志 19.11 18:53：新基线上 C0-C10 通过，C11 = 150 passed / 5 failed）：5 个失败全在 `tests/v1/test_lmcache_mp_connector.py`（4136 补丁**新增**的文件）——上游测试针对 8 月的 PR head 编写，用 `__new__` 构造连接器时只设置了当前 `__init__` 的部分属性（`_delay_free_req_ids`、`_can_store`、`_pinned_boundary_state_blocks`、`_lazy_offload_manager`）；请求桩缺少 `num_computed_tokens`；一个测试仍断言已废弃的 `_pending_store` API（生产代码中已不存在）。**仅夹具**（生产未动，逐字节验证）：helper 设置四个属性，桩带 `num_computed_tokens=0` / `[0]` 并加强 `update_num_engine_computed_tokens(0, 32)` 断言，lazy-offload 测试按管理器 API 重写（`on_request_finished` → `sessions_to_end=[]`，`end_session` 不被调用）。补丁从真实补丁树重新导出（git diff，未手工编辑 hunk）；SOURCES.md 记录适配 + 新 SHA-256。硬件上预期 C11：155 passed，0 skipped。**新**静态测试（test_r16_patch4136_fixtures.py）：添加行中含全部夹具属性、无 `_pending_store`、SOURCES.md 携带当前补丁哈希。变异：恢复 `_pending_store` → 2 个测试红。
