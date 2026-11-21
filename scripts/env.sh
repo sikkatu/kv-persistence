@@ -580,6 +580,28 @@ _kvp_seed_env_file(){
   return 0
 }
 
+# r24 F3: ONE launch-mode resolver for every consumer. The default MUST be
+# docker everywhere: start-cache.sh defaulted to docker while start-all.sh and
+# _kvp_pre_flights defaulted to host -- a bare `bash scripts/start-all.sh` then
+# started the server IN A CONTAINER but checked readiness through the HOST
+# branch (host-venv lmcache version vs image version -> a false
+# "LMCACHE VERSION MISMATCH" refusal). Accepts host|docker, refuses anything
+# else with a clear message. Prints the resolved mode on stdout and exports
+# KVP_LAUNCH_MODE so a later default (e.g. the recipe launcher's :-host) can
+# never silently flip it back.
+_kvp_resolve_launch_mode(){
+  local _mode="${KVP_LAUNCH_MODE:-docker}"
+  case "$_mode" in
+    host|docker) ;;
+    *)
+      echo "ERROR(_kvp_resolve_launch_mode): KVP_LAUNCH_MODE must be 'host' or 'docker', got '$_mode'" >&2
+      echo "  Unset KVP_LAUNCH_MODE to use the default (docker), or set it explicitly." >&2
+      return 1 ;;
+  esac
+  KVP_LAUNCH_MODE="$_mode"
+  export KVP_LAUNCH_MODE
+  printf '%s' "$_mode"
+}
 # _kvp_pre_flights <kv-repo-root> <host> <port> <cache-root> <image> <uid> <gid> <same-uid> <launch-mode>
 # Round 77 (review): the mp_ping RPC probe and the CUDA IPC boundary test were
 # wired ONLY into the kv launcher -- after the default switches to
@@ -590,13 +612,27 @@ _kvp_seed_env_file(){
 # run the server in the container (KVP_LAUNCH_MODE=docker) or as the engine UID.
 _kvp_pre_flights(){
   local _root="$1" _host="$2" _port="$3" _croot="$4" _image="$5"
-  local _uid="${6:-}" _gid="${7:-}" _same="${8:-0}" _mode="${9:-host}"
+  local _uid="${6:-}" _gid="${7:-}" _same="${8:-0}" _mode="${9:-docker}"
   local _ping_out _ping_rc=0 _ipc_mode _ipc_pidf _ipc_pid _ipc_uid _ipc_pu
   # ---- Round 80b: three pre-flight checks preserved from the legacy kv
   # launcher (they lived ONLY in the legacy kv launcher and would vanish
   # with it -- the round-76 defect class). All refuse BEFORE the model load.
-  # (c0) TCP reachability -- a clear "server not reachable" beats a 300 s
+  # (c0) reachability -- a clear "server not reachable" beats a 300 s
   #      register_kv_caches timeout after 15 min of loading.
+  # r24 F2: in docker mode the TCP probe alone is NOT proof -- the Docker
+  # proxy publishes the port as soon as the container starts. Check the
+  # CONTAINER is alive FIRST (its name is the same default start-cache.sh
+  # uses); then the TCP probe as before.
+  if [ "$_mode" = "docker" ]; then
+    local _pf_cname="${KVP_CACHE_CONTAINER:-lmcache-kvp-server}"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$_pf_cname" 2>/dev/null)" != "true" ]; then
+      echo "ERROR: the cache container '$_pf_cname' is NOT running (pre-flight, docker mode)." >&2
+      echo "The engine would start against a dead cache service. Start it first:" >&2
+      echo "  bash scripts/start-cache.sh" >&2
+      return 1
+    fi
+    echo "pre-flight: cache container '$_pf_cname' is running"
+  fi
   # Round 80b: bash /dev/tcp (NOT python3) -- test stubs replace python3 and
   # would break a python-based probe; /dev/tcp has no interpreter dependency.
   if timeout 3 bash -c "exec 3<>/dev/tcp/$_host/$_port" 2>/dev/null; then

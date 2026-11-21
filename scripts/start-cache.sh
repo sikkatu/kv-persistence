@@ -18,7 +18,9 @@ _kvp_load_env "$ROOT"
 # host-vendored LMCache which MIGHT lack those fixes; when chosen deliberately, the
 # operator is alerted below. Aligning the shared MP cache server with every worker
 # (custom image) guarantees they all carry ONE identical LMCache build.
-KVP_LAUNCH_MODE="${KVP_LAUNCH_MODE:-docker}"   # host | docker
+# r24 F3: ONE resolver (env.sh, already sourced above), default docker,
+# refusal on anything else.
+KVP_LAUNCH_MODE="$(_kvp_resolve_launch_mode)" || exit 1   # host | docker
 # Loopback-binding is a SECURITY contract (review 2A): never allow 0.0.0.0 / :: here.
 case "$LMCACHE_HOST" in
   127.0.0.1|localhost|::1) : ;;
@@ -283,6 +285,11 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   #    CUDA IPC / POSIX SHM between the engine and the cache server).
   #  * The HTTP frontend also binds 0.0.0.0 inside the container; the -p
   #    mapping keeps it loopback-only on the host.
+  # r24 F1: the vllm/vllm-openai image has ENTRYPOINT `vllm` -- WITHOUT an
+  # explicit --entrypoint the args after the image name go to `vllm`, which
+  # rejects them ("vllm: error: unrecognized arguments: -m kvpersist.launch ...")
+  # and the container exits immediately. Every OTHER docker run in the repo
+  # already sets --entrypoint; this one (the production server) did not.
   setsid nohup docker run --name "$CONTAINER_NAME" --rm \
     --gpus all --ipc host \
     -p "127.0.0.1:$LMCACHE_PORT:$LMCACHE_PORT" \
@@ -292,7 +299,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
     -e PYTHONPATH=/kvp-impl \
     -e "LMCACHE_LOG_LEVEL=${LMCACHE_LOG_LEVEL:-DEBUG}" \
     -e PYTHONFAULTHANDLER=1 \
-    "$DOCKER_IMAGE" python3 -m kvpersist.launch "${_srv[@]}" \
+    --entrypoint python3 "$DOCKER_IMAGE" -m kvpersist.launch "${_srv[@]}" \
     >>"$LOG" 2>&1 &
 else
   _kvp_server_argv_read _srv "$LMCACHE_HOST" "$LMCACHE_PORT" "$LMCACHE_L1_SIZE_GB" "$LMCACHE_CHUNK_SIZE" "$ADAPTER_JSON" "${LMCACHE_HTTP_HOST:-}" \
@@ -315,6 +322,48 @@ echo "-- waiting for cache-service readiness (adapter load + request port)"
 # an old error from a previous run can never fail a healthy new server.
 LOG_START_BYTES=$(wc -c < "$LOG" 2>/dev/null || echo 0)
 READY=0
+if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+  # r24 F2: in docker mode `kill -0 $SERVER_PID` only checks the docker-run
+  # CLIENT and `ss` / /dev/tcp only see the port the Docker proxy publishes --
+  # both go green while the server INSIDE the container never started (the
+  # hardware log: "READY" printed, then "no pong"). Readiness here = (1) the
+  # CONTAINER is alive AND (2) the server answers an RPC ping inside it.
+  # L1 64 GB + CUDA init are slow -> a generous, configurable limit.
+  READY_TIMEOUT="${KVP_CACHE_READY_TIMEOUT:-180}"
+  case "$READY_TIMEOUT" in
+    ''|*[!0-9]*|0) die "KVP_CACHE_READY_TIMEOUT must be an integer >= 1, got '$READY_TIMEOUT'" ;;
+  esac
+  _waited=0
+  while [ "$_waited" -lt "$READY_TIMEOUT" ]; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" != "true" ]; then
+      echo "ERROR: the cache container '$CONTAINER_NAME' is not running (exited or removed) after ${_waited}s." >&2
+      echo "Failed condition: the CONTAINER must stay alive. Last log lines:" >&2
+      tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
+      exit 1
+    fi
+    NEW_BYTES=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+    if [ "$NEW_BYTES" -gt "$LOG_START_BYTES" ] && tail -c "+$((LOG_START_BYTES + 1))" "$LOG" 2>/dev/null | grep -Eiq 'traceback|fatal error|cannot load|failed to (open|register|parse)'; then
+      echo "ERROR: lmcache server reported a startup error (adapter load or port bind). Last log lines:" >&2
+      tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
+      docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+      exit 1
+    fi
+    if docker exec "$CONTAINER_NAME" python3 -m kvpersist.mp_ping 127.0.0.1 "$LMCACHE_PORT" 5 >/dev/null 2>&1; then
+      READY=1
+      break
+    fi
+    sleep 2
+    _waited=$((_waited + 2))
+  done
+  if [ "$READY" != 1 ]; then
+    echo "ERROR: the cache server did NOT answer an RPC ping within ${READY_TIMEOUT}s" >&2
+    echo "Failed condition: the SERVER must answer mp_ping (the container is alive," >&2
+    echo "but the server inside is not accepting requests)." >&2
+    tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
+    exit 1
+  fi
+  echo "cache service READY: container alive, server answered the RPC ping (port $LMCACHE_PORT)"
+else
 for i in $(seq 1 30); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "ERROR: lmcache server died within ${i}s of startup. Last log lines:" >&2
@@ -342,6 +391,7 @@ for i in $(seq 1 30); do
 done
 [ "$READY" = 1 ] || { echo "ERROR: request port $LMCACHE_HOST:$LMCACHE_PORT not listening after 30s -- the service is up but not accepting connections." >&2; tail -n 20 "$LOG" >&2 || true; exit 1; }
 echo "cache service READY: process alive, no adapter errors, port $LMCACHE_PORT listening"
+fi
 echo "NOTE: the HTTP frontend is intentionally loopback-only; do not proxy it without auth."
 # Review fix (round 43): the [kvp] patch-status lines printed by
 # kvpersist.launch go to the server log (stderr of the daemon), never to

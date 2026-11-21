@@ -21,6 +21,12 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # identity.env (env values win over files) BEFORE any decision, so the PID probe
 # below uses the EFFECTIVE KVP_CACHE_ROOT, not the built-in default.
 . "$HERE/env.sh"
+# r24 F3: resolve the launch mode ONCE, early (default docker) and export it
+# so the recipe launcher's own `:-host` default can never flip it back. The
+# bare `bash scripts/start-all.sh` used to run the server in docker (the
+# start-cache default) while the engine-side checks ran in the host branch ->
+# a false "LMCACHE VERSION MISMATCH" refusal at step 3/3.
+KVP_LAUNCH_MODE="$(_kvp_resolve_launch_mode)" || exit 1
 # r20 K1: remember whether IMAGE came from the ENVIRONMENT before tp4.env is
 # seeded (the seed exports IMAGE=stock from tp4.env as the base pin -- the
 # NOTE wording distinguishes the two sources).
@@ -323,7 +329,7 @@ case "$KVP_ENGINE" in
     # register_kv_cache (CUDA_ERROR_MAP_FAILED) with no hint before the load.
     _kvp_pre_flights "$ROOT" "$KV_PERSIST_HOST" "$KV_PERSIST_PORT" \
       "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}" "$IMAGE" \
-      "$(id -u)" "$(id -g)" "${KVP_SAME_UID:-1}" "${KVP_LAUNCH_MODE:-host}" || {
+      "$(id -u)" "$(id -g)" "${KVP_SAME_UID:-1}" "${KVP_LAUNCH_MODE:-docker}" || {
         # r20 K3: the cache server was ALREADY started at step 2 -- 'nothing
         # was started' is false here. stop-cache.sh is only needed when the
         # CODEC changes; a rerun with the same codec reuses the running cache.
