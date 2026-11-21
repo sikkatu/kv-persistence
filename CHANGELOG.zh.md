@@ -12,6 +12,31 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 23 轮（第 22 轮验收：flake、live/ 污染、socket 类型错误）
+**评审（2026 年 11 月 23 日）：** r22 测试不稳定（12 次运行中 4 次红 -- 桩在 argv
+写完和 SIGTERM trap 安装之前就应答 ready）；7 个测试文件写入仓库真实 `live/`
+（测试通过只因先前测试污染了目录树）；fd-channel 探测使用 SOCK_STREAM，而 pin
+的 lmcache 使用 SOCK_SEQPACKET（EPROTOTYPE 被误判为 stale -> smoke 越过活的服务
+器继续）；无效 `LMCACHE_EVICTION_POLICY` 仍以空 argv 启动服务器（进程替换吞掉了
+rc=1）；3 个存活变异体（B5-4/B5-5/B6-2）。
+* **D1** (P1)：所有测试桩使用 `ready` 文件同步 -- `mp_ping` 桩等待启动桩写完 argv
+  并安装 SIGTERM trap。50 次 flake 检查全绿。
+* **D2** (P1)：`tests/conftest.py` -- 整个会话使用隔离的 `KVP_LIVE_DIR` + 会话
+  守卫：运行前后对仓库真实 `live/` 做哈希，若发生变化则测试失败；各 helper
+  （`_read_argv_via_stub` / `_run_smoke_with_server_stub` / `_start_cache_argv`）
+  拥有自己的 tmp `live/`（image + image-identity.env 写在那里，绝不写仓库的）。
+* **D3** (P2)：fd-channel 探测改用 AF_UNIX SOCK_SEQPACKET（pin 的 lmcache 类型，
+  fd_channel.py:14,53,92）并 fail-safe：仅在【确证】stale（FileNotFoundError /
+  ConnectionRefusedError）时放行；EPROTOTYPE 及其他任何 OSError -> 拒绝。
+  3 个新测试 + 2 个变异体。
+* **D4** (P2)：`_kvp_server_argv_read` 自行构建 argv（临时文件 + rc 检查 -- 旧的
+  进程替换吞掉 rc=1）并通过 bash nameref 校验 argv[0]=="server"；start-cache.sh
+  两个分支和 smoke 在 `LMCACHE_EVICTION_POLICY` 无效时于任何启动【之前】拒绝。
+* **D5** (P2)：closed/persist 标记分开测试（B5-4 被捕获）；`KVP_SMOKE_TERM_TIMEOUT`
+  （B5-5 被捕获 -- 等待是硬编码的）；build-image.sh 向 smoke 传递
+  `${KVP_SMOKE_PORT:-15555}`（B6-2 被捕获 -- 之前传的是生产端口 5555）。
+* **D6** (P3)：eviction-policy 大小写不敏感归一化（`${_p,,}`），删除 r22 过时注释，
+  提交 `tests/tools/gen_pin_spec.py`（pin fixture 可从 lmcache 源提交复现）。
 ### 第 22 轮（smoke 运行 pin 接受的命令；操作员 pin；IMAGE 路径）
 **硬件日志（2026 年 11 月 21 日）：** `build-image.sh` 在服务器 smoke 上崩溃 ——
 `--eviction-policy: invalid choice: 'lru'`（pin 解析器接受 LRU/ARC/IsolatedLRU/noop，大小写敏感）；绕过该问题后适配器的多行 JSON 被拆分为多个 argv 元素（"unrecognized arguments"）——这是 r20 K6.3 的回归，也破坏了生产 `start-cache.sh`；SIGTERM 后的正常关闭退出码 143 被 smoke 判定为异常。
@@ -29,17 +54,6 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 * `189ce4e` **L6**（P3，IMAGE 中的裸标签）：`IMAGE=kvp-lmcache:latest` 得到清晰拒绝——「IMAGE 必须是 `repo:tag@sha256:<64hex>`（base pin）或 `sha256:<id>`（custom），裸标签**不**接受，请取 `$(cat live/image)`」——而非误导性的「base pin mismatch, rebuild」。正确固定的 stock 仍可解析（K1 路径完好）。测试：行为测试，在**真实** `_kvp_resolve_runtime_image` 上。
 * 完整运行：kv-persistence **716 passed, 26 skipped**（全部 skip 为环境因素：promtool、nginx、zstd/lz4、lmcache CLI、live-LMCache、仅硬件）；recipes **448 passed, 5 skipped**（本轮代码未改动）。
 
-### 第 20 轮（启动镜像解析、镜像内置编解码器、缓存 namespace 的构建标识）
-**硬件事实（操作员日志，2026 年 11 月 20 日）：** 完整构建 C0–C16 通过（wheel `0.5.8rc1.post48+kvp.60dce759ea93`，C11 = 155 passed / 0 skipped），但启动链在三处崩溃：`tp4.env` 中活跃的 `IMAGE=`（stock pin）遮蔽了 `live/image`（拒绝前已启动 6 个 observability 容器），`run-tp4-hotsplit.sh` 在 verify 门禁**之前**用 stock 摘要覆写了 `live/image`（一次失败启动后自定义镜像被「遗忘」），docker 缓存路径死于 `ModuleNotFoundError: No module named 'zstandard'` —— 默认 zstd 编解码器从未进入镜像，docker 路径不可能工作过一次。
-* `ba84356` **K1**（P0，启动镜像的一次 fail-fast 解析）：`env.sh` 的 `_kvp_resolve_runtime_image` 在全部三个启动器中（`start-all.sh`、`start-cache.sh` docker 模式、两个配方启动器仅 `KV_PERSIST=1` 时）只解析一次运行时镜像，在步骤 1/3 和任何 docker 调用之前。stock `IMAGE=` 不是用户错误而是 base pin：它必须匹配 `live/image` 中自定义镜像的 `org.kvp.lmc-base` 标签（通过 `check_image_identity --expected-base` 按 digest 比较；同 digest 换标签通过，同标签换 digest 拒绝），启动运行的是自定义镜像。显式 `sha256:<64hex>` 覆盖仍然优先（README 契约）。`KV_PERSIST!=1`（stock 配方运行）完全不碰 `IMAGE`；`KVP_PERSIST_ENABLED=false` 完全跳过解析（round-81b 回归，由 recipes 套件发现并修复）。测试 opt-out `KVP_SKIP_IMAGE_CHECK=1` 继续工作。解析矩阵 (a)–(h) 在真实脚本上用记录日志的 docker 桩（labels/identity 答复来自真实补丁 SHA）验证；4 个行为变异为红。
-* `271cb5c`（recipes）+ `bc131af`（recipes）**K2**（P0）：`live/image` **仅**在成功验证自定义镜像之后、且仅 `KV_PERSIST=1` 且无 `KVP_SKIP_IMAGE_CHECK` 时写入 —— 被允许写它的两个位置是 `build-image.sh`（其 verify 门禁之后）和启动器（deep 校验之后）。Sentinel 测试：stock 拒绝不改动文件一个字节、自定义成功写入精确 id、`KV_PERSIST=0` 与 `KVP_SKIP_IMAGE_CHECK=1` 从不触碰；恢复旧顺序 → 红。
-* `6bfb6fc` **K3**（P0，docker 模式 pre-flight）：校验现在确认缓存容器与引擎使用**同一**镜像（`.Image` 对 `.Id`），而非比较 host venv 的 lmcache 版本与镜像版本（host venv 装有任何其他构建时每次启动都被拒绝）。RPC ping 在缓存容器**内部**执行（exit 3 = 那里的拒绝）；host 模式提示给出真实 wheel 路径及 `--force-reinstall --no-deps`（`pip install lmcache==...+kvp` 提示指向 PyPI 上不存在的包）。变异（恢复 host 版本比较 / 去掉 exec ping / `.Id` 与标签名比较）→ 红。
-* `56662a2` **K4**（P1，补上 r19 测试漏洞）：生成的 Dockerfile 被结构化解析（拼接 `\` 续行、按 `&&` 拆 RUN、`shlex.split`）—— COPY src == 真实 wheel 基名、COPY dst == pip 安装路径 == rm -f 路径、名称通过 `packaging.utils.parse_wheel_filename`、`--no-deps` 存在；可执行测试用真实 cp312 标签的最小 wheel 运行从 Dockerfile 切出的真实 pip install 命令；启动链测试加强。4 个变异检测器（仅 COPY dst / 仅 pip 路径 / 仅 rm 路径 / 丢掉 `--no-deps`）→ 红。
-* `2b51670` **K6**（P0，编解码器随镜像发布）：`requirements-image-codecs.txt`（pins 的唯一来源 —— `zstandard==0.25.0`、`lz4==4.4.5`，PyPI 的 cp312 manylinux x86_64 wheels，精确 `--hash=sha256`）被拷入构建上下文并以 `--no-deps --only-binary=:all: --require-hashes` 安装；文件 SHA 与固定版本进入 `/etc/kvp-lmcache-identity.json` 和 `image-identity.env`（`image_codecs_sha256` / `KVP_IMAGE_CODECS_SHA256`）。`_verify_image.py` 打印严格标记 `KVP_ZSTD_IMPORT=OK` / `KVP_LZ4_IMPORT=OK`（版本在单独的 `KVP_*_VERSION=` 行），没有它们 `build-image.sh` 拒绝。`start-cache.sh` 的编解码器拒绝现在说「重建镜像」而非不可能的「把编解码器装进镜像」。变异（去掉 `--require-hashes` / 去掉 `==` pin / 去掉一个包 / 去掉 COPY / 从 verify 输出切掉标记）→ 红。**测试的诚实边界：** pip 真正把包装入镜像只能在硬件上验证——构建时的服务器 smoke（见下）会在镜像里启动真实服务器并捕获编解码器/nixl/适配器故障，但同样只在真实 GPU 构建上有效。
-* `fc8a78b` + `eedd109` **K6.3**（P1，镜像构建时的服务器 smoke）：真实缓存服务器必须能在新构建的镜像中**启动**。统一命令来源：`env.sh` 提供 `_kvp_render_l2_adapter` + `_kvp_server_argv`，`start-cache.sh`（生产）和 `scripts/_smoke_cache_server.sh`（由 `build-image.sh` 在镜像内运行）**都**使用它们。对两种编解码器（zstd 默认、none raw）：渲染适配器、启动服务器、等待 `kvpersist.mp_ping`、SIGTERM、干净退出。严格标记 `KVP_SMOKE_<CODEC>_READY=OK` / `KVP_SMOKE_<CODEC>_EXIT=0`，缺少则构建门禁拒绝。变异：smoke 无标记输出 → 拒绝（红色检测器）。
-* `d5fc90b` + `767826e` **K7**（P0，缓存 namespace 必须区分 LMCache 构建）：`CacheIdentity` 新增**强制**字段 `lmcache_build`（= `/etc/kvp-lmcache-identity.json` 的 `wheel_version`，`0.5.8rc1.post48+kvp.<12hex>`）；为空/不可读 → `IdentityError`（不确定 → cache miss）。在此之前 stock 构建 0.5.6 与自定义构建派生出**相同**的 namespace（`kvp-7a26d4bf...`），新服务器读取旧缓存。所有消费者的统一来源：`kvpersist.identity.read_lmcache_build()`（bash 通过 `check_image_identity.py --print-wheel-version` 读取同一值，bash 与 Python 永不分歧）；`verify-engine-identity.sh` 将 `KVP_LMCACHE_BUILD` pin 与运行镜像的 `wheel_version` 交叉校验（MISMATCH → exit 4）。测试：空构建 → `IdentityError`、不同构建 → 不同 namespace、哈希值来自 identity JSON、真实脚本 + docker 桩的门禁交叉校验、从哈希载荷中去掉字段的变异 → 红。
-* `6dd98f0`（recipes）：测试夹具携带新的强制字段，并按 `build-image.sh` 在真实机器上的方式记录 `live/image-identity.env`。
-* 完整运行：kv-persistence **704 passed, 26 skipped**（全部 skip 为环境因素：promtool、nginx、zstd/lz4、lmcache CLI、live-LMCache、仅硬件）；recipes **448 passed, 5 skipped**（K7 夹具更新后；本轮夹具变更前为 443/5）。
 ### 第 16 轮（4136 测试夹具、junit 门禁、engine-pin 盲区、快速重跑）
 * `c354ba9` **P0**（硬件日志 19.11 18:53：新基线上 C0-C10 通过，C11 = 150 passed / 5 failed）：5 个失败全在 `tests/v1/test_lmcache_mp_connector.py`（4136 补丁**新增**的文件）——上游测试针对 8 月的 PR head 编写，用 `__new__` 构造连接器时只设置了当前 `__init__` 的部分属性（`_delay_free_req_ids`、`_can_store`、`_pinned_boundary_state_blocks`、`_lazy_offload_manager`）；请求桩缺少 `num_computed_tokens`；一个测试仍断言已废弃的 `_pending_store` API（生产代码中已不存在）。**仅夹具**（生产未动，逐字节验证）：helper 设置四个属性，桩带 `num_computed_tokens=0` / `[0]` 并加强 `update_num_engine_computed_tokens(0, 32)` 断言，lazy-offload 测试按管理器 API 重写（`on_request_finished` → `sessions_to_end=[]`，`end_session` 不被调用）。补丁从真实补丁树重新导出（git diff，未手工编辑 hunk）；SOURCES.md 记录适配 + 新 SHA-256。硬件上预期 C11：155 passed，0 skipped。**新**静态测试（test_r16_patch4136_fixtures.py）：添加行中含全部夹具属性、无 `_pending_store`、SOURCES.md 携带当前补丁哈希。变异：恢复 `_pending_store` → 2 个测试红。
 * `b589b98` **P1**（隐藏缺陷，预先检查）：LMCache 的 pytest.ini 含 `log_cli = true`，真实 pytest 用 `=` 装饰摘要行——旧的 `grep -E '^[0-9]+ (passed|...)'` 在**绿色**运行上匹配不到任何内容 → 健康套件上「pytest summary not found」（r11-r15 的桩打印未装饰的摘要，coder 测试从未看到）。C12/C13 现在通过共享模块从 `--junitxml` 报告计数（tests/failures/errors/skipped 按所有 `<testsuite>` 求和，passed = tests - failures - errors - skipped；rc==0 且 failures==0 且 errors==0 且 skipped==0 且 passed>0；缺失/空/损坏 XML → 明确的 `REGRESSION FAILURE: junit report missing/unparsable`）。文本 grep 已移除；摘要行由脚本自建（`CPU gate PASSED (155 passed, 0 failed, 0 errors, 0 skipped)`）。**新**测试（test_r16_c12_junit_gate.py）在**两种**配置下用真实 pytest（带 LMCache 风格的 log_cli pytest.ini 和不带）：绿色通过、skip 被拒并打印 SKIPPED 行、失败被拒、缺失 XML 被拒，外加静态「无文本 grep」门禁。变异：恢复文本 grep → 5 个测试红。
