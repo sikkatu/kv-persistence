@@ -179,6 +179,26 @@ PyPI) копируется в контекст сборки и устанавл�
 Сбои кодеков/nixl/otel/адаптера ловятся на сборке, а не при первом
 `start-cache` у оператора.
 
+**Отдельный запуск смоука (r22 B3/B5, для диагностики на железе):** смоук без
+полной сборки образа, одной командой:
+
+```bash
+docker run --rm --gpus all --ipc host \
+  -v "$PWD":/kvp-repo:ro -v "$PWD/implementation":/kvp-impl:ro \
+  --entrypoint bash <ваш-образ> /kvp-repo/scripts/_smoke_cache_server.sh \
+  zstd /tmp/kvp-smoke 15555
+```
+
+Запускать по кодеку (`zstd`, затем `none`). Смоук грузит ПОСТАВЛЯЕМЫЕ конфиги
+(`configs/generic/*.env`, без `*.local`) — результат не зависит от файлов на
+машине пользователя. **Код выхода 143 после SIGTERM — норма** для этого
+сервера (HTTP-сервер обрабатывает SIGTERM, штатно закрывается и повторно
+посылает сигнал) — смоук принимает 0 или 143 с обоими маркерами штатного
+закрытия (`MPCacheServer closed` + `persist_enabled=True, keeping data files
+on disk`); любой другой код или отсутствие маркеров — отказ. Смоук работает
+на собственном порту (по умолчанию 15555, `KVP_SMOKE_PORT`) и не конфликтует
+с боевым кэшем за fd-канал.
+
 ## 3. Персистентный кэш: L1/L2, идентичность, диагностика
 
 * L1 = DRAM хоста (`LMCACHE_L1_SIZE_GB=64`; проверяйте фактическую опцию
@@ -199,7 +219,9 @@ PyPI) копируется в контекст сборки и устанавл�
   0.5.6 и кастомная давали ОДИН namespace, и новый сервер читал старый
   кэш). ЕДИНЫЙ источник для всех потребителей:
   `kvpersist.identity.read_lmcache_build()` (bash читает то же значение
-  через `check_image_identity.py --print-wheel-version`). Пустое/нечитаемое
+  из строки `KVP_WHEEL_VERSION=`, которую печатает deep-проверка резолвера
+  (bash экспортирует её как `KVP_RUNNING_LMCACHE_BUILD`, Python читает из той
+  же функции)). Пустое/нечитаемое
   → `IdentityError` (неопределённость → cache miss).
   `verify-engine-identity.sh` кросс-проверяет пин `KVP_LMCACHE_BUILD` с
   `wheel_version` работающего образа (MISMATCH → exit 4).

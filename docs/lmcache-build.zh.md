@@ -175,7 +175,7 @@ wheel SHA-256）——仅凭 wheel 版本号（`0.5.8rc1.post48`）无法区分�
   不同的 LMCache 构建绝不共用一个缓存（r20 之前 stock 构建 0.5.6 与自定义
   构建派生出**相同**的 namespace，新服务器读取旧缓存）。所有消费者的统一
   来源：`kvpersist.identity.read_lmcache_build()`（bash 通过
-  `check_image_identity.py --print-wheel-version` 读取同一值）。
+  从解析器 deep 检查打印的 `KVP_WHEEL_VERSION=` 行获取（bash 导出为 `KVP_RUNNING_LMCACHE_BUILD`，Python 从同一函数读取））。
   为空/不可读 → `IdentityError`（不确定 → cache miss）。
   `verify-engine-identity.sh` 将 `KVP_LMCACHE_BUILD` pin 与运行镜像的
   `wheel_version` 交叉校验（MISMATCH → exit 4）。

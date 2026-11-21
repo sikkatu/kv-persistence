@@ -168,6 +168,26 @@ required -- the build refuses and `live/image` is not written without them.
 This catches codec/nixl/otel/adapter failures at build time instead of the
 operator's first `start-cache`.
 
+**Standalone smoke (r22 B3/B5, for hardware diagnostics):** run the smoke
+WITHOUT a full image build, one command:
+
+```bash
+docker run --rm --gpus all --ipc host \
+  -v "$PWD":/kvp-repo:ro -v "$PWD/implementation":/kvp-impl:ro \
+  --entrypoint bash <your-image> /kvp-repo/scripts/_smoke_cache_server.sh \
+  zstd /tmp/kvp-smoke 15555
+```
+
+Run it per codec (`zstd`, then `none`). The smoke loads the SHIPPED configs
+(`configs/generic/*.env`, no `*.local`) so its result does not depend on
+files on the user's machine. An exit code of **143 after SIGTERM is NORMAL**
+for this server (the HTTP server handles SIGTERM, shuts down cleanly and
+re-raises the signal) -- the smoke accepts 0 or 143 with both shutdown
+markers (`MPCacheServer closed` + `persist_enabled=True, keeping data files
+on disk`); any other code or missing markers is a refusal. The smoke runs on
+its own port (default 15555, `KVP_SMOKE_PORT`) so it never fights the
+production cache for the fd-channel socket.
+
 ## 3. Persistent cache: L1/L2, identity, diagnostics
 
 * L1 = host DRAM (`LMCACHE_L1_SIZE_GB=64`, translated to the server's actual
@@ -187,8 +207,10 @@ operator's first `start-cache`.
   two different LMCache builds never share one cache (before r20 the stock
   build 0.5.6 and the custom build derived the SAME namespace and a new
   server read the old cache). ONE source for every consumer:
-  `kvpersist.identity.read_lmcache_build()` (bash reads the same value via
-  `check_image_identity.py --print-wheel-version`). Empty/unreadable ->
+  `kvpersist.identity.read_lmcache_build()` (bash captures the `KVP_WHEEL_VERSION=`
+  line printed by the resolver's deep check and exports it as
+  `KVP_RUNNING_LMCACHE_BUILD`; Python reads it from the same function).
+  Empty/unreadable ->
   `IdentityError` (uncertain -> cache miss). `verify-engine-identity.sh`
   cross-checks a `KVP_LMCACHE_BUILD` pin against the running image's
   `wheel_version` (MISMATCH -> exit 4).
