@@ -282,6 +282,11 @@ done
 # Only clean `^KVP_[A-Z0-9_]+=` lines go into the .env (KEY=value, no quotes
 # -- the marker values carry no spaces); the raw output is kept next to it
 # as live/image-verify.txt for diagnostics.
+# r23 D2 clean-clone: the identity file must land under its directory even
+# when live/ does not exist yet (fresh clone -- live/ is gitignored). The
+# mkdir below only covers $KVP_LIVE_DIR; IDENTITY may point elsewhere
+# (KVP_IDENTITY_OUT) and must be creatable independently.
+mkdir -p "$(dirname "$IDENTITY")"
 {
   echo "KVP_CUSTOM_IMAGE=$OUT_IMAGE"
   echo "KVP_CUSTOM_IMAGE_ID=sha256:$IMAGE_ID"
