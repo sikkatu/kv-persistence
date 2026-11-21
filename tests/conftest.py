@@ -61,9 +61,16 @@ _OBS_SNAP: dict = {}
 
 
 def _is_allowlisted(rel: str) -> bool:
-    if rel in ALLOWLIST:
+    # accept both spellings: "obs-relay" (the dir itself) and
+    # "obs-relay/nginx.conf" (files under it) must match the same rule
+    r = rel.rstrip("/")
+    if r in ALLOWLIST or rel in ALLOWLIST:
         return True
-    return any(rel.startswith(p) for p in ALLOWLIST_PREFIXES)
+    for p in ALLOWLIST_PREFIXES:
+        pr = p.rstrip("/")
+        if r == pr or rel.startswith(p) or r.startswith(pr + "/"):
+            return True
+    return False
 
 
 def _snap_live() -> dict:
