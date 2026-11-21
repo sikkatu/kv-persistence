@@ -224,9 +224,10 @@ def _strip_quotes(value: str) -> str:
     return v
 
 
-# r20 K7: the ONE reader of the LMCache build identity. Every consumer must
-# derive `lmcache_build` from here so bash (check_image_identity.py
-# --print-wheel-version) and Python (this module) can never disagree.
+# r20 K7 / r22 M1: the ONE reader of the LMCache build identity. Every
+# consumer derives `lmcache_build` from here so bash (which captures
+# KVP_WHEEL_VERSION= from the resolver deep check and exports it as
+# KVP_RUNNING_LMCACHE_BUILD) and Python (this module) can never disagree.
 DEFAULT_LMCACHE_IDENTITY = "/etc/kvp-lmcache-identity.json"
 DEFAULT_IMAGE_IDENTITY = "/var/lib/kv-persistence/image-identity.env"
 
@@ -235,11 +236,12 @@ def read_lmcache_build(ident_json_path: str = "") -> str:
     """Read the LMCache build identity (``wheel_version``) of the image that
     will actually run.
 
-    Priority (r21 L1):
-      1. ``KVP_LMCACHE_BUILD`` from the ENVIRONMENT -- the resolver
+    Priority (r21 L1 / r22 M1):
+      1. ``KVP_RUNNING_LMCACHE_BUILD`` from the ENVIRONMENT -- the resolver
          (``_kvp_require_custom_image``) exports it from the deep check of the
-         resolved image, so it is the build of the RUNNING image, not of the
-         last build.
+         resolved image, so it is the build of the RUNNING image. It is NOT
+         ``KVP_LMCACHE_BUILD``: that name is the OPERATOR PIN (r22 M1) and is
+         read separately by ``identity_from_env_files`` / the gate.
       2. the baked ``/etc/kvp-lmcache-identity.json`` (explicit path,
          ``KVP_LMCACHE_IDENTITY``, or the default) -- the image's own record.
       3. the build HISTORY in ``live/image-identity.env`` (``KVP_LMC_VERSION``)
@@ -255,8 +257,8 @@ def read_lmcache_build(ident_json_path: str = "") -> str:
         read -- the caller then treats the identity as uncertain).
     """
     import os as _os
-    # 1. env (the resolver ties this to the RUNNING image)
-    ver = (_os.environ.get("KVP_LMCACHE_BUILD") or "").strip()
+    # 1. the resolver's export (the RUNNING image)
+    ver = (_os.environ.get("KVP_RUNNING_LMCACHE_BUILD") or "").strip()
     if ver:
         return ver
     # 2. the baked identity JSON of the image itself
@@ -349,6 +351,13 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
     for k in list(vals):
         if k in _os.environ:
             vals[k] = _os.environ[k]
+    # r22 M1: the OPERATOR PIN KVP_LMCACHE_BUILD lives in the operator's own
+    # env OR in the config files. The env-wins loop above only updates keys
+    # already present in the files -- a pin exported in the env with no file
+    # entry was silently dropped (the defect the review found: the resolver's
+    # export then looked like the pin). Bring the env pin in explicitly.
+    if "KVP_LMCACHE_BUILD" not in vals and _os.environ.get("KVP_LMCACHE_BUILD"):
+        vals["KVP_LMCACHE_BUILD"] = _os.environ["KVP_LMCACHE_BUILD"]
     # Operator switches may live ONLY in the environment (they are commented
     # out in the shipped configs). Without this a `USE_LOSSLESS_SERDE=1` or
     # `KVP_L2_SERDE=zstd` export would be invisible to the namespace while
@@ -426,11 +435,14 @@ def identity_from_env_files(*paths: str) -> "CacheIdentity":
         raise IdentityError(
             f"KVP_ROPE_CONFIG_DIGEST must be 64 hex chars (sha256), got {rope_digest!r}"
         )
-    # r20 K7: the LMCache build identity. ONE source: the baked identity JSON
-    # (wheel_version). An explicit KVP_LMCACHE_BUILD pin (env/files) overrides
-    # it -- that is what verify-engine-identity.sh cross-checks against the
-    # running image. When neither is readable the value stays empty and
-    # validate() refuses (uncertain -> cache miss).
+    # r20 K7 / r22 M1: the LMCache build identity. The OPERATOR PIN
+    # (KVP_LMCACHE_BUILD, from files or the operator's own env) takes
+    # precedence -- it is what verify-engine-identity.sh cross-checks against
+    # the running image. Without a pin the RUNNING image's build is used
+    # (read_lmcache_build: the resolver's KVP_RUNNING_LMCACHE_BUILD export >
+    # the baked identity JSON > the live/ build record). When nothing is
+    # readable the value stays empty and validate() refuses (uncertain ->
+    # cache miss).
     lmcache_build = (get("KVP_LMCACHE_BUILD") or "").strip() or read_lmcache_build()
     return CacheIdentity(
         model_id=get("KVP_MODEL_ID"),

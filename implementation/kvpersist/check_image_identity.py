@@ -287,37 +287,13 @@ def verify_custom_image(image: str, patch_dir: pathlib.Path,
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("image", nargs="?", default=None,
-                    help="IMAGE spec about to launch (omit with --print-wheel-version)")
-    ap.add_argument("patch_dir", nargs="?", default=None,
-                    help="repo dir with the downstream patches (omit with --print-wheel-version)")
+    ap.add_argument("image", help="IMAGE spec about to launch")
+    ap.add_argument("patch_dir", help="repo dir with the downstream patches")
     ap.add_argument("--expected-base", default=None)
     ap.add_argument("--deep", action="store_true",
                     help="r3 P1-3: additionally verify the baked identity json "
                          "and find_spec('lmcache.cuda_ops') inside the image")
-    ap.add_argument("--print-wheel-version", metavar="IDENT_JSON", default=None,
-                    help="r20 K7: print the wheel_version recorded in the "
-                         "given /etc/kvp-lmcache-identity.json and exit "
-                         "(single source for the lmcache_build identity field)")
     args = ap.parse_args(argv)
-    # r20 K7: single-source reader of the build identity.
-    if args.print_wheel_version is not None:
-        try:
-            with open(args.print_wheel_version, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            ver = (data.get("wheel_version") or "").strip()
-        except (OSError, ValueError) as exc:
-            print(f"ERROR: cannot read identity JSON "
-                  f"{args.print_wheel_version}: {exc}", file=sys.stderr)
-            return 4
-        if not ver:
-            print(f"ERROR: wheel_version missing from "
-                  f"{args.print_wheel_version}", file=sys.stderr)
-            return 4
-        print(ver)
-        return 0
-    if args.image is None or args.patch_dir is None:
-        ap.error("image and patch_dir are required unless --print-wheel-version")
     ok, msgs, wheel_version = verify_custom_image(args.image, pathlib.Path(args.patch_dir),
                                    args.expected_base, deep=args.deep)
     if ok:

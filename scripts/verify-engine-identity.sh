@@ -391,21 +391,23 @@ else:
         else f"--kv-transfer-config does not reference {want_conn!r}"
     )
 engine_checks.append(("connector", want_conn, connector_seen))
-# r20 K7 / r21 L1: the LMCache BUILD identity cross-check. The cache
+# r20 K7 / r21 L1 / r22 M1: the LMCache BUILD identity cross-check. The cache
 # namespace hashes `lmcache_build` = wheel_version of the image that runs.
-# The EXPECTED value is the operator pin KVP_LMCACHE_BUILD (identity.env[.local])
-# when set, else the EFFECTIVE value -- exactly what the namespace was hashed
-# from (KVP_LMCACHE_BUILD from the environment, or read_lmcache_build()).
-# The check runs ALWAYS when a container is present (not only with a pin):
-# an engine on a different image than the namespace was computed from must be
-# a MISMATCH (exit 4), never a silent wrong-read. Cross-check against the
-# container's /etc/kvp-lmcache-identity.json (docker exec cat, same as the
-# untested-wheel warning).
+# The EXPECTED value, in order: the OPERATOR PIN KVP_LMCACHE_BUILD
+# (identity.env[.local] or the operator's env), else the resolver's export
+# KVP_RUNNING_LMCACHE_BUILD (the RUNNING image), else read_lmcache_build()
+# -- exactly what the namespace was hashed from (identity_from_env_files:
+# pin first, then read_lmcache_build). The check runs ALWAYS when a container
+# is present: an engine on a different image than the namespace was computed
+# from must be a MISMATCH (exit 4), never a silent wrong-read. Cross-check
+# against the container's /etc/kvp-lmcache-identity.json (docker exec cat,
+# same as the untested-wheel warning).
 if not check_config_only and container:
     _build_expect = (vals.get("KVP_LMCACHE_BUILD", "") or "").strip()
     if not _build_expect:
-        # no pin: the namespace's effective value (the same source it hashes)
-        _build_expect = (os.environ.get("KVP_LMCACHE_BUILD", "") or "").strip()
+        # no pin: the resolver's export of the RUNNING image
+        _build_expect = (os.environ.get("KVP_LMCACHE_BUILD", "")
+                         or os.environ.get("KVP_RUNNING_LMCACHE_BUILD", "")).strip()
     if not _build_expect:
         try:
             from kvpersist.identity import read_lmcache_build as _rlb

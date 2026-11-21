@@ -14,8 +14,7 @@ Contract (r20 K7):
     Empty / unreadable -> IdentityError (uncertain -> cache miss).
   * It is hashed into the namespace, so two different builds never share.
   * ONE source for every consumer (bash + Python must agree): a shared reader
-    of the baked identity JSON. `check_image_identity.py --print-wheel-version`
-    exposes that value; verify-engine-identity.sh cross-checks the pin against
+    of the baked identity JSON. the resolver exports KVP_RUNNING_LMCACHE_BUILD; verify-engine-identity.sh cross-checks the pin against
     the running image's wheel_version.
 
 Tests (real code, real scripts):
@@ -23,8 +22,7 @@ Tests (real code, real scripts):
       a different namespace; the same build -> the same namespace.
   (2) identity_from_env_files derives lmcache_build from the baked identity
       JSON (single source) -- the value bash reads is the value Python hashes.
-  (3) check_image_identity.py --print-wheel-version prints wheel_version.
-  (4) verify-engine-identity.sh cross-checks the KVP_LMCACHE_BUILD pin against
+    (4) verify-engine-identity.sh cross-checks the KVP_LMCACHE_BUILD pin against
       the image's wheel_version (mismatch -> exit 4).
   (5) mutation: removing lmcache_build from the namespace -> the build-
       difference test (1) goes RED.
@@ -131,22 +129,6 @@ def test_identity_from_env_files_reads_build_from_identity_json(tmp_path):
 
 
 # --------------------------------------------------- (3) check-image print mode
-def test_check_image_identity_prints_wheel_version(tmp_path):
-    """> check_image_identity.py --print-wheel-version prints the build."""
-    ident_json = tmp_path / "kvp-lmcache-identity.json"
-    ident_json.write_text(json.dumps({"wheel_version": BUILD_A}))
-    r = subprocess.run(
-        [sys.executable, str(CHECK_IDENT), "--print-wheel-version",
-         str(ident_json)],
-        capture_output=True, text=True, timeout=60,
-        env=dict(os.environ, PYTHONPATH=str(IMPL)),
-    )
-    assert r.returncode == 0, r.stderr[-800:]
-    assert BUILD_A in r.stdout, (
-        f"--print-wheel-version must print the wheel_version:\n{r.stdout}")
-
-
-# ------------------------------------------------- (4) gate cross-checks build
 def _gate_repo(tmp_path, pin_build: str, image_build: str):
     """r21 L5: a MINI REPO in tmp -- the real configs/ is NEVER written.
     Real verify-engine-identity.sh (copied), implementation/ + vendor/

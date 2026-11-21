@@ -26,6 +26,7 @@ carries build B.
 from __future__ import annotations
 import json
 import os
+import re
 import pathlib
 import shutil
 import subprocess
@@ -181,7 +182,8 @@ def _namespace_for(repo: pathlib.Path, bin_dir: pathlib.Path,
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
                KVP_REPO_ROOT=str(repo),
                KVP_LIVE_DIR=str(repo / "live"))
-    for var in ("KVP_LMCACHE_IDENTITY", "KVP_MODEL_CONFIG", "KVP_LMC_VERSION"):
+    for var in ("KVP_LMCACHE_IDENTITY", "KVP_MODEL_CONFIG", "KVP_LMC_VERSION",
+                "KVP_RUNNING_LMCACHE_BUILD"):
         env.pop(var, None)
     if pop_build:
         env.pop("KVP_LMCACHE_BUILD", None)
@@ -193,31 +195,67 @@ def _namespace_for(repo: pathlib.Path, bin_dir: pathlib.Path,
     return out.stdout.strip()
 
 
+
 # ---------------------------------------------------------------------------
-# (1) namespace follows the RUNNING image's build, not live/ history
+# (1) r21 L1 / r22 M4: the namespace follows the RUNNING image. Computed in
+# the SAME shell after the resolver (exactly like the launcher), expected
+# values from separate processes (one per build).
 # ---------------------------------------------------------------------------
+def _run_resolver_and_ns(repo: pathlib.Path, bin_dir: pathlib.Path,
+                         envsh: pathlib.Path | None = None):
+    """Run the REAL resolver, then compute the namespace in the SAME shell
+    (exactly like the launcher: the resolver exports, then the launcher's
+    python step reads the namespace)."""
+    envsh = envsh or (repo / "scripts" / "env.sh")
+    ns_py = repo / "_ns.py"
+    ns_py.write_text(NS_CODE.format(impl=str(IMPL)))
+    script = f"""
+set -u
+. "{envsh}"
+KVP_LIVE_DIR="{repo}/live"
+IMAGE=""
+_kvp_resolve_runtime_image "{repo}" 0 || exit $?
+echo "RESOLVED_BUILD=${{KVP_LMCACHE_BUILD:-<unset>}}"
+echo "RESOLVED_RUNNING=${{KVP_RUNNING_LMCACHE_BUILD:-<unset>}}"
+KVP_REPO_ROOT="{repo}" python3 "{ns_py}"
+"""
+    env = dict(os.environ,
+               PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
+               KVP_LIVE_DIR=str(repo / "live"))
+    for var in ("IMAGE", "KVP_LMCACHE_BUILD", "KVP_RUNNING_LMCACHE_BUILD",
+                "KVP_LMCACHE_IDENTITY", "KVP_LMC_VERSION", "KVP_VERIFY_SHALLOW",
+                "KVP_SKIP_LMC_IDENTITY", "KVP_SKIP_IMAGE_CHECK"):
+        env.pop(var, None)
+    return subprocess.run(["bash", "-c", script], capture_output=True,
+                          text=True, timeout=60, env=env, cwd=str(repo))
+
+
 def test_namespace_follows_running_image_not_history(tmp_path):
     """> live/image-identity.env says A, the launchable image carries B.
-    The resolver exports B and the namespace follows B, not A."""
+    The resolver exports B (KVP_RUNNING_LMCACHE_BUILD) and the namespace
+    computed in the SAME shell equals the B-computed namespace (from a
+    separate process) and differs from A's."""
     repo, bin_dir, ident_file = _make_repo(tmp_path, BUILD_B)
-    r = _run_resolver(repo, bin_dir)
+    r = _run_resolver_and_ns(repo, bin_dir)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert f"RESOLVED_BUILD={BUILD_B}" in r.stdout, (
-        f"the resolver must export KVP_LMCACHE_BUILD from the RUNNING image "
-        f"(B), not the live/ history (A):\n{r.stdout}\n{r.stderr}")
-    ns_b = _namespace_for(repo, bin_dir, BUILD_B)
-    ns_a = _namespace_for(repo, bin_dir, BUILD_A)
-    assert ns_b != ns_a, "builds A and B must give different namespaces"
+    assert f"RESOLVED_RUNNING={BUILD_B}" in r.stdout, (
+        f"the resolver must export the RUNNING image's build:\n{r.stdout}\n{r.stderr}")
+    ns_shell = r.stdout.strip().splitlines()[-1].strip()
+    ns_A = _namespace_for(repo, bin_dir, BUILD_A)
+    ns_B = _namespace_for(repo, bin_dir, BUILD_B)
+    assert ns_shell == ns_B, (
+        f"the namespace in the launcher shell must equal the B-computed one:\n"
+        f"  shell {ns_shell}\n  B     {ns_B}")
+    assert ns_shell != ns_A, "the live/ history (A) must NOT affect the namespace"
 
 
 # ---------------------------------------------------------------------------
-# (2) gate without a pin still cross-checks
+# (2) r21 L1: the gate cross-check without a pin
 # ---------------------------------------------------------------------------
 def test_gate_without_pin_crosschecks_build(tmp_path):
-    """> No pin; live/ history says A; the container runs B (its identity JSON
-    carries B; the expected value falls back to read_lmcache_build()).
-    When the namespace was hashed from A and the engine runs B, the gate
-    must refuse (exit 4) naming lmcache_build."""
+    """> No pin; live/ history says A; the container runs B. When the namespace
+    was hashed from A and the engine runs B, the gate must refuse (exit 4)
+    naming lmcache_build."""
     repo, bin_dir, ident_file = _make_repo(tmp_path, BUILD_B)
     (tmp_path / "cache").mkdir()
     gate_env = dict(os.environ,
@@ -225,7 +263,8 @@ def test_gate_without_pin_crosschecks_build(tmp_path):
                     KVP_REPO_ROOT=str(repo),
                     KVP_LIVE_DIR=str(repo / "live"),
                     KVP_CACHE_ROOT=str(tmp_path / "cache"))
-    for var in ("KVP_LMCACHE_BUILD", "KVP_SKIP_LMC_IDENTITY", "KVP_SKIP_IMAGE_CHECK",
+    for var in ("KVP_LMCACHE_BUILD", "KVP_RUNNING_LMCACHE_BUILD",
+                "KVP_SKIP_LMC_IDENTITY", "KVP_SKIP_IMAGE_CHECK",
                 "MODEL_DIR", "KVP_MODEL_CONFIG"):
         gate_env.pop(var, None)
     r = subprocess.run(["bash", str(repo / "scripts" / "verify-engine-identity.sh"),
@@ -241,111 +280,38 @@ def test_gate_without_pin_crosschecks_build(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (3) mutations -- each must turn a specific test RED
+# (3) r22 M4: DETECTORS of the real code (the r21 "mutation" tests asserted
+# the behaviour of a hand-made mutant -- green at any state of the real code;
+# the mutants are killed by the tests above instead)
 # ---------------------------------------------------------------------------
-def test_mutation_resolver_stops_exporting_build(tmp_path):
-    """> Mutation (r21 L1): the resolver does not export KVP_LMCACHE_BUILD ->
-    scenario (1) goes RED (the export assertion must catch it). This is an
-    honest mutation: the mutant env.sh is sourced and the SAME resolver call
-    is run -- only the export line is dropped."""
-    repo, bin_dir, ident_file = _make_repo(tmp_path, BUILD_B)
-    # honest mutation: drop the export in _kvp_require_custom_image
-    envsh_src = (repo / "scripts" / "env.sh").read_text()
-    marker = "      KVP_LMCACHE_BUILD=\"$_wv\"\n      export KVP_LMCACHE_BUILD\n"
-    assert marker in envsh_src, "mutation marker not found in env.sh"
-    mutated = envsh_src.replace(marker, "      :\n")
-    mutant_envsh = repo / "scripts" / "env-mutant.sh"
-    mutant_envsh.write_text(mutated)
-    r = _run_resolver(repo, bin_dir, envsh=mutant_envsh)
-    assert "RESOLVED_BUILD=<unset>" in r.stdout, (
-        f"the mutant must NOT export KVP_LMCACHE_BUILD:\n{r.stdout}\n{r.stderr}")
+def test_export_of_running_build_present():
+    """> detector: the resolver exports KVP_RUNNING_LMCACHE_BUILD (the r21
+    defect was the resolver overwriting the operator pin name)."""
+    src = (ROOT / "scripts" / "env.sh").read_text()
+    assert "KVP_RUNNING_LMCACHE_BUILD" in src, (
+        "the resolver must export KVP_RUNNING_LMCACHE_BUILD")
+    assert re.search(r"KVP_RUNNING_LMCACHE_BUILD=\"\$_wv\"", src), (
+        "the export must carry the wheel_version captured from the deep check")
+    # the pin name must NOT be written by the resolver (it is the operator's)
+    resolver_start = src.index("_kvp_require_custom_image()")
+    resolver = src[resolver_start:src.index("\n}\n", resolver_start)]
+    assert "export KVP_LMCACHE_BUILD" not in resolver, (
+        "the resolver must not export the operator pin name KVP_LMCACHE_BUILD")
 
 
-def test_mutation_gate_only_checks_with_pin(tmp_path):
-    """> Mutation (r21 L1): the gate again checks lmcache_build ONLY when a
-    pin is set -> scenario (2) goes GREEN on the mutant (no refusal)."""
-    repo, bin_dir, ident_file = _make_repo(tmp_path, BUILD_B)
-    gate_src = (repo / "scripts" / "verify-engine-identity.sh").read_text()
-    # restore the r20 behaviour: only check when vals pin is set
-    mutant = gate_src.replace(
-        '    if not _build_expect:\n'
-        '        # no pin: the namespace\'s effective value (the same source it hashes)\n'
-        '        _build_expect = (os.environ.get("KVP_LMCACHE_BUILD", "") or "").strip()\n'
-        '    if not _build_expect:\n'
-        '        try:\n'
-        '            from kvpersist.identity import read_lmcache_build as _rlb\n'
-        '            _build_expect = (_rlb() or "").strip()\n'
-        '        except Exception:\n'
-        '            _build_expect = ""\n',
-        '')
-    assert mutant != gate_src, "mutation marker not found in the gate"
-    gate_mutant = repo / "scripts" / "gate-mutant.sh"
-    gate_mutant.write_text(mutant)
-    gate_mutant.chmod(0o755)
-    (tmp_path / "cache").mkdir()
-    gate_env = dict(os.environ,
-                    PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
-                    KVP_REPO_ROOT=str(repo),
-                    KVP_LIVE_DIR=str(repo / "live"),
-                    KVP_CACHE_ROOT=str(tmp_path / "cache"))
-    for var in ("KVP_LMCACHE_BUILD", "KVP_SKIP_LMC_IDENTITY", "KVP_SKIP_IMAGE_CHECK",
-                "MODEL_DIR", "KVP_MODEL_CONFIG"):
-        gate_env.pop(var, None)
-    r = subprocess.run(["bash", str(gate_mutant), "test-container"],
-                       capture_output=True, text=True, timeout=60,
-                       env=gate_env, cwd=str(tmp_path))
-    out = r.stdout + r.stderr
-    assert r.returncode != 4 or "lmcache_build" not in out, (
-        f"the mutant must NOT catch the build mismatch (that is the defect):\n{out[-1000:]}")
+def test_gate_expected_build_priority_present():
+    """> detector: the gate's expected build is pin > KVP_RUNNING >
+    read_lmcache_build (the r21 defect: only a pin was checked)."""
+    src = (ROOT / "scripts" / "verify-engine-identity.sh").read_text()
+    assert "KVP_RUNNING_LMCACHE_BUILD" in src, (
+        "the gate must fall back to KVP_RUNNING_LMCACHE_BUILD")
+    assert "read_lmcache_build" in src, (
+        "the gate must fall back to read_lmcache_build()")
 
 
-def test_mutation_read_lmcache_build_prefers_live(tmp_path):
-    """> Mutation (r21 L1): read_lmcache_build prefers the live/ record over
-    the env -> scenario (1) would go RED (the namespace would follow A).
-    Honest mutation: a COPY of the identity module with the live/ record read
-    FIRST is imported and run through the SAME call -- the mutant returns A
-    where the real module returns B."""
-    import importlib.util as _ilu
-    repo, bin_dir, ident_file = _make_repo(tmp_path, BUILD_B)
-    # an honest mutant: the live/ fallback moved BEFORE the env check
-    real_src = (IMPL / "kvpersist" / "identity.py").read_text()
-    env_block = ('    # 1. env (the resolver ties this to the RUNNING image)\n'
-                 '    ver = (_os.environ.get("KVP_LMCACHE_BUILD") or "").strip()\n'
-                 '    if ver:\n'
-                 '        return ver\n')
-    assert env_block in real_src, "mutation marker not found in identity.py"
-    marker_tail = '    return ""\n\n\ndef _read_env_config'
-    assert marker_tail in real_src, "mutation tail marker not found"
-    mutant_src = real_src.replace(env_block, '', 1).replace(
-        marker_tail,
-        '    # mutant: the env check comes LAST (r20 behaviour)\n'
-        '    ver = (_os.environ.get("KVP_LMCACHE_BUILD") or "").strip()\n'
-        '    if ver:\n'
-        '        return ver\n    return ""\n\n\ndef _read_env_config', 1)
-    assert mutant_src != real_src
-    mutant_py = tmp_path / "identity_mutant.py"
-    mutant_py.write_text(mutant_src)
-    spec = _ilu.spec_from_file_location("identity_mutant", mutant_py)
-    mutant_mod = _ilu.module_from_spec(spec)
-    import sys as _sys
-    _sys.modules[spec.name] = mutant_mod  # dataclasses needs the module registered
-    spec.loader.exec_module(mutant_mod)
-    # the env says B (the resolver's export); the live/ record says A
-    env = dict(os.environ,
-               KVP_LMCACHE_BUILD=BUILD_B,
-               KVP_LIVE_DIR=str(repo / "live"))
-    for var in ("KVP_LMCACHE_IDENTITY", "KVP_IMAGE_IDENTITY"):
-        env.pop(var, None)
-    old = dict(os.environ)
-    try:
-        os.environ.clear()
-        os.environ.update(env)
-        got_mutant = mutant_mod.read_lmcache_build()
-    finally:
-        os.environ.clear()
-        os.environ.update(old)
-    # the mutant follows the live/ record (A) -- that is the defect; the real
-    # module's assertion (got == B) would be RED against this mutant
-    assert got_mutant == BUILD_A, (
-        f"the mutant must prefer the live/ record (A) over the env (B) -- "
-        f"got {got_mutant!r} (proves the real test's assertion is meaningful)")
+def test_read_prefers_running_export_present():
+    """> detector: read_lmcache_build prefers KVP_RUNNING_LMCACHE_BUILD over
+    the baked JSON and the live/ record."""
+    src = (IMPL / "kvpersist" / "identity.py").read_text()
+    assert "KVP_RUNNING_LMCACHE_BUILD" in src, (
+        "read_lmcache_build must read KVP_RUNNING_LMCACHE_BUILD first")

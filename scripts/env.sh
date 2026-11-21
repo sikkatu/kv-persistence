@@ -884,11 +884,10 @@ _kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root
   local _verify_args=()
   [ "${KVP_VERIFY_SHALLOW:-0}" = "1" ] || _verify_args+=(--deep)
   [ -n "$exp_base" ] && _verify_args+=(--expected-base "$exp_base")
-  # r21 L1: the deep check reads the baked identity JSON -- capture the build
-  # identity it prints (KVP_WHEEL_VERSION=) and export it as
-  # KVP_LMCACHE_BUILD. This ties the cache namespace to the image that will
-  # ACTUALLY run (the last build's record in live/image-identity.env is a
-  # build HISTORY, not the running image).
+  # r22 M1: the BUILD identity of the RUNNING image is exported under its own
+  # name (KVP_RUNNING_LMCACHE_BUILD). KVP_LMCACHE_BUILD is the OPERATOR PIN
+  # (files or the operator's env) and is never overwritten by the resolver --
+  # that pin is what the gate cross-checks against the running image.
   local _out
   _out="$(PYTHONPATH="$root/implementation${PYTHONPATH:+:$PYTHONPATH}" \
     python3 -m kvpersist.check_image_identity "$img" "$root/vendor/patches/lmcache" "${_verify_args[@]}")" || rc=$?
@@ -897,8 +896,8 @@ _kvp_require_custom_image() { # _kvp_require_custom_image <image> <kvp-repo-root
     local _wv
     _wv="$(printf '%s\n' "$_out" | sed -n 's/^KVP_WHEEL_VERSION=//p' | tail -1)"
     if [ -n "$_wv" ]; then
-      KVP_LMCACHE_BUILD="$_wv"
-      export KVP_LMCACHE_BUILD
+      KVP_RUNNING_LMCACHE_BUILD="$_wv"
+      export KVP_RUNNING_LMCACHE_BUILD
     fi
   fi
   return "$rc"
@@ -964,6 +963,15 @@ _kvp_resolve_runtime_image() {
     return 1
   fi
 
+  # -- input equals live/image: nothing to decide, ordinary deep check
+  if [ -n "$_live_image" ] && [ "$_in" = "$_live_image" ]; then
+    export IMAGE="$_in"
+    _kvp_require_custom_image "$IMAGE" "$root" \
+      || { echo "ERROR: IMAGE '$IMAGE' is NOT the custom LMCache derivative." >&2
+           echo "  Fix: rebuild with bash scripts/build-lmcache.sh && bash scripts/build-image.sh" >&2
+           return 1; }
+    return 0
+  fi
   # -- explicit sha256:<64hex> override: it WINS (README contract "explicit
   # IMAGE wins"); the deep check below decides whether it is our custom build
   case "$_in" in
@@ -980,15 +988,6 @@ _kvp_resolve_runtime_image() {
       ;;
   esac
 
-  # -- input equals live/image: nothing to decide, ordinary deep check
-  if [ -n "$_live_image" ] && [ "$_in" = "$_live_image" ]; then
-    export IMAGE="$_in"
-    _kvp_require_custom_image "$IMAGE" "$root" \
-      || { echo "ERROR: IMAGE '$IMAGE' is NOT the custom LMCache derivative." >&2
-           echo "  Fix: rebuild with bash scripts/build-lmcache.sh && bash scripts/build-image.sh" >&2
-           return 1; }
-    return 0
-  fi
   # r21 L6: a BARE TAG (no @sha256: digest) is a user format error -- the
   # misleading "base pin mismatch, rebuild" advice must NOT fire for it.
   case "$_in" in
