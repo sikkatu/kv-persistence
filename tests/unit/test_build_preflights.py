@@ -36,7 +36,12 @@ def _run(tmp_path: pathlib.Path, docker_mode: str):
                 (bin_dir / tool).symlink_to(real)
         path = str(bin_dir)
     env = dict(os.environ, PATH=path,
-               KVP_PIN_FILE=str(PIN_FILE))
+               KVP_PIN_FILE=str(PIN_FILE),
+               # r23 D2: keep the default OUT_DIR (repo live/lmcache-build)
+               # out of the REAL live/ -- build-lmcache.sh does mkdir -p
+               # "$OUT_DIR" before any pre-flight.
+               KVP_OUT_DIR=str(tmp_path / "out"),
+               KVP_BUILD_DIR=str(tmp_path / "build"))
     r = subprocess.run(["bash", str(BUILD_LMC)], capture_output=True,
                        text=True, timeout=60, env=env, cwd=str(tmp_path))
     return r

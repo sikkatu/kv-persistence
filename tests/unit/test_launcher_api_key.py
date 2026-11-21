@@ -48,7 +48,14 @@ def _base_env(tmp_path: Path) -> dict:
     # ($HOME/.config/kvp/api_key) FIRST -- point it at the repo live/api_key
     # so these tests fully control the key source (no leak from the real
     # canonical path).
-    env["KVP_API_KEY_FILE"] = str(KEY_FILE)
+    # r23 D2: the key file AND the mirror dir live under tmp_path -- the
+    # launcher migration copies $LIVE_DIR/api_key -> the key file, so the
+    # mirror must never be shared across tests (or the repo's real live/).
+    live = tmp_path / "live"
+    live.mkdir(exist_ok=True)
+    env["KVP_API_KEY_FILE"] = str(live / "api_key")
+    env["LIVE_DIR"] = str(live)
+    env["KVP_LIVE_DIR"] = str(live)
     env["IMAGE"] = "x@sha256:" + "a" * 64
     model = tmp_path / "model"
     model.mkdir(exist_ok=True)
@@ -56,93 +63,67 @@ def _base_env(tmp_path: Path) -> dict:
     return env
 
 
-def _preserve_key():
-    """Round-31 lesson: never destroy the operator's real live/api_key."""
-    if KEY_FILE.exists():
-        return KEY_FILE.read_bytes()
-    return None
-
-
-def _restore_key(saved):
-    if saved is None:
-        if KEY_FILE.exists():
-            KEY_FILE.unlink()
-    else:
-        KEY_FILE.write_bytes(saved)
+def _key_path(tmp_path: Path) -> Path:
+    """r23 D2: the key file under the per-test tmp live/ (not the repo's)."""
+    return tmp_path / "live" / "api_key"
 
 
 def test_loopback_bind_auto_generates_api_key(tmp_path):
     """Loopback + no key -> the launcher generates one and saves it to
     live/api_key (mode 600), exactly like the recipe launchers. The run may
     stop later for other reasons -- the KEY FILE is the contract under test."""
-    saved = _preserve_key()
-    try:
-        if KEY_FILE.exists():
-            KEY_FILE.unlink()
-        env = _base_env(tmp_path)
-        r = subprocess.run(["bash", str(LAUNCHER)], env=env,
-                           capture_output=True, text=True, timeout=120)
-        combined = r.stdout + r.stderr
-        assert KEY_FILE.exists(), (
-            "a loopback launch with no key must AUTO-GENERATE live/api_key:\n"
-            + combined[-1500:]
-        )
-        key = KEY_FILE.read_text().strip()
-        assert len(key) >= 32, f"generated key too short: {len(key)} chars"
-        assert "auto-generated" in combined, (
-            "the launcher must SAY it generated the key:\n" + combined[-1500:]
-        )
-        mode = stat.S_IMODE(KEY_FILE.stat().st_mode)
-        assert mode == 0o600, f"live/api_key must be 0600, got {oct(mode)}"
-    finally:
-        _restore_key(saved)
+    key_file = _key_path(tmp_path)
+    env = _base_env(tmp_path)
+    r = subprocess.run(["bash", str(LAUNCHER)], env=env,
+                       capture_output=True, text=True, timeout=120)
+    combined = r.stdout + r.stderr
+    assert key_file.exists(), (
+        "a loopback launch with no key must AUTO-GENERATE the api key file:\n"
+        + combined[-1500:]
+    )
+    key = key_file.read_text().strip()
+    assert len(key) >= 32, f"generated key too short: {len(key)} chars"
+    assert "auto-generated" in combined, (
+        "the launcher must SAY it generated the key:\n" + combined[-1500:]
+    )
+    mode = stat.S_IMODE(key_file.stat().st_mode)
+    assert mode == 0o600, f"the api key file must be 0600, got {oct(mode)}"
 
 
 def test_non_loopback_bind_without_key_is_refused(tmp_path):
     """A routable bind with no key must be REFUSED (fail-safe: a server on a
     routable address is always authenticated) -- and no key is generated."""
-    saved = _preserve_key()
-    try:
-        if KEY_FILE.exists():
-            KEY_FILE.unlink()
-        env = _base_env(tmp_path)
-        env["BIND"] = "0.0.0.0"
-        r = subprocess.run(["bash", str(LAUNCHER)], env=env,
-                           capture_output=True, text=True, timeout=120)
-        assert r.returncode != 0, (
-            "a non-loopback bind without a key must abort:\n"
-            + (r.stdout + r.stderr)[-1500:]
-        )
-        combined = r.stdout + r.stderr
-        assert "non-loopback" in combined.lower(), (
-            "the refusal must name the non-loopback bind:\n" + combined[-1500:]
-        )
-        assert not KEY_FILE.exists(), (
-            "no key may be generated for a refused non-loopback bind"
-        )
-    finally:
-        _restore_key(saved)
+    key_file = _key_path(tmp_path)
+    env = _base_env(tmp_path)
+    env["BIND"] = "0.0.0.0"
+    r = subprocess.run(["bash", str(LAUNCHER)], env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0, (
+        "a non-loopback bind without a key must abort:\n"
+        + (r.stdout + r.stderr)[-1500:]
+    )
+    combined = r.stdout + r.stderr
+    assert "non-loopback" in combined.lower(), (
+        "the refusal must name the non-loopback bind:\n" + combined[-1500:]
+    )
+    assert not key_file.exists(), (
+        "no key may be generated for a refused non-loopback bind"
+    )
 
 
 def test_explicit_api_key_is_honoured(tmp_path):
     """An explicit API_KEY must be used verbatim for a non-loopback bind --
     no auto-generation, no refusal."""
-    saved = _preserve_key()
-    try:
-        if KEY_FILE.exists():
-            KEY_FILE.unlink()
-        env = _base_env(tmp_path)
-        env["API_KEY"] = "explicit-key-0123456789abcdef0123456789"
-        env["BIND"] = "0.0.0.0"
-        r = subprocess.run(["bash", str(LAUNCHER)], env=env,
-                           capture_output=True, text=True, timeout=120)
-        combined = r.stdout + r.stderr
-        assert "API_KEY required" not in combined, (
-            "an explicit key must satisfy a non-loopback bind:\n" + combined[-1500:]
-        )
-        assert "auto-generated" not in combined, (
-            "an explicit key must NOT be replaced by a generated one:\n"
-            + combined[-1500:]
-        )
-    finally:
-        _restore_key(saved)
+    env = _base_env(tmp_path)
+    env["API_KEY"] = "explicit-key-0123456789abcdef0123456789"
+    env["BIND"] = "0.0.0.0"
+    r = subprocess.run(["bash", str(LAUNCHER)], env=env,
+                       capture_output=True, text=True, timeout=120)
+    combined = r.stdout + r.stderr
+    assert "API_KEY required" not in combined, (
+        "an explicit key must satisfy a non-loopback bind:\n" + combined[-1500:]
+    )
+    assert "auto-generated" not in combined, (
+        "an explicit key must NOT be replaced by a generated one:\n"
+        + combined[-1500:]
+    )

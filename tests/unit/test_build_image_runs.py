@@ -96,6 +96,9 @@ case "$cmd" in
     # distinguishes them exactly like the real container would.
     case "$*" in
       *_smoke_cache_server*)
+        # r23 D5.3: record the smoke invocation so the port-argument test can
+        # assert the port comes from the KVP_SMOKE_PORT default, not a hardcode.
+        echo "$*" >> "${{KVP_SMOKE_ARGS_LOG:-/dev/null}}"
         _codec=none
         for a in "$@"; do case "$a" in zstd|none) _codec="$a" ;; esac; done
         case "$_codec" in

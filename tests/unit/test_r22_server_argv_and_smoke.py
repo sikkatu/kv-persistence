@@ -125,7 +125,7 @@ def test_b1_mutation_default_lru_is_red():
     assert mutant != src
     # the normalization should still rescue the lowercase default -- so the
     # REAL defense is the normalize step; drop it too and the mutant fails
-    mutant2 = mutant.replace('    lru|Lru) printf \'LRU\' ;;\n', '')
+    mutant2 = mutant.replace('    lru) printf \'LRU\' ;;\n', '')
     assert mutant2 != mutant
     out = subprocess.run(["bash", "-c",
                           'set -u\n. /dev/stdin\n_kvp_server_argv h p 1 1 /tmp/nonexist.json ""'],
@@ -224,12 +224,14 @@ def test_b2_mp_ping_neither_path_is_3(tmp_path):
 # B3: the smoke loads the SHIPPED configs (chunk-size 256), not defaults
 # ---------------------------------------------------------------------------
 def _read_argv_via_stub(argv_file: pathlib.Path, script: str,
-                        args: list[str], env: dict | None = None) -> list[str]:
+                        args: list[str], env: dict | None = None):
     """Run a REAL script with a python3 stub that records `kvpersist.launch`
-    argv (NUL-separated) to argv_file; anything else is executed by the real
-    python3."""
+    argv (NUL-separated) to argv_file and touches a `ready` file ONLY after
+    the argv is fully written and the SIGTERM trap is installed (r23 D1:
+    the mp_ping stub waits for `ready` -- no launch/SIGTERM race)."""
     bin_dir = argv_file.parent / "bin"
     bin_dir.mkdir(exist_ok=True)
+    ready = argv_file.parent / "ready"
     real_py = subprocess.run(["which", "python3"], capture_output=True,
                              text=True).stdout.strip()
     stub = bin_dir / "python3"
@@ -237,16 +239,29 @@ def _read_argv_via_stub(argv_file: pathlib.Path, script: str,
 case "$*" in
   *kvpersist.launch*)
     : > "{argv_file}"
-    shift 2 2>/dev/null || true
-    case "$a" in --help) continue ;; esac
-    for a in "$@"; do printf '%s\\0' "$a" >> "{argv_file}"; done
-    # behave like a server that starts and exits on SIGTERM
+    # r23 D1/D2: record the argv STARTING at "server" (skip the interpreter's
+    # own `-m kvpersist.launch` and any --help probe) -- the consumers parse
+    # the recorded list as ("server" --flag val ...).
+    seen=0
+    for a in "$@"; do
+      if [ "$a" = "server" ]; then seen=1; fi
+      [ "$seen" = 1 ] || continue
+      case "$a" in --help) continue ;; esac
+      printf '%s\\0' "$a" >> "{argv_file}"
+    done
     trap 'echo "MPCacheServer closed"; echo "persist_enabled=True, keeping data files on disk"; exit 143' TERM
+    touch "{ready}"
     sleep 5 &
     wait $! 2>/dev/null
     echo "MPCacheServer closed"; echo "persist_enabled=True, keeping data files on disk"
     exit 0 ;;
-  *kvpersist.mp_ping*) exit 0 ;;
+  *kvpersist.mp_ping*)
+    # r23 D1: readiness = the launch stub finished writing argv + trap
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -f "{ready}" ] && exit 0
+      sleep 1
+    done
+    exit 2 ;;
   *check_codec_available*) exit 0 ;;
   *) exec "{real_py}" "$@" ;;
 esac
@@ -315,31 +330,43 @@ def test_b3_smoke_chunk_size_not_1(tmp_path):
 # B5: clean-exit criterion (code 0 or 143 + both shutdown markers)
 # ---------------------------------------------------------------------------
 def _run_smoke_with_server_stub(tmp_path: pathlib.Path, *, exit_code: int,
-                                markers: bool, hang: bool = False):
+                                closed: bool = True, persist: bool = True,
+                                hang: bool = False):
     """Run the REAL _smoke_cache_server.sh with a python3 stub whose server
-    behaves like the real one: on SIGTERM prints the shutdown markers (when
-    `markers`) and exits `exit_code` (or hangs when `hang`). Returns the
-    CompletedProcess."""
+    behaves like the real one. r23 D5.1: `closed` (MPCacheServer closed) and
+    `persist` (persist_enabled=True, keeping data files on disk) are separate;
+    `hang` = the stub ignores SIGTERM (trap '' TERM). The `ready` file is
+    touched only after the trap is installed and the markers are armed (r23
+    D1: no SIGTERM race)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
+    ready = tmp_path / "ready"
     real_py = subprocess.run(["which", "python3"], capture_output=True,
                              text=True).stdout.strip()
-    marker_lines = (
-        'echo "MPCacheServer closed"\n'
-        'echo "persist_enabled=True, keeping data files on disk"\n'
-        if markers else '')
+    m_closed = 'echo "MPCacheServer closed"' if closed else 'true'
+    m_persist = ('echo "persist_enabled=True, keeping data files on disk"'
+                 if persist else 'true')
+    if hang:
+        trap_line = "trap '' TERM"
+        tail = "sleep 360 & wait $! 2>/dev/null; exit 0"
+    else:
+        trap_line = (f"trap '{m_closed}; {m_persist}; exit {exit_code}' TERM")
+        tail = f"{m_closed}; {m_persist}; exit {exit_code}"
     stub = bin_dir / "python3"
     stub.write_text(f'''#!/usr/bin/env bash
 case "$*" in
   *kvpersist.launch*)
-    if [ "{str(hang).lower()}" = "true" ]; then
-      sleep 360 & wait $! 2>/dev/null
-    fi
-    trap '{marker_lines}exit {exit_code}' TERM
+    {trap_line}
+    touch "{ready}"
     sleep 360 &
     wait $! 2>/dev/null
-    {marker_lines}exit {exit_code} ;;
-  *kvpersist.mp_ping*) exit 0 ;;
+    {tail} ;;
+  *kvpersist.mp_ping*)
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -f "{ready}" ] && exit 0
+      sleep 1
+    done
+    exit 2 ;;
   *check_codec_available*) exit 0 ;;
   *) exec "{real_py}" "$@" ;;
 esac
@@ -348,7 +375,8 @@ esac
     env = dict(os.environ,
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
                KVP_SMOKE_REPO=str(ROOT),
-               KVP_SMOKE_PORT="15556")
+               KVP_SMOKE_PORT="15556",
+               KVP_SMOKE_TERM_TIMEOUT="3")
     for var in ("LMCACHE_EVICTION_POLICY",):
         env.pop(var, None)
     r = subprocess.run(["bash", str(ROOT / "scripts" / "_smoke_cache_server.sh"),
@@ -361,7 +389,7 @@ esac
 def test_b5_exit_143_with_markers_passes(tmp_path):
     """> The real server exits 143 after SIGTERM with both shutdown markers
     -> the smoke PASSES and prints EXIT=0 (143 is NORMAL for this server)."""
-    r = _run_smoke_with_server_stub(tmp_path, exit_code=143, markers=True)
+    r = _run_smoke_with_server_stub(tmp_path, exit_code=143, closed=True, persist=True)
     out = r.stdout + r.stderr
     assert r.returncode == 0, f"143 + both markers must pass:\n{out[-800:]}"
     assert "KVP_SMOKE_ZSTD_EXIT=0" in out, out[-800:]
@@ -369,7 +397,7 @@ def test_b5_exit_143_with_markers_passes(tmp_path):
 
 def test_b5_exit_0_with_markers_passes(tmp_path):
     """> Exit code 0 with both markers -> passes."""
-    r = _run_smoke_with_server_stub(tmp_path, exit_code=0, markers=True)
+    r = _run_smoke_with_server_stub(tmp_path, exit_code=0, closed=True, persist=True)
     out = r.stdout + r.stderr
     assert r.returncode == 0, f"0 + both markers must pass:\n{out[-800:]}"
     assert "KVP_SMOKE_ZSTD_EXIT=0" in out, out[-800:]
@@ -378,7 +406,7 @@ def test_b5_exit_0_with_markers_passes(tmp_path):
 def test_b5_exit_143_without_markers_refuses(tmp_path):
     """> Exit 143 but the shutdown markers are MISSING -> refusal (the
     markers prove the server closed cleanly and kept the L2 data)."""
-    r = _run_smoke_with_server_stub(tmp_path, exit_code=143, markers=False)
+    r = _run_smoke_with_server_stub(tmp_path, exit_code=143, closed=False, persist=False)
     out = r.stdout + r.stderr
     assert r.returncode != 0, f"143 without markers must be refused:\n{out[-800:]}"
     assert "MPCacheServer closed" in out, (
@@ -388,7 +416,7 @@ def test_b5_exit_143_without_markers_refuses(tmp_path):
 
 def test_b5_exit_137_refuses(tmp_path):
     """> Exit 137 (killed by the timeout) -> refusal."""
-    r = _run_smoke_with_server_stub(tmp_path, exit_code=137, markers=True)
+    r = _run_smoke_with_server_stub(tmp_path, exit_code=137, closed=True, persist=True)
     out = r.stdout + r.stderr
     assert r.returncode != 0, f"137 must be refused:\n{out[-800:]}"
     assert "137" in out, out[-800:]
@@ -396,7 +424,7 @@ def test_b5_exit_137_refuses(tmp_path):
 
 def test_b5_exit_1_refuses(tmp_path):
     """> Exit code 1 -> refusal."""
-    r = _run_smoke_with_server_stub(tmp_path, exit_code=1, markers=True)
+    r = _run_smoke_with_server_stub(tmp_path, exit_code=1, closed=True, persist=True)
     out = r.stdout + r.stderr
     assert r.returncode != 0, f"exit 1 must be refused:\n{out[-800:]}"
 
@@ -419,14 +447,18 @@ def test_b6_smoke_port_not_the_production_port():
 
 
 def test_b6_live_fd_socket_refuses_with_port_number(tmp_path):
-    """> A LIVE listener on /dev/shm/lmcache_fd_<port>.sock -> the smoke
-    refuses with the port number in the message."""
+    """> A LIVE AF_UNIX SOCK_SEQPACKET listener on /dev/shm/lmcache_fd_<port>.sock
+    (the pinned lmcache fd-channel type) -> the smoke refuses with the port
+    number in the message."""
     import socket
     port = 15557
     sock_path = f"/dev/shm/lmcache_fd_{port}.sock"
     if pathlib.Path(sock_path).exists():
         pathlib.Path(sock_path).unlink()
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # r23 D3: the pinned lmcache fd-channel socket is AF_UNIX
+    # SOCK_SEQPACKET (fd_channel.py:14,53,92) -- the probe must match
+    # the REAL type, not SOCK_STREAM.
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     srv.bind(sock_path)
     srv.listen(1)
     try:
@@ -519,19 +551,30 @@ esac
 # B4: the REAL consumers (start-cache.sh docker + host, smoke) all deliver a
 # ONE-ELEMENT --l2-adapter -- and the argv parity smoke == docker start-cache
 # ---------------------------------------------------------------------------
-def _start_cache_argv(tmp_path: pathlib.Path, mode: str, cache_root: pathlib.Path):
+def _start_cache_argv(tmp_path: pathlib.Path, mode: str, cache_root: pathlib.Path,
+                      extra_env: dict | None = None,
+                      require_launch: bool = True):
     """Run the REAL start-cache.sh (docker/host) with stubs recording the
-    `kvpersist.launch server` argv (NUL-separated) and a fake server that
-    holds the request port (readiness) and shuts down cleanly on SIGTERM."""
+    `kvpersist.launch server` argv and a fake server that holds the request
+    port and shuts down cleanly on SIGTERM. r23 D2.1: the helper owns its
+    KVP_LIVE_DIR (image + image-identity.env written there -- NEVER the repo
+    live/); r23 D1: the `ready` file is touched only after listen() + trap."""
     argv_file = tmp_path / f"argv_{mode}.bin"
     bin_dir = tmp_path / f"bin_{mode}"
     bin_dir.mkdir(exist_ok=True)
+    live = tmp_path / "live"
+    live.mkdir(exist_ok=True)
+    (live / "image").write_text("sha256:" + "c" * 64 + "\n")
+    (live / "image-identity.env").write_text(
+        "KVP_LMC_VERSION=0.5.8rc1.post48+kvp.bbbbbbbbbbbb\n")
+    ready = tmp_path / "ready"
     real_py = subprocess.run(["which", "python3"], capture_output=True,
                              text=True).stdout.strip()
-    # a fake server: bind the request port, exit 143 + markers on SIGTERM
+    # fake server: bind the request port, exit 143 + markers on SIGTERM
     (bin_dir / "fake_server.py").write_text('''
 import signal, socket, sys, time
 port = int(sys.argv[1])
+ready = sys.argv[2]
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", port))
@@ -543,6 +586,7 @@ def _term(*a):
     sys.exit(143)
 
 signal.signal(signal.SIGTERM, _term)
+open(ready, "w").close()
 time.sleep(30)
 print("MPCacheServer closed")
 print("persist_enabled=True, keeping data files on disk")
@@ -559,14 +603,19 @@ sys.exit(143)
       if [ "$prev" = "--port" ]; then _port="$a"; fi
       prev="$a"
     done
-    exec "{real_py}" "{bin_dir}/fake_server.py" "$_port"'''
+    exec "{real_py}" "{bin_dir}/fake_server.py" "$_port" "{ready}"'''
     (bin_dir / "python3").write_text(f'''#!/usr/bin/env bash
 case "$*" in
-  *--help*) echo "--http-host --http-port --otlp-endpoint --enable-tracing" ;;
+  *kvpersist.launch*server*--help*) echo "--http-host --http-port --otlp-endpoint --enable-tracing" ;;
   *kvpersist.launch*server*)
     prev=""
     {record} ;;
-  *kvpersist.mp_ping*) exit 0 ;;
+  *kvpersist.mp_ping*)
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -f "{ready}" ] && exit 0
+      sleep 1
+    done
+    exit 2 ;;
   *check_codec_available*) exit 0 ;;
   *) exec "{real_py}" "$@" ;;
 esac
@@ -606,7 +655,7 @@ case "$cmd" in
     esac ;;
   run)
     case "$_all" in
-      *--help*) echo "--http-host --http-port --otlp-endpoint --enable-tracing" ;;
+      *kvpersist.launch*server*--help*) echo "--http-host --http-port --otlp-endpoint --enable-tracing" ;;
       *kvpersist.launch*server*)
         prev=""
         {record} ;;
@@ -637,23 +686,27 @@ esac
                KVP_LAUNCH_MODE=mode,
                KVP_CACHE_ROOT=str(cache_root),
                KVP_CACHE_BUDGET_GB="1",
-               KVP_SMOKE_PORT="15560",
-               KVP_SKIP_IPC_TEST="1")
+               KVP_LIVE_DIR=str(live),
+               LIVE_DIR=str(live),
+               KVP_SKIP_IPC_TEST="1",
+               LMCACHE_L2_SERDE="none")
     for var in ("IMAGE", "DOCKER_IMAGE", "KVP_LMCACHE_BUILD",
-                "KVP_SKIP_LMC_IDENTITY", "KVP_SKIP_IMAGE_CHECK",
-                "LMCACHE_EVICTION_POLICY"):
+                "KVP_RUNNING_LMCACHE_BUILD", "KVP_SKIP_LMC_IDENTITY",
+                "KVP_SKIP_IMAGE_CHECK", "LMCACHE_EVICTION_POLICY"):
         env.pop(var, None)
     cache_root.mkdir(exist_ok=True)
     # host mode: the cache root must exist and the request port must be free
     env["LMCACHE_PORT"] = "15562"
     env["LMCACHE_HOST"] = "127.0.0.1"
+    if extra_env:
+        env.update(extra_env)
     r = subprocess.run(["bash", str(ROOT / "scripts" / "start-cache.sh")],
                        capture_output=True, text=True, timeout=120, env=env,
                        cwd=str(tmp_path))
-    if not argv_file.exists():
+    if require_launch and not argv_file.exists():
         raise AssertionError(
             f"start-cache ({mode}) must launch the server:\n{r.stdout}\n{r.stderr}")
-    return _argv_from_file(argv_file), r
+    return (_argv_from_file(argv_file) if argv_file.exists() else []), r
 
 
 def test_b4_start_cache_docker_argv_parses_like_pin(tmp_path):
@@ -753,7 +806,7 @@ def test_b4_mutation_line_split_argv_is_red(tmp_path):
     ad.write_text(pretty)
     script = (
         "set -u\n" + mutant + "\n"
-        f"_kvp_server_argv_read ARR < <(_kvp_server_argv h p 1 1 '{ad}' \"\")\n"
+        f"_kvp_server_argv_read ARR h p 1 1 '{ad}' \"\"\n"
         "printf '%s\\n' \"${ARR[@]}\""
     )
     out = subprocess.run(["bash", "-c", script], capture_output=True,

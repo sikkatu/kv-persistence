@@ -259,16 +259,12 @@ def test_host_mode_mismatch_hint_names_the_built_wheel(tmp_path):
     RUNNABLE -- the path of the single *.whl under live/lmcache-build/wheels,
     with --force-reinstall --no-deps, and NO `lmcache==<version>` (such a
     package does not exist on PyPI)."""
-    # a real wheel name in the repo's live dir (what build-lmcache.sh leaves)
-    live = ROOT / "live" / "lmcache-build" / "wheels"
-    created = False
-    if not live.exists():
-        live.mkdir(parents=True, exist_ok=True)
-        created = True
+    # r23 D2: the wheel lives in the ISOLATED KVP_LIVE_DIR (tmp), never the
+    # repo's real live/ (the conftest guard fails the session on writes there).
+    live = tmp_path / "live" / "lmcache-build" / "wheels"
+    live.mkdir(parents=True, exist_ok=True)
     whl = live / "lmcache-0.5.8rc1.post48+kvp.60dce759ea93-cp312-cp312-linux_x86_64.whl"
-    had_whl = whl.exists()
-    if not had_whl:
-        whl.write_bytes(b"PK\x05\x06stub")
+    whl.write_bytes(b"PK\x05\x06stub")
     try:
         home, bindir = _setup(tmp_path, "0.5.3", "0.5.6")
         cache_root = tmp_path / "cache"
@@ -282,6 +278,7 @@ def test_host_mode_mismatch_hint_names_the_built_wheel(tmp_path):
                 capture_output=True, text=True, timeout=60,
                 env={**os.environ, "HOME": str(home),
                      "PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+                     "KVP_LIVE_DIR": str(tmp_path / "live"),
                      "KVP_SKIP_IPC_TEST": "1",
                      "LMCACHE_L2_SERDE": "zstd"},
                 cwd=str(ROOT))
@@ -299,11 +296,5 @@ def test_host_mode_mismatch_hint_names_the_built_wheel(tmp_path):
             f"the unrunnable `lmcache==<version>` hint must be GONE:\n"
             f"{combined[-1500:]}")
     finally:
-        if not had_whl:
-            whl.unlink(missing_ok=True)
-        if created:
-            try:
-                live.rmdir()
-                (ROOT / "live" / "lmcache-build").rmdir()
-            except OSError:
-                pass
+        # r23 D2: everything is under tmp_path -- nothing to restore
+        pass

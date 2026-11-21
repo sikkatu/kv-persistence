@@ -203,7 +203,7 @@ def test_obs_marker_written_on_fresh_clone(tmp_path):
     # simulate a fresh clone: no live/ dir in the repo
     repo_live = KV / "live"
     marker = repo_live / "obs_started"
-    saved = marker.read_text() if marker.exists() else None
+    saved_marker = marker.read_text() if marker.exists() else None
     if repo_live.exists():
         # keep the dir but remove the marker (the mkdir case is covered by
         # start-all creating it when missing)
@@ -224,7 +224,7 @@ def test_obs_marker_written_on_fresh_clone(tmp_path):
             "before the write) -- otherwise stop-all.sh never stops what it "
             "started")
     finally:
-        if saved is not None:
-            marker.write_text(saved)
+        if saved_marker is not None:
+            marker.write_text(saved_marker)
         else:
             marker.unlink(missing_ok=True)
