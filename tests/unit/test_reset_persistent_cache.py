@@ -65,6 +65,10 @@ def run_reset(cache_root: str, confirm: str | None = CONFIRM, extra_env=None,
     else:
         env.pop("KVP_RESET_CONFIRM", None)
     env["KVP_MODEL_CONFIG"] = "generic"
+    # r23 D2: reports and log archives land under a tmp live dir, never the
+    # repo's real live/ (the reset script honors KVP_LIVE_DIR).
+    if tmp_path is not None:
+        env["KVP_LIVE_DIR"] = str(tmp_path / "live")
     if stub_bin is not None:
         env["PATH"] = stub_bin + ":" + env["PATH"]
     elif quiet_services:
@@ -174,17 +178,17 @@ def test_refuses_while_service_running(tmp_path):
 def test_clears_payload_but_preserves_diagnostics(tmp_path):
     d = make_cache(tmp_path)
     log_before = (d / "lmcache-server.log").read_text()
-    r = run_reset(str(d))
+    r = run_reset(str(d), tmp_path=tmp_path)
     assert r.returncode == 0, (r.stdout + r.stderr)[-2000:]
     # diagnostics preserved
     assert (d / "lmcache-server.log").is_file(), "diagnostic log must be preserved"
     assert (d / "lmcache-server.log").read_text() == log_before, "log content must be unchanged"
     assert (d / "lmcache-server.pid").is_file()
     assert (d / "l2-adapter.rendered.json").is_file()
-    # an archive copy must exist in live/
-    live = ROOT / "live"
+    # an archive copy must exist under the tmp live dir (KVP_LIVE_DIR)
+    live = tmp_path / "live"
     archives = list(live.glob("lmcache-server-pre-reset-*.log"))
-    assert archives, "log archive under live/ is missing"
+    assert archives, "log archive under the live dir is missing"
     # payload cleared
     assert not (d / "objects").exists(), "cache payload must be removed"
     assert not (d / "index.db").exists(), "index file must be removed"
@@ -211,9 +215,9 @@ def test_symlinked_cache_root_is_really_cleared(tmp_path):
 
 def test_report_lists_paths_and_preserved(tmp_path):
     d = make_cache(tmp_path)
-    r = run_reset(str(d))
+    r = run_reset(str(d), tmp_path=tmp_path)
     assert r.returncode == 0
-    reports = sorted((ROOT / "live").glob("cache-reset-report-*.txt"))
+    reports = sorted((tmp_path / "live").glob("cache-reset-report-*.txt"))
     assert reports, "reset report is missing"
     text = reports[-1].read_text()
     assert "--- cleared paths ---" in text
