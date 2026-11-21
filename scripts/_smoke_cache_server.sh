@@ -35,6 +35,17 @@ set -Eeuo pipefail
 CODEC="${1:?codec (zstd|none) required}"
 CACHE_ROOT="${2:?cache root required}"
 PORT="${3:-${KVP_SMOKE_PORT:-15555}}"
+# r23 D5: the SIGTERM wait is configurable (tests set 2-3s; production 30s)
+# r24 E4.1: validate it BEFORE anything starts -- a non-numeric (or empty)
+# value made `seq` fail later, the wait loop never ran and the smoke lied
+# ("did NOT exit within Xs"). `${VAR-default}` treats "" as set, so an empty
+# override must be an ERROR, not silently fall back to 30.
+TERM_TIMEOUT="${KVP_SMOKE_TERM_TIMEOUT-30}"
+case "$TERM_TIMEOUT" in
+  ''|*[!0-9]*|0)
+    echo "SMOKE FAIL($CODEC): KVP_SMOKE_TERM_TIMEOUT must be an integer >= 1, got '${TERM_TIMEOUT:-<empty>}'" >&2
+    exit 1 ;;
+esac
 # markers are uppercase: KVP_SMOKE_ZSTD_READY=OK / KVP_SMOKE_NONE_EXIT=0
 UCODEC="$(printf '%s' "$CODEC" | tr '[:lower:]' '[:upper:]')"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -136,8 +147,8 @@ echo "KVP_SMOKE_${UCODEC}_READY=OK"
 # `persist_enabled=True, keeping data files on disk` (L2 data is kept).
 kill -TERM "$SRV_PID" 2>/dev/null || true
 EXIT_RC=0
-# r23 D5: the SIGTERM wait is configurable (tests set 2-3s; production 30s)
-TERM_TIMEOUT="${KVP_SMOKE_TERM_TIMEOUT:-30}"
+# r23 D5: the SIGTERM wait is configurable (tests set 2-3s; production 30s).
+# TERM_TIMEOUT was validated at script start (r24 E4.1).
 for _ in $(seq 1 "$TERM_TIMEOUT"); do
   kill -0 "$SRV_PID" 2>/dev/null || break
   sleep 1

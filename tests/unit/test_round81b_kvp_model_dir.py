@@ -27,7 +27,12 @@ case "$(basename "$0")" in
     case "$1" in
       info) exit 0 ;;
       container) exit 1 ;;
-      inspect) echo "running exit=0 oom=false"; exit 0 ;;
+      inspect)
+        # r24 F2: the readiness gate asks for {{.State.Running}} (true/false)
+        case "$*" in
+          *State.Running*) echo true; exit 0 ;;
+        esac
+        echo "running exit=0 oom=false"; exit 0 ;;
       logs) printf '%s' "${STUB_DOCKER_LOGS:-}" ;;
       ps) exit 0 ;;
       run)

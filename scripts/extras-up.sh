@@ -10,7 +10,10 @@
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-OBS_DIR="$ROOT/observability"
+# r24 E1.4: OBS_DIR is overridable so test runs render the generated files
+# (targets/*.json, dcgm-counters.live.csv) into a tmp dir -- they must never
+# appear in the operator's repo tree during a test run.
+OBS_DIR="${KVP_OBS_DIR:-$ROOT/observability}"
 EXTRAS="$OBS_DIR/extras"
 
 warn(){ echo "WARNING: $*" >&2; }

@@ -173,8 +173,13 @@ def test_start_cache_requires_custom_image_check():
 def test_start_cache_defaults_to_docker_mode():
     """r2 P0-1 (review): the shared MP cache server must default to the custom
     derivative image -- defaulting to `host` silently ran upstream LMCache
-    WITHOUT the #4136/#5972 fixes."""
+    WITHOUT the #4136/#5972 fixes. r24 F3: the default lives in the ONE
+    resolver (_kvp_resolve_launch_mode in env.sh) and start-cache.sh calls it."""
     src = (ROOT / "scripts" / "start-cache.sh").read_text()
-    assert 'KVP_LAUNCH_MODE="${KVP_LAUNCH_MODE:-docker}"' in src, (
-        "start-cache.sh must default KVP_LAUNCH_MODE to docker (custom image), not host"
-    )
+    assert "_kvp_resolve_launch_mode" in src, (
+        "start-cache.sh must use the shared launch-mode resolver (r24 F3)")
+    envsh = (ROOT / "scripts" / "env.sh").read_text()
+    assert '_mode="${KVP_LAUNCH_MODE:-docker}"' in envsh, (
+        "the resolver must default KVP_LAUNCH_MODE to docker (custom image), not host")
+    assert 'KVP_LAUNCH_MODE:-host' not in src, (
+        "start-cache.sh must not default KVP_LAUNCH_MODE to host")

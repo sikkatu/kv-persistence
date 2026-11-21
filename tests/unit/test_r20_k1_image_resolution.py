@@ -170,7 +170,11 @@ case "$cmd" in
       python3) echo "0.5.8rc1.post48+kvp.60dce759ea93" ;;
       *) exit 0 ;;
     esac ;;
-  inspect) echo '{CUSTOM}' ;;
+  inspect)
+    case "$*" in
+      *State.Running*) echo true ;;
+      *) echo '{CUSTOM}' ;;
+    esac ;;
   ps) echo "" ;;
 {case_lines}
   *) exit 0 ;;

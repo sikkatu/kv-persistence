@@ -44,7 +44,12 @@ case "$cmd" in
         exit 0 ;;
     esac
     cat > /dev/null; cat "{vbody}"; exit 0 ;;
-  inspect) echo "sha256:$(printf 'a%.0s' $(seq 64))"; exit 0 ;;
+  inspect)
+    case "$*" in
+      *State.Running*) echo true ;;
+      *) echo "sha256:$(printf 'a%.0s' $(seq 64))" ;;
+    esac
+    exit 0 ;;
   build) exit 0 ;;
   *) exit 0 ;;
 esac
@@ -204,7 +209,11 @@ case "$cmd" in
           *) exit 0 ;;
         esac ;;
     esac ;;
-  inspect) echo "{want}" ;;
+  inspect)
+    case "$*" in
+      *State.Running*) echo true ;;
+      *) echo "{want}" ;;
+    esac ;;
   ps) echo "obs_otel_collector"; echo "obs_tempo"; echo "obs_prometheus"; echo "obs_grafana" ;;
   compose) exit 0 ;;
   *) exit 0 ;;

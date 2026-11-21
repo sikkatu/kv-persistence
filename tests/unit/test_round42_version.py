@@ -137,10 +137,13 @@ def _setup_docker(tmp_path: Path, host_ver: str,
         '  inspect)\n'
         '    _fmt=""; _tgt=""\n'
         '    while [ "$#" -gt 0 ]; do case "$1" in\n'
-        '      --format) _fmt="$2"; shift 2 ;;\n'
+        '      --format|-f) _fmt="$2"; shift 2 ;;\n'
         '      *) _tgt="$1"; shift ;;\n'
         '    esac; done\n'
         '    case "$_fmt" in\n'
+        # r24 F2: the readiness/pre-flight gate asks for .State.Running --
+        # answer it from container_present (not from the image lines)
+        f'      *State.Running*) {"echo true" if container_present else "echo false"} ;;\n'
         f'      *".Image"*) echo "{img_line}" ;;\n'
         f'      *".Id"*) echo "{eng_img}" ;;\n'
         # any OTHER format (a tag / name query) answers the SAME value for
@@ -228,16 +231,22 @@ def test_docker_mode_different_images_refused_naming_both(tmp_path):
         f"the fix must be named:\n{combined[-800:]}")
 
 
-def test_docker_mode_no_container_but_port_open_skips_with_note(tmp_path):
-    """No cache container, TCP port open -> NOTE 'check skipped', no
-    refusal."""
+def test_docker_mode_no_container_refuses(tmp_path):
+    """r24 F2: no cache container -> IMMEDIATE refusal (the old NOTE
+    'check skipped' let the engine load ~15 min against a dead cache).
+    The hardware defect: the port was published by the Docker proxy, the
+    TCP probe went green and the run went on. In docker mode the gate now
+    requires the CONTAINER to be alive first."""
     r = _run_pre_flights_docker(tmp_path, container_present=False,
                                 srv_img="", eng_img="sha256:" + "a" * 64)
     combined = r.stdout + r.stderr
-    assert r.returncode == 0, (
-        f"an absent container with an open port must not refuse:\n"
+    assert r.returncode != 0, (
+        f"an absent cache container must refuse the engine start:\n"
         f"{combined[-1500:]}")
-    assert "check skipped" in combined, combined[-800:]
+    assert "NOT running" in combined or "not running" in combined, (
+        f"the refusal must name the dead container:\n{combined[-800:]}")
+    assert "start-cache.sh" in combined, (
+        f"the fix must be named:\n{combined[-800:]}")
 
 
 def test_docker_mode_exec_ping_exit3_is_refused(tmp_path):

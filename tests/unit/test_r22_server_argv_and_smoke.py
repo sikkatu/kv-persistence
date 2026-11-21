@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -553,7 +554,11 @@ esac
 # ---------------------------------------------------------------------------
 def _start_cache_argv(tmp_path: pathlib.Path, mode: str, cache_root: pathlib.Path,
                       extra_env: dict | None = None,
-                      require_launch: bool = True):
+                      require_launch: bool = True,
+                      docker_running: bool = True,
+                      docker_pong: bool = True,
+                      pong_delay: float = 0.0,
+                      port: int = 15562):
     """Run the REAL start-cache.sh (docker/host) with stubs recording the
     `kvpersist.launch server` argv and a fake server that holds the request
     port and shuts down cleanly on SIGTERM. r23 D2.1: the helper owns its
@@ -654,6 +659,26 @@ case "$cmd" in
       inspect) echo '{labels}' ;;
     esac ;;
   run)
+    # r24 F1/F2/E2.1: the image ENTRYPOINT is `vllm` (vllm/vllm-openai).
+    #   * --entrypoint is REQUIRED for any non-vllm command: without it the
+    #     args go to `vllm`, which rejects them and the container dies (the
+    #     hardware defect F1).
+    #   * EVERY docker run is logged (any args) so tests can assert "0 server
+    #     launches" on a refusal (E2.1).
+    echo "$*" >> "{bin_dir}/docker-run.log"
+    case " $* " in
+      *" --entrypoint "*) : ;;
+      *)
+        case "$_all" in
+          serve|chat|complete|api|serve*) : ;;
+          *)
+            # r24 F1.3: this is exactly the hardware failure -- the vllm
+            # ENTRYPOINT rejects the command and the container never runs.
+            echo "vllm: error: unrecognized arguments: $_all" >&2
+            touch "{bin_dir}/dead-marker"
+            exit 2 ;;
+        esac ;;
+    esac
     case "$_all" in
       *kvpersist.launch*server*--help*) echo "--http-host --http-port --otlp-endpoint --enable-tracing" ;;
       *kvpersist.launch*server*)
@@ -668,11 +693,29 @@ IDENTEOF
       *check_codec_available*) exit 0 ;;
     esac
     exit 0 ;;
-  exec) cat <<'IDENTEOF'
+  inspect)
+    # r24 F2: `docker inspect -f '{{{{.State.Running}}}}' <name>` -- the
+    # readiness gate checks the CONTAINER, not the docker-run client pid.
+    # The marker is a FILE check (created on ENTRYPOINT failure or by tests).
+    for a in "$@"; do
+      case "$a" in
+        *State.Running*)
+          if [ -f "{bin_dir}/dead-marker" ]; then echo false; else echo true; fi
+          exit 0 ;;
+      esac
+    done
+    echo "sha256:{'c' * 64}" ;;
+  exec)
+    # r24 F2: `docker exec <name> python3 -m kvpersist.mp_ping ...` -- the
+    # readiness gate pings the server INSIDE the container.
+    case "$*" in
+      *mp_ping*)
+        if [ -f "{bin_dir}/pong" ]; then exit 0; else exit 1; fi ;;
+    esac
+    cat <<'IDENTEOF'
 {ident}
 IDENTEOF
     ;;
-  inspect) echo "sha256:{'c' * 64}" ;;
   ps) echo "" ;;
   *) exit 0 ;;
 esac
@@ -681,6 +724,26 @@ esac
     # host mode requires a `lmcache` CLI on PATH (its pre-flight checks it)
     (bin_dir / "lmcache").write_text("#!/usr/bin/env bash\nexit 0\n")
     (bin_dir / "lmcache").chmod(0o755)
+    # r24 F2: the docker readiness gate needs a live container + a server that
+    # answers mp_ping. Default stub state = healthy (pong present, no
+    # dead-marker); the flags above control the markers BEFORE the script
+    # runs (docker_running=False -> `State.Running` false; docker_pong=False ->
+    # mp_ping never answers; pong_delay=N -> the pong file appears N seconds
+    # into the run, simulating a slow-starting server).
+    if docker_running:
+        (bin_dir / "dead-marker").unlink(missing_ok=True)
+    else:
+        (bin_dir / "dead-marker").write_text("1\n")
+    if docker_pong:
+        (bin_dir / "pong").write_text("1\n")
+    else:
+        (bin_dir / "pong").unlink(missing_ok=True)
+    if pong_delay > 0:
+        import threading
+        def _later():
+            time.sleep(pong_delay)
+            (bin_dir / "pong").write_text("1\n")
+        threading.Thread(target=_later, daemon=True).start()
     env = dict(os.environ,
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
                KVP_LAUNCH_MODE=mode,
@@ -689,6 +752,7 @@ esac
                KVP_LIVE_DIR=str(live),
                LIVE_DIR=str(live),
                KVP_SKIP_IPC_TEST="1",
+               KVP_CACHE_READY_TIMEOUT="10",
                LMCACHE_L2_SERDE="none")
     for var in ("IMAGE", "DOCKER_IMAGE", "KVP_LMCACHE_BUILD",
                 "KVP_RUNNING_LMCACHE_BUILD", "KVP_SKIP_LMC_IDENTITY",
@@ -696,7 +760,7 @@ esac
         env.pop(var, None)
     cache_root.mkdir(exist_ok=True)
     # host mode: the cache root must exist and the request port must be free
-    env["LMCACHE_PORT"] = "15562"
+    env["LMCACHE_PORT"] = str(port)
     env["LMCACHE_HOST"] = "127.0.0.1"
     if extra_env:
         env.update(extra_env)
