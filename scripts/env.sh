@@ -260,26 +260,54 @@ _kvp_normalize_eviction_policy() { # _kvp_normalize_eviction_policy <value> -> c
   # r22 B1: the pin parser (lmcache/v1/distributed/config.py:984) accepts
   # EXACTLY LRU|ARC|IsolatedLRU|noop (case-sensitive). Normalize before
   # passing to the server; refuse unknown values with all four choices.
+  # r23 D6: case-INSENSITIVE match -> the pin's canonical spelling
+  # (LRU / ARC / IsolatedLRU / noop).
   local _p="${1:-LRU}"
-  case "$_p" in
-    LRU|ARC|IsolatedLRU|noop) printf '%s' "$_p" ;;
-    lru|Lru) printf 'LRU' ;;
-    arc|Arc) printf 'ARC' ;;
-    isolatedlru|Isolatedlru|isolatedLru|IsolatedlRU) printf 'IsolatedLRU' ;;
-    Noop|NOOP) printf 'noop' ;;
+  case "${_p,,}" in
+    lru) printf 'LRU' ;;
+    arc) printf 'ARC' ;;
+    isolatedlru) printf 'IsolatedLRU' ;;
+    noop) printf 'noop' ;;
     *)
       echo "ERROR(_kvp_server_argv): LMCACHE_EVICTION_POLICY=$_p is not a valid policy." >&2
-      echo "  Allowed values (case-sensitive on the pin): LRU, ARC, IsolatedLRU, noop" >&2
+      echo "  Allowed values (case-insensitive): LRU, ARC, IsolatedLRU, noop" >&2
       echo "  Set LMCACHE_EVICTION_POLICY to one of these, or leave it unset (default: LRU)." >&2
       return 1 ;;
   esac
 }
-_kvp_server_argv_read() { # _kvp_server_argv_read <array-name> -- read NUL-separated argv into an array
-  # r22 B4: ONE consumer-side reader for the NUL-separated argv. The three
-  # former copies (smoke, docker branch, host branch of start-cache.sh) all
-  # call this -- the line-splitting defect cannot live in more than one place.
-  local _arr="$1"
-  mapfile -d '' -t "$_arr"
+_kvp_server_argv_read() {
+  # _kvp_server_argv_read <array-name> <host> <port> <l1-gb> <chunk-size> <adapter-json> [http-host]
+  #
+  # r22 B4 / r23 D4: ONE consumer-side builder+reader of the NUL-separated
+  # argv (the three former copies -- smoke, docker and host branches of
+  # start-cache.sh -- all call this; the line-splitting defect cannot live in
+  # more than one place). The argv is written to a temp file and its exit
+  # status is CHECKED (process substitution would swallow a rc=1 from
+  # _kvp_server_argv -- e.g. an invalid LMCACHE_EVICTION_POLICY -- and the
+  # caller would launch the server with an EMPTY argv).
+  # Result: the caller's array holds ("server" ...); empty or a non-"server"
+  # first element is a hard error -> return 1 BEFORE any launch.
+  # r23 D4 fix: a nameref (`local -n`) -- `mapfile -t "$name"` only WRITES
+  # through a name; READING (`${arr[0]}`) needs the nameref, otherwise the
+  # validation compares the literal name string and always refuses.
+  local -n _kvp_argv_ref="$1"; shift
+  local _tmp
+  _tmp="$(mktemp /tmp/kvp-server-argv.XXXXXX)" || return 1
+  if ! _kvp_server_argv "$@" > "$_tmp"; then
+    rm -f "$_tmp"
+    echo "ERROR(_kvp_server_argv_read): the server argv could not be built" >&2
+    echo "  (see the message above -- e.g. an invalid LMCACHE_EVICTION_POLICY;" >&2
+    echo "  allowed values: LRU, ARC, IsolatedLRU, noop)" >&2
+    return 1
+  fi
+  mapfile -d '' -t _kvp_argv_ref < "$_tmp"
+  rm -f "$_tmp"
+  if [ "${#_kvp_argv_ref[@]}" -eq 0 ] || [ "${_kvp_argv_ref[0]}" != "server" ]; then
+    echo "ERROR(_kvp_server_argv_read): the server argv is empty or malformed" >&2
+    echo "  (expected argv[0]=server, got '${_kvp_argv_ref[0]:-<empty>}') -- refusing to launch." >&2
+    return 1
+  fi
+  return 0
 }
 _kvp_server_argv() { # _kvp_server_argv <host> <port> <l1-gb> <chunk-size> <adapter-json> [http-host]
   # Prints the `kvpersist.launch server ...` arguments separated by NUL
@@ -949,7 +977,7 @@ _kvp_resolve_runtime_image() {
       export IMAGE
       # r21 L1: every successful path exports the BUILD identity of the image
       # that will run (deep check reads the baked identity JSON and prints
-      # KVP_WHEEL_VERSION, captured into KVP_LMCACHE_BUILD).
+      # KVP_WHEEL_VERSION, captured into KVP_RUNNING_LMCACHE_BUILD).
       _kvp_require_custom_image "$IMAGE" "$root" \
         || { echo "ERROR: IMAGE '$IMAGE' recorded in $_live/image is NOT the custom LMCache derivative." >&2
              echo "  Fix: rebuild with bash scripts/build-lmcache.sh && bash scripts/build-image.sh" >&2

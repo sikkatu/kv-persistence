@@ -59,13 +59,20 @@ if [ -S "$FD_SOCK" ]; then
   # a live listener on the socket = a server already owns this port's fd channel
   if python3 - "$FD_SOCK" <<'PYCHK' 2>/dev/null; then
 import socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+# r23 D3: the LMCache fd-channel socket is AF_UNIX SOCK_SEQPACKET (pinned
+# lmcache/v1/platform/fd_channel.py:14,53,92). A SOCK_STREAM connect to a
+# SEQPACKET listener fails with EPROTOTYPE -- NOT proof of staleness.
+# Fail-safe: refuse unless staleness is PROVEN (FileNotFoundError /
+# ConnectionRefusedError).
+s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 try:
     s.connect(sys.argv[1])
     s.close()
-    sys.exit(0)   # someone IS listening -> refuse
+    sys.exit(0)   # a live server owns the socket -> refuse
+except (FileNotFoundError, ConnectionRefusedError):
+    sys.exit(1)   # no socket / stale socket file -> proceed
 except OSError:
-    sys.exit(1)   # stale socket file -> fine
+    sys.exit(0)   # any other error -> NOT proven stale -> refuse
 PYCHK
     echo "SMOKE FAIL($CODEC): the fd-channel socket $FD_SOCK is held by a live" >&2
     echo "  server (port $PORT). The production cache and the smoke must not share" >&2
@@ -78,8 +85,9 @@ mkdir -p "$CACHE_ROOT"
 ADAPTER="$CACHE_ROOT/l2-adapter.smoke.json"
 _kvp_render_l2_adapter "$ADAPTER" "$REPO" "$CACHE_ROOT" 1 "$CODEC" \
   || { echo "SMOKE FAIL($CODEC): adapter render failed" >&2; exit 1; }
-_kvp_server_argv_read SRV < <(_kvp_server_argv 127.0.0.1 "$PORT" "$L1_GB" "$CHUNK_SIZE" "$ADAPTER" "") \
-  || { echo "SMOKE FAIL($CODEC): server argv build failed (check LMCACHE_EVICTION_POLICY)" >&2; exit 1; }
+_kvp_server_argv_read SRV 127.0.0.1 "$PORT" "$L1_GB" "$CHUNK_SIZE" "$ADAPTER" "" \
+  || { echo "SMOKE FAIL($CODEC): server argv build failed" >&2
+       echo "  (check LMCACHE_EVICTION_POLICY -- allowed: LRU, ARC, IsolatedLRU, noop)" >&2; exit 1; }
 LOG="$CACHE_ROOT/smoke-server.log"
 PYTHONPATH="/kvp-impl${PYTHONPATH:+:$PYTHONPATH}" \
   python3 -m kvpersist.launch "${SRV[@]}" > "$LOG" 2>&1 &
@@ -128,12 +136,14 @@ echo "KVP_SMOKE_${UCODEC}_READY=OK"
 # `persist_enabled=True, keeping data files on disk` (L2 data is kept).
 kill -TERM "$SRV_PID" 2>/dev/null || true
 EXIT_RC=0
-for _ in $(seq 1 30); do
+# r23 D5: the SIGTERM wait is configurable (tests set 2-3s; production 30s)
+TERM_TIMEOUT="${KVP_SMOKE_TERM_TIMEOUT:-30}"
+for _ in $(seq 1 "$TERM_TIMEOUT"); do
   kill -0 "$SRV_PID" 2>/dev/null || break
   sleep 1
 done
 if kill -0 "$SRV_PID" 2>/dev/null; then
-  echo "SMOKE FAIL($CODEC): the server did NOT exit within 30s after SIGTERM" >&2
+  echo "SMOKE FAIL($CODEC): the server did NOT exit within ${TERM_TIMEOUT}s after SIGTERM" >&2
   kill -KILL "$SRV_PID" 2>/dev/null || true
   EXIT_RC=137
 else
