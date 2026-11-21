@@ -158,6 +158,23 @@ wheel SHA-256）——仅凭 wheel 版本号（`0.5.8rc1.post48`）无法区分�
 则构建拒绝且 `live/image` 不写入。编解码器/nixl/otel/适配器故障在构建时
 捕获，而不是操作员首次 `start-cache` 时。
 
+**单独运行 smoke（r22 B3/B5，硬件诊断用）：** 不完整构建镜像，一条命令运行 smoke：
+
+```bash
+docker run --rm --gpus all --ipc host \
+  -v "$PWD":/kvp-repo:ro -v "$PWD/implementation":/kvp-impl:ro \
+  --entrypoint bash <your-image> /kvp-repo/scripts/_smoke_cache_server.sh \
+  zstd /tmp/kvp-smoke 15555
+```
+
+按编解码器各运行一次（`zstd`，然后 `none`）。smoke 加载**随附**配置
+（`configs/generic/*.env`，不含 `*.local`），结果不依赖用户机器上的文件。
+**SIGTERM 后退出码 143 是正常的**（HTTP 服务器处理 SIGTERM、正常关闭后
+重新发送信号）——smoke 接受 0 或 143 且带两个关闭标记（`MPCacheServer
+closed` + `persist_enabled=True, keeping data files on disk`）；其他退出码
+或缺少标记即为拒绝。smoke 使用独立端口（默认 15555，`KVP_SMOKE_PORT`），
+不会与生产缓存争夺 fd-channel socket。
+
 ## 3. 持久缓存：L1/L2、身份、诊断
 
 * L1 = 主机 DRAM（`LMCACHE_L1_SIZE_GB=64`；请在 `lmcache-server.log` 中

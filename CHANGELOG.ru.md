@@ -13,6 +13,49 @@ LMCache** (база `0.5.7.dev428` = `03ee5b82418b6bd44e424cdd46932d9346f43eb2`,
 downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache-build.ru.md`);
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
+### Раунд 22 (смоук запускает команду, которую принимает пин; операторский пин; пути IMAGE)
+**Лог железа (21 ноября 2026):** `build-image.sh` упал на серверном смоуке --
+`--eviction-policy: invalid choice: 'lru'` (парсер пина принимает LRU/ARC/
+IsolatedLRU/noop, регистр важен); после обхода этого многострочный JSON
+адаптера развалился на элементы argv ("unrecognized arguments") -- и это была
+регрессия r20 K6.3, ломавшая и БОЕВОЙ `start-cache.sh`; штатное закрытие по
+SIGTERM давало код 143, который смоук называл нештатным.
+* `139cb13` **B1-B6** (P0/P2): команда сервера, которую запускает смоук, --
+  это команда, которую принимает пин. B1: `_kvp_normalize_eviction_policy` --
+  default LRU, нормализация (`lru`->LRU, `isolatedlru`->IsolatedLRU), отказ
+  для неизвестных значений с именем переменной и четырьмя допустимыми. B2:
+  `mp_ping` импортирует путь пина (`lmcache.v1.client.transport.factory`),
+  фолбэк на прежний путь, код 3 при отсутствии обоих; смоук прекращает
+  ожидание СРАЗУ при exit 3. B3: смоук грузит ПОСТАВЛЯЕМЫЕ конфиги
+  (`configs/generic/*.env`, без `*.local`) -- chunk-size 256, политика,
+  watermark, ratio; `<chunk-gb>` переименован в `<chunk-size>`. B4: argv
+  разделён NUL, JSON адаптера компактный в одну строку, единый ридер
+  `_kvp_server_argv_read` (три прежние копии заменены). B5: чистый выход --
+  код 0 ИЛИ 143 (128+SIGTERM -- НОРМА для этого сервера) + оба маркера
+  штатного закрытия. B6: смоук на собственном порту (15555,
+  `KVP_SMOKE_PORT`) и отказывает при живом fd-канале. Фикстура
+  `pin_server_spec.json` извлечена из исходника пина 07f1c6bb (101 флаг,
+  AST-обход, не набиралось руками).
+* `24d61f1` **M1-M4** (P2/P3): M1 -- операторский пин `KVP_LMCACHE_BUILD`
+  работает: резолвер экспортирует `KVP_RUNNING_LMCACHE_BUILD` (своё имя),
+  пин имеет приоритет в `identity_from_env_files` и гейте (пин > KVP_RUNNING
+  > read_lmcache_build, сверка ВСЕГДА, несовпадение -> exit 4 с обеими
+  сборками); исправлен реальный дефект (env-пин без записи в файле молча
+  терялся); golden-namespace `kvp-ef44c5ce3016e00c3f450ccdaac0cf9c`
+  (посчитан на 7a9e615) зафиксирован в тесте -- кэш того коммита остаётся
+  валидным. M2 -- пути `IMAGE=sha256:<id>` и `IMAGE == live/image`
+  протестированы (stock-override отклонён, явный custom побеждает, сломанный
+  live/image отклонён) + 2 детектора мутаций; исправлена реальная ошибка
+  порядка (ветка `== live/image` была недостижима за `sha256:*`). M3 --
+  мёртвый флаг `--print-wheel-version` удалён, доки описывают реальный
+  механизм. M4 -- «мутационные» тесты r21 (зелёные при любом состоянии
+  настоящего кода) заменены ДЕТЕКТОРАМИ; namespace считается в ТОМ ЖЕ shell
+  после резолвера.
+* `d67eab7` **доки**: отдельный запуск смоука одной командой для диагностики
+  на железе + «код 143 после SIGTERM -- норма» в `docs/lmcache-build` ×3.
+* Полный прогон: см. итоговые счётчики в отчёте (kv-persistence и recipes,
+  последовательно, 0 failed).
+
 ### Раунд 21 (namespace привязан к запускаемому образу, честный тест K6.4, дыры в тестах)
 * `775cc64` **L1** (P1, K7 привязан к ЗАПУСКАЕМОМУ образу): `check_image_identity.py --print-wheel-version` был мёртвым кодом; `cli model-name` брал `lmcache_build` из `live/image-identity.env` (запись ПОСЛЕДНЕЙ сборки, а не образ, который запускается); гейт сверял только при пине оператора (в поставке пустой). Теперь `verify_custom_image` возвращает `wheel_version`, CLI печатает `KVP_WHEEL_VERSION=`, `_kvp_require_custom_image` перехватывает его и экспортирует `KVP_LMCACHE_BUILD` на каждом успешном пути резолва (кроме `KVP_SKIP_IMAGE_CHECK=1`). Приоритет `read_lmcache_build`: env > baked identity JSON > запись в live/. `verify-engine-identity.sh` сверяет ВСЕГДА (пин или эффективное значение) с identity JSON контейнера; несовпадение → exit 4 с именем поля `lmcache_build`. Тесты: сценарий A≠B (live/ несёт A, образ — B) — namespace следует за B; гейт без пина отказывает; 3 честные мутации красные (резолвер не экспортирует / гейт сверяет только при пине / копия модуля с приоритетом live/).
 * `626dcb1` **L2** (P1, тест K6.4 был зелёным по чужой причине): заглушка r20 отвечала на `image inspect` пустым `{}` — start-cache.sh отказывал раньше, на проверке custom-образа, и проба кодека НИКОГДА не выполнялась. Теперь заглушка отвечает метками и identity реальной сборки (deep-проверка проходит), а падает только проба кодека. Проверки: `lossless codec 'zstd' is not available`, `build-image.sh`, НЕТ `MISMATCH`/`NOT the custom`, сервер НЕ запускался. Мутация: нейтрализация пробы кодека в мутанте start-cache.sh убирает отказ (красный детектор).
@@ -33,18 +76,6 @@ downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache
 * `d5fc90b` + `767826e` **K7** (P0, namespace кэша должен различать сборки LMCache): `CacheIdentity` получил ОБЯЗАТЕЛЬНОЕ поле `lmcache_build` (= `wheel_version` из `/etc/kvp-lmcache-identity.json`, `0.5.8rc1.post48+kvp.<12hex>`); пустое/нечитаемое → `IdentityError` (неопределённость → cache miss). До этого stock-сборка 0.5.6 и кастомная давали ОДИН namespace (`kvp-7a26d4bf...`) и новый сервер читал старый кэш. ЕДИНЫЙ источник для всех потребителей: `kvpersist.identity.read_lmcache_build()` (bash читает то же значение через `check_image_identity.py --print-wheel-version`, так что bash и Python не могут разойтись); `verify-engine-identity.sh` кросс-проверяет пин `KVP_LMCACHE_BUILD` с `wheel_version` работающего образа (MISMATCH → exit 4). Тесты: пустая сборка → `IdentityError`, разные сборки → разные namespace, хешируется значение из identity JSON, кросс-проверка гейта на РЕАЛЬНОМ скрипте с docker-заглушкой, мутация без поля в хешируемой нагрузке → красная.
 * `6dd98f0` (recipes): фикстуры тестов несут новое обязательное поле и записывают `live/image-identity.env` ровно так, как `build-image.sh` делает на реальной машине.
 * Полный прогон: kv-persistence **704 passed, 26 skipped** (все skip — окружение: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, только железо); recipes **448 passed, 5 skipped** (после обновления фикстур K7; 443/5 было до изменения фикстур этого раунда).
-### Раунд 19 (шаг «образ»: имя wheel в Dockerfile, identity как env-файл)
-**Факты с железа (логи оператора, 20 ноября 2026)** — вместо формулировки раунда 18 «подтверждение на железе в ожидании»:
-* быстрый прогон `scripts/rerun-lmcache-gate.sh --trust-wheel` на wheel из 4-го запуска: C8-C12 прошли, C11 = 155 passed / 0 failed / 0 errors / 0 skipped;
-* полный `scripts/build-lmcache.sh`: C0-C16 прошли, wheel `0.5.8rc1.post48+kvp.60dce759ea93`, sha256 `daff4af1016e956c351f054dd67d6f45d85a5c4c6165b0f0867833cdd56b118a`, C11 = 155 passed / 0 skipped, C14 «engine identity OK», C13 (GPU) пропущен по умолчанию (KVP_BUILD_GPU_TESTS не задан), последняя строка `DONE`;
-* `scripts/build-image.sh`: все проверки целостности раунда 18 прошли, `docker build` упал на шаге [4/4] (H1 ниже). Образ НЕ собран; GPU-проверка в образе не запускалась.
-**Всё ещё ожидают железа:** build-image.sh до конца (GPU-проверка в образе, live/image), workload-тест фикса incomplete-KV, GPU-регрессия C13 по желанию.
-* `666e322` **H1** (P0, образ не собирался): Dockerfile переименовывал wheel в `/tmp/kvp-lmcache.whl`; pip разбирает имя локального `.whl` как `{name}-{version}-{python}-{abi}-{platform}.whl` и отверг его — `ERROR: Invalid wheel filename (wrong number of parts): 'kvp-lmcache'` на шаге [4/4] `docker build`. Теперь wheel сохраняет РЕАЛЬНОЕ имя в образе (`WHEEL_BASENAME` используется в COPY, pip install и rm; путь в кавычках, локальная версия содержит `+`). Тесты (test_r19_h1_wheel_name.py): basename пути установки == реальное имя wheel и проходит packaging.utils.parse_wheel_filename; исполняемая установка минимального wheel с тем же name-version работает, имя `kvp-lmcache.whl` падает с точной ошибкой железа; фикстура — имя как у настоящей сборки (с `+kvp.60dce759ea93`, теги cp312). До правки красный (3 failed на HEAD), после — зелёный; мутация (вернуть фиксированное имя) → красный.
-* `256cd70` **H2**: image-identity.env теперь настоящий env-файл — только строки `^KVP_[A-Z0-9_]+=` (сырой вывод проверки содержит шум лога и строки `KVP_GPU_SMOKE[N]` с недопустимыми для shell именами, ломавшие `set -e; . live/image-identity.env`). Сырой вывод сохраняется в live/image-verify.txt; в .env остаются агрегаты (KVP_GPU_COUNT, KVP_GPU_SMOKE_OK_COUNT, KVP_GPU_CC). Тест: реалистичный «шумный» verify.txt, source под `set -e` проходит и KVP_CUSTOM_IMAGE_ID переживает round-trip; сырой лог сохранён отдельно. До правки красный (2 failed на HEAD), после — зелёный; мутация (cat verify.txt в .env) → красный.
-* `1fe83bb` **H4.1**: тест r18 G1 запускал build-image.sh на ДРУГОМ, пустом каталоге (KVP_BUILD_DIR=build против KVP_OUT_DIR=out сборки) — отказ `provenance.json not found` срабатывал ВСЕГДА, даже без фикса. Теперь оба скрипта работают с ОДНИМ каталогом (как production live/lmcache-build), плюс сквозной тест: настоящая сборка → её собственный provenance → настоящий build-image доходит до docker build → упавшая пересборка → отказ. Мутация (убрать rm) → оба контроля красные.
-* `1a5ae22` **H4.2**: _rerun_incontainer.sh печатал `ownership returned` даже при неудавшемся chown (`|| true` глотал ошибку). Теперь неудачный chown печатает `WARNING: could not return ownership (rc=N): the work dir may stay root-owned` и никогда не заявляет успех; код выхода скрипта не меняется. Тест: настоящая `_kvp_chown_back` с падающей заглушкой chown; мутация (безусловный echo) → красный.
-* `01f1092` **H4.3**: verify-engine-identity.sh теперь ГРОМКО предупреждает `WARNING: this image carries an UNTESTED LMCache wheel`, если в запечённом identity непустое поле `untested_wheel` (образы с KVP_ALLOW_UNTESTED_WHEEL=1); пустое/отсутствующее поле (старые образы) молчит. Печатается ДО тяжёлых проверок — видно при любом исходе. Тест: настоящий скрипта гейта с тремя вариантами identity; мутация (подавить предупреждение) → красный.
-* Полный прогон: kv-persistence **669 passed, 26 skipped** (все скипы — окружение); recipes **443 passed, 5 skipped** (код в этом раунде не менялся).
 ### Раунд 16 (фикстуры 4136, junit-гейты, слепая зона engine-pin, быстрый перезапуск)
 * `c354ba9` **P0** (лог оператора 19.11 18:53: C0-C10 прошли на новой базе,
   C11 = 150 passed / 5 failed): все пять падений в

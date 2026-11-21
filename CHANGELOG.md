@@ -13,6 +13,49 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 22 (smoke must run the command the pin accepts; operator pin; IMAGE paths)
+**Hardware log (21 Nov 2026):** `build-image.sh` died on the server smoke --
+`--eviction-policy: invalid choice: 'lru'` (the pin parser accepts LRU/ARC/
+IsolatedLRU/noop, case-sensitive); after bypassing that the multi-line
+adapter JSON split into argv elements ("unrecognized arguments") -- and that
+was a r20 K6.3 regression that broke the PRODUCTION `start-cache.sh` too;
+a clean SIGTERM shutdown exited 143, which the smoke called unclean.
+* `139cb13` **B1-B6** (P0/P2): the server command the smoke runs is the
+  command the pin accepts. B1: `_kvp_normalize_eviction_policy` -- default
+  LRU, normalize (`lru`->LRU, `isolatedlru`->IsolatedLRU), refuse unknown
+  values naming the variable and the four choices. B2: `mp_ping` imports the
+  PIN path (`lmcache.v1.client.transport.factory`) first with a legacy
+  fallback, code 3 when neither; the smoke stops IMMEDIATELY on exit 3.
+  B3: the smoke loads the SHIPPED configs (`configs/generic/*.env`, no
+  `*.local`) -- chunk-size 256, policy, watermark, ratio; `<chunk-gb>`
+  renamed `<chunk-size>`. B4: argv is NUL-separated with a compact one-line
+  adapter JSON and ONE shared reader `_kvp_server_argv_read` (the three
+  former copies replaced). B5: clean exit = code 0 OR 143 (128+SIGTERM is
+  NORMAL for this server) + both shutdown markers. B6: the smoke runs on
+  its own port (15555, `KVP_SMOKE_PORT`) and refuses when the fd-channel
+  socket is held by a live server. Spec fixture `pin_server_spec.json`
+  extracted from the pin source 07f1c6bb (101 flags, AST walk, never
+  hand-typed).
+* `24d61f1` **M1-M4** (P2/P3): M1 -- the operator pin `KVP_LMCACHE_BUILD`
+  works: the resolver exports `KVP_RUNNING_LMCACHE_BUILD` (its own name),
+  the pin keeps precedence in `identity_from_env_files` and the gate (pin >
+  KVP_RUNNING > read_lmcache_build, cross-check ALWAYS, mismatch -> exit 4
+  with both builds); a real defect fixed (an env pin without a file entry was
+  silently dropped); golden namespace `kvp-ef44c5ce3016e00c3f450ccdaac0cf9c`
+  (computed on 7a9e615) is fixed in the test -- the cache from that commit
+  stays valid. M2 -- the `IMAGE=sha256:<id>` and `IMAGE == live/image` paths
+  are tested (stock override refused, explicit custom wins, broken
+  live/image refused) + 2 mutation detectors; a real ordering defect fixed
+  (the `== live/image` branch was unreachable behind the `sha256:*` case).
+  M3 -- the dead `--print-wheel-version` flag removed, docs describe the real
+  mechanism. M4 -- the r21 "mutation" tests (green at any state of the real
+  code) replaced by DETECTORS; the namespace test computes it in the SAME
+  shell after the resolver.
+* `d67eab7` **docs**: standalone smoke one-liner for hardware diagnostics +
+  "exit 143 after SIGTERM is normal" in `docs/lmcache-build` x3.
+* Full run: see the follow-up counts in the report (kv-persistence and
+  recipes, sequential, 0 failed).
+
 ### Round 21 (namespace bound to the running image, honest K6.4 test, test holes)
 * `775cc64` **L1** (P1, K7 bound to the RUNNING image): `check_image_identity.py`
   `--print-wheel-version` was dead code; `cli model-name` derived `lmcache_build`
@@ -166,65 +209,6 @@ was never in the image, so the docker path could not have worked once.
   environment: promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache,
   hardware-only); recipes **448 passed, 5 skipped** (after the K7 fixture
   update; 443/5 before this round's fixture change).
-### Round 19 (image step: wheel filename in Dockerfile, env-file identity)
-**Hardware facts (operator logs, 20 Nov 2026)** -- replacing the "confirmation
-pending" wording of round 18:
-* fast rerun `scripts/rerun-lmcache-gate.sh --trust-wheel` on the wheel from
-  run 4: C8-C12 passed, C11 = 155 passed / 0 failed / 0 errors / 0 skipped;
-* full `scripts/build-lmcache.sh`: C0-C16 passed, wheel
-  `0.5.8rc1.post48+kvp.60dce759ea93`, sha256
-  `daff4af1016e956c351f054dd67d6f45d85a5c4c6165b0f0867833cdd56b118a`,
-  C11 = 155 passed / 0 skipped, C14 "engine identity OK", C13 (GPU) skipped by
-  default (KVP_BUILD_GPU_TESTS unset), final line `DONE`;
-* `scripts/build-image.sh`: all round-18 integrity checks passed,
-  `docker build` failed at step [4/4] (H1 below). The image is NOT built; the
-  in-image GPU check did not run.
-**Still waiting for hardware:** build-image.sh to the end (in-image GPU check,
-live/image), the incomplete-KV workload test, GPU regression C13 on request.
-* `666e322` **H1** (P0, the image would not build): the Dockerfile renamed
-  the wheel to `/tmp/kvp-lmcache.whl`; pip parses a local `.whl` name as
-  `{name}-{version}-{python}-{abi}-{platform}.whl` and rejected it --
-  `ERROR: Invalid wheel filename (wrong number of parts): 'kvp-lmcache'` at
-  `docker build` step [4/4]. The wheel keeps its REAL filename in the image
-  (`WHEEL_BASENAME` used for COPY, pip install and rm; quoted path, the
-  local version carries `+`). Tests (test_r19_h1_wheel_name.py): the install
-  path basename == the real wheel name and passes
-  packaging.utils.parse_wheel_filename; an executable pip install of a
-  minimal wheel with the same name-version works, the `kvp-lmcache.whl` name
-  fails with the exact hardware error; fixture wheel named like the real
-  build (with `+kvp.60dce759ea93`, cp312 tags). RED before the fix (3 failed
-  on HEAD), GREEN after; mutation (restore the fixed name) -> RED.
-* `256cd70` **H2**: image-identity.env is a REAL env-file now -- only
-  `^KVP_[A-Z0-9_]+=` lines (the raw verify output carries log noise and
-  `KVP_GPU_SMOKE[N]` rows with invalid shell names that broke `set -e; .
-  live/image-identity.env`). The raw verify output is saved as
-  live/image-verify.txt; the .env keeps the aggregates (KVP_GPU_COUNT,
-  KVP_GPU_SMOKE_OK_COUNT, KVP_GPU_CC). Test: realistic noisy verify.txt,
-  sourcing under `set -e` succeeds and KVP_CUSTOM_IMAGE_ID round-trips; raw
-  log saved separately. RED before the fix (2 failed on HEAD), GREEN after;
-  mutation (cat verify.txt into the .env) -> RED.
-* `1fe83bb` **H4.1**: the r18 G1 test ran build-image.sh on a DIFFERENT,
-  empty dir (KVP_BUILD_DIR=build vs the build's KVP_OUT_DIR=out) -- the
-  'provenance.json not found' refusal fired ALWAYS, even without the fix.
-  Now both scripts run on the SAME dir (like production live/lmcache-build),
-  plus an end-to-end test: real build -> its own provenance -> real
-  build-image reaches docker build -> failing rebuild -> refusal. Mutation
-  (drop the rm) -> both controls RED.
-* `1a5ae22` **H4.2**: _rerun_incontainer.sh printed 'ownership returned'
-  even when chown failed (`|| true` swallowed the error). Now a failed chown
-  prints `WARNING: could not return ownership (rc=N): the work dir may stay
-  root-owned` and never claims success; the script exit code is unchanged.
-  Test: the REAL _kvp_chown_back with a failing chown stub; mutation
-  (unconditional echo) -> RED.
-* `01f1092` **H4.3**: verify-engine-identity.sh now LOUDLY warns
-  `WARNING: this image carries an UNTESTED LMCache wheel` when the baked
-  identity has a non-empty `untested_wheel` (KVP_ALLOW_UNTESTED_WHEEL=1
-  images); empty/missing field (old images) stays silent. Printed BEFORE the
-  heavy checks so it is visible on every outcome. Test: the REAL gate script
-  with three identity variants; mutation (suppress the warning) -> RED.
-* Full run: kv-persistence **669 passed, 26 skipped** (all skips environment:
-  promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, hardware-only);
-  recipes **443 passed, 5 skipped** (code unchanged this round).
 ### Round 16 (4136 test fixtures, junit gates, engine-pin blind spot, fast rerun)
 * `c354ba9` **P0** (hardware log 19.11 18:53: C0-C10 passed on the new base,
   C11 = 150 passed / 5 failed): all five failures in
