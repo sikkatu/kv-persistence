@@ -118,3 +118,8 @@ def _restore_repo_live():
         if not p.exists() or p.read_bytes() != content:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(content)
+    # r23 D2 clean-clone: when the session started with NO live/ at all (fresh
+    # clone -- live/ is gitignored) the contract writers leave an EMPTY dir
+    # behind (mkdir -p). Remove it so the state matches "ABSENT" again.
+    if not snap and REPO_LIVE.is_dir():
+        shutil.rmtree(REPO_LIVE, ignore_errors=True)
