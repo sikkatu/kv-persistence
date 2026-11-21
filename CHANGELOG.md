@@ -30,7 +30,12 @@ stale -> smoke proceeded over a live server); an invalid
   before/after and FAILS the run if anything changed; the helpers
   (`_read_argv_via_stub` / `_run_smoke_with_server_stub` / `_start_cache_argv`)
   own their tmp `live/` (image + image-identity.env written there, never the
-  repo's).
+  repo's). The clean-clone acceptance runs (no `live/`) exposed two more
+  holes the polluted tree hid behind pre-existing artifacts: the launchers'
+  contract records (engine_container, obs-relay/, .engine-env, ...) restore
+  per test, and a REAL build blocker in build-image.sh (it wrote
+  live/image-identity.env BEFORE mkdir -p of the directory -- a fresh-clone
+  build died after a successful smoke).
 * **D3** (P2): the fd-channel probe now connects with AF_UNIX SOCK_SEQPACKET
   (the pinned lmcache type, fd_channel.py:14,53,92) and fails SAFE: refuse
   unless staleness is PROVEN (FileNotFoundError / ConnectionRefusedError);

@@ -25,6 +25,10 @@ rc=1）；3 个存活变异体（B5-4/B5-5/B6-2）。
   守卫：运行前后对仓库真实 `live/` 做哈希，若发生变化则测试失败；各 helper
   （`_read_argv_via_stub` / `_run_smoke_with_server_stub` / `_start_cache_argv`）
   拥有自己的 tmp `live/`（image + image-identity.env 写在那里，绝不写仓库的）。
+  干净克隆验收运行（无 `live/`）又暴露了两处被污染目录树中旧工件掩盖的洞：
+  启动器的契约记录（engine_container、obs-relay/、.engine-env 等）在每个测试后
+  恢复；以及 build-image.sh 中【真实的】构建阻塞（它在 mkdir -p 目录之前就写
+  live/image-identity.env -- 干净克隆上的构建在 smoke 成功之后失败）。
 * **D3** (P2)：fd-channel 探测改用 AF_UNIX SOCK_SEQPACKET（pin 的 lmcache 类型，
   fd_channel.py:14,53,92）并 fail-safe：仅在【确证】stale（FileNotFoundError /
   ConnectionRefusedError）时放行；EPROTOTYPE 及其他任何 OSError -> 拒绝。
