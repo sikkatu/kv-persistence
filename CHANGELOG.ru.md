@@ -13,6 +13,68 @@ LMCache** (база `0.5.7.dev428` = `03ee5b82418b6bd44e424cdd46932d9346f43eb2`,
 downstream-патчи на апстрим PR #4136 и #5972, см. `docs/lmcache-build.ru.md`);
 прежний пин **LMCache 0.5.6** заменён этой кастомной сборкой. В
 `requirements-lmcache.txt` теперь указывается производный образ.
+### Раунд 28 (L1–L9 + D1: запись на NVMe молча падала — теперь громко и с диагностикой)
+**Железное ревью (22 ноя 2026):** каждый пакет записи L2 заканчивался
+«0 succeeded, 20 failed» (`kvp-serde: destination buffer too small` —
+LMCache выделяет буферы по objects[0]), сервис выглядел здоровым;
+ipc-test обвинял ECC при реальном отказе CUDA; трассировка тонула в
+DEBUG-шуме; test-recovery проверял не ту границу IPC и счётчик ввода-вывода
+docker-КЛИЕНТА; дашборд показывал «No data» (OTLP-endpoint был недоступен).
+Порядок работ: L6 → L7 → L8 → L9 → D1 → L1–L5.
+* **L6** (блокер): `compress_serde.serialize` отказывает при малом буфере с
+  `kvp-serde: destination buffer too small: dst_len=.. need=.. frame=..
+  src_len=.. src_size=.. plaintext_by_layout=.. estimate_by_layout=..
+  codec=.. shapes=.. dtypes=.. dst_size=.. dst_phy=.. object_group_id=..
+  kv_rank=..` (диагностика собирается безопасно, никогда не заменяя
+  ошибку); `kvpersist/serde_alloc_patch.py` выделяет все временные буферы
+  пакета по САМОМУ БОЛЬШОМУ объекту (защита от дрейфа: патч ставится только
+  при совпадении эталонного исходника `_alloc_temp_buffers`, иначе громкое
+  предупреждение и отказы ловит L7); `--selfcheck` встроен в
+  verify-image-custom.sh. Тест test_r28_serde_alloc.py воспроизводит
+  аллокатор LMCache ДОСЛОВНО на фейковых TensorMemoryObj (7 тестов).
+* **L7**: `kvp_scan_l2_failures LOG [FROM_BYTE]` (env.sh) печатает первый
+  блок ошибки (ограниченный, ≤ 40 строк, без DEBUG-шума) + «L2 STORE
+  FAILING: кэш-сервер не может писать на NVMe…» и возвращает 1 — вызывается
+  после каждого запроса записи в test-recovery.sh ДО косвенных счётчиков;
+  `kvp status` печатает строку `L2 writes: OK|FAILING (n failed)`.
+* **L8**: `kvp_ipc_consumer_mode` (env.sh) выбирает host/host-root/CONTAINER
+  и для pre-flight, и для test-recovery.sh — граница в docker-режиме:
+  контейнер сервера ↔ контейнер движка (старый тест проверял не ту и мог
+  быть зелёным при сломанной настоящей).
+* **L9**: `kvp_server_pid` (env.sh) отдаёт реальный PID сервера (`State.Pid`
+  docker в docker-режиме, pid-файл в host); `server_read_bytes` и проверка
+  живости следуют ему через `KVP_PROC_ROOT` — старый код мерил docker-КЛИЕНТ.
+* **D1**: контейнер сервера входит в сеть мониторинга работающего
+  `obs_otel_collector` и шлёт метрики на `http://obs_otel_collector:4317`
+  (переписывание в host.docker.internal никогда не работало: коллектор
+  публикует 4317 только на 127.0.0.1:4320 хоста). Явный KVP_OTLP_ENDPOINT
+  используется КАК ЕСТЬ (никогда не переписывается); нет коллектора —
+  метрики выключены с честной строкой «not detected»;
+  start-observability.sh предупреждает о протухшей сети сервера;
+  docs/security.md документирует вход в сеть.
+* **L1**: настоящий consumer.py печатает `consumer: pid=` ПЕРВЫМ (до любого
+  импорта), оборачивает import/pickle/fn(*args) в try/except →
+  `consumer: OPEN FAILED <тип>: <текст>` + трассировка + exit 4; exit 1
+  только когда память открылась, а сумма не совпала; скрипт печатает
+  `PIDs: producer=<n> consumer=<m>`, равные PID дают вердикт TEST INVALID
+  BY CONSTRUCTION (exit 3); rc=1 без строки sum= получает UID-вердикт,
+  никогда не ECC.
+* **L2**: все четыре выборки трассировки `sed … ,$p` ОГРАНИЧЕНЫ (от строки
+  ошибки до следующей строки с меткой времени, ≤ 80 строк, mawk) —
+  300 с «skipping eviction» больше не хоронят исключение.
+* **L3/L5**: `Consumer error:` извлекает реальную строку OPEN FAILED /
+  CUDA_ERROR из вывода (не хвост вердикта); rc=3 — баг конструкции теста,
+  никогда не отказ границы; вывод ipc-test идёт ЖИВЬЁМ через `tee` (rc из
+  PIPESTATUS[0], временный файл удаляется); лишняя `)` в баннере убрана.
+* **L4** (дыры в тестах): 6 выживших мутантов теперь убиты новыми тестами —
+  дефолт KVP_SAME_UID (не задан → UID оператора), SERVER_GID из `id -g`,
+  сравнение GID в проверке K3, точный текст `sudo chown -R <uid>:<gid>`,
+  дефолт CONSUMER_USER от PRODUCER_USER и ветки test-recovery.sh (ограниченная
+  выборка).
+* **Тесты**: test_r28_serde_alloc.py (7), test_r28_diagnostics.py (15),
+  test_r28_l1.py (3), test_r28_l4.py (8) — все поведенческие (stub-заглушки
+  docker/id, изоляция IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR/KVP_PROC_ROOT,
+  свободные порты). Проверено убийство 19 мутантов (включая 6 выживших из r27).
 ### Раунд 27 (K1-K8: кэш-серверу нужен UID движка)
 **Железное ревью (22 ноя 2026):** запуск на железе падал на
 `register_kv_cache` с `CUDA_ERROR_MAP_FAILED` -- движок работал как UID 1000

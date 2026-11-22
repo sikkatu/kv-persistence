@@ -13,6 +13,69 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 28 (L1-L9 + D1: NVMe stores were silently failing -- now loud and diagnosed)
+**Hardware review (22 Nov 2026):** every L2 store batch ended "0 succeeded,
+20 failed" (`kvp-serde: destination buffer too small` -- LMCache sizes the
+temp buffers from objects[0] only) while the service looked healthy;
+ipc-test blamed ECC on a real CUDA refusal; the traceback drowned in
+DEBUG noise; test-recovery probed the wrong IPC boundary and the docker
+CLIENT's I/O; the dashboard showed "No data" (the OTLP endpoint was
+unreachable). Order of work: L6 -> L7 -> L8 -> L9 -> D1 -> L1-L5.
+* **L6** (blocker): `compress_serde.serialize` refuses an undersized
+  destination with `kvp-serde: destination buffer too small: dst_len=..
+  need=.. frame=.. src_len=.. src_size=.. plaintext_by_layout=..
+  estimate_by_layout=.. codec=.. shapes=.. dtypes=.. dst_size=.. dst_phy=..
+  object_group_id=.. kv_rank=..` (diagnostics collected safely, never
+  replacing the error); `kvpersist/serde_alloc_patch.py` sizes every temp
+  buffer from the LARGEST object of the batch (drift-protected: installs
+  only when the pinned `_alloc_temp_buffers` source matches, else a loud
+  WARNING and L7 catches the failures); `--selfcheck` wired into
+  verify-image-custom.sh. Test test_r28_serde_alloc.py reproduces the
+  LMCache allocator VERBATIM over fake TensorMemoryObj objects (7 tests).
+* **L7**: `kvp_scan_l2_failures LOG [FROM_BYTE]` (env.sh) prints the first
+  error block (bounded, <= 40 lines, no DEBUG noise) + "L2 STORE FAILING:
+  the cache server cannot write to NVMe..." and returns 1 -- called after
+  every store request in test-recovery.sh BEFORE the indirect counters;
+  `kvp status` prints one line `L2 writes: OK|FAILING (n failed)`.
+* **L8**: `kvp_ipc_consumer_mode` (env.sh) decides host/host-root/CONTAINER
+  for both the pre-flight and test-recovery.sh -- the docker-mode boundary
+  is server-container <-> engine-container (the old test probed the wrong
+  one and could pass while the real one was broken).
+* **L9**: `kvp_server_pid` (env.sh) resolves the REAL server pid (docker
+  `State.Pid` in docker mode, the pid file in host mode); `server_read_bytes`
+  and the liveness probe follow it through `KVP_PROC_ROOT` -- the old code
+  measured the docker-run CLIENT.
+* **D1**: the server container joins the observability network of a running
+  `obs_otel_collector` and pushes to `http://obs_otel_collector:4317` (the
+  host.docker.internal rewrite could never work: the collector publishes
+  4317 only on 127.0.0.1:4320 of the HOST). An explicit KVP_OTLP_ENDPOINT is
+  used AS-IS (never rewritten); no collector -> metrics off with an honest
+  "not detected" line; start-observability.sh NOTEs a stale server network;
+  docs/security.md documents the network join.
+* **L1**: the real consumer.py prints `consumer: pid=` FIRST (before any
+  import), wraps import/pickle/fn(*args) in try/except ->
+  `consumer: OPEN FAILED <type>: <text>` + traceback + exit 4; exit 1 only
+  when the memory opened and the sum is wrong; the script reports
+  `PIDs: producer=<n> consumer=<m>` and equal PIDs give the TEST INVALID
+  BY CONSTRUCTION verdict (exit 3); rc=1 without a sum= line gets the
+  ONE-UID verdict, never the ECC one.
+* **L2**: all four `sed ... ,$p` traceback selections are BOUNDED (from the
+  error line to the next timestamped line, <= 80 lines, mawk-safe) -- the
+  300 s of "skipping eviction" DEBUG noise no longer buries the exception.
+* **L3/L5**: `Consumer error:` extracts the real OPEN FAILED / CUDA_ERROR
+  line from the output (not the verdict tail); rc=3 is reported as a
+  test-construction bug, never as a boundary failure; the ipc-test output
+  streams LIVE through `tee` (rc from PIPESTATUS[0], the temp file removed);
+  the stray ")" in the consumer banner is gone.
+* **L4** (test holes): 6 surviving mutants now killed by new tests -- the
+  KVP_SAME_UID default (UNSET -> operator UID), SERVER_GID from `id -g`,
+  the GID comparison in the K3 check, the exact `sudo chown -R <uid>:<gid>`
+  command text, CONSUMER_USER defaulting to PRODUCER_USER, and the
+  test-recovery.sh branches (bounded selection).
+* **Tests**: test_r28_serde_alloc.py (7), test_r28_diagnostics.py (15),
+  test_r28_l1.py (3), test_r28_l4.py (8) -- all behavioural (stub docker/id,
+  IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR/KVP_PROC_ROOT isolation, free
+  ports). 19 mutations verified killed (incl. the 6 survivors of r27).
 ### Round 27 (K1-K8: the cache server must run under the ENGINE's UID)
 **Hardware review (22 Nov 2026):** the hardware run failed at
 `register_kv_cache` with `CUDA_ERROR_MAP_FAILED` -- the engine ran as UID

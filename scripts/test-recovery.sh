@@ -127,13 +127,18 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
       _srverr="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" 2>/dev/null | grep -a -m1 'Error handling operation register_kv_cache' || true)"
       if [ -n "$_srverr" ]; then
         echo "  ABORT: cache server FAILED a request during the wait (fail-fast):" >&2
-        # Round 27 (K6): print the WHOLE traceback (every frame + the
+        # Round 27 (K6) / r28 L2: print the WHOLE traceback (every frame + the
         # exception line + the "The CUDA driver logged these messages"
-        # block) -- never truncate at N lines.
-        tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | sed -n '/Error handling operation register_kv_cache/,$p' >&2
+        # block) -- bounded selection (from the error line to the next
+        # timestamped line, at most 80 lines). The old `,$p` ran to EOF and
+        # the "skipping eviction" DEBUG noise buried the exception.
+        _srverr_trace="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | awk '
+          f && /^\[20[0-9][0-9]-/ {exit}
+          /Error handling operation register_kv_cache/ {f=1}
+          f {print}' | head -n 80)"
+        printf '%s\n' "$_srverr_trace" >&2
         echo "  This is the root cause -- waiting 300s cannot fix it." >&2
         # Round 27 (K6): the CUDA-IPC advice only for IPC failures.
-        _srverr_trace="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | sed -n '/Error handling operation register_kv_cache/,$p')"
         case "$_srverr_trace" in
           *cuIpc*|*CUDA_ERROR_MAP_FAILED*|*"invalid device context"*)
             echo "  Fix (CUDA IPC boundary): the cache server and the engine must run under ONE UID." >&2
@@ -158,7 +163,13 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
            # more than 25 lines and the exception line must reach the output.
            _kvp_e1="$(grep -a -n 'Error handling operation register_kv_cache' "$LOG" | tail -n 1 || true)"
            if [ -n "$_kvp_e1" ]; then
-             sed -n "${_kvp_e1%%:*},\$p" "$LOG" >&2 || true
+             # r28 L2: bounded selection (from the found line to the next
+             # timestamped line, at most 80 lines) -- the old `,$p` ran to EOF
+             # and the "skipping eviction" DEBUG noise buried the exception.
+             awk -v start="${_kvp_e1%%:*}" '
+               NR == start {f=1}
+               f && NR > start && /^\[20[0-9][0-9]-/ {exit}
+               f {print}' "$LOG" | head -n 80 >&2 || true
            fi
          fi
          return 2 ;;
@@ -196,11 +207,15 @@ server_read_bytes(){ # Round 79 review (item 6): physical bytes read by the
   # read /sys/block/<dev>/stat of a SHARED disk (model + cache + OS live
   # there): scenario A recorded 571 GB of UNRELATED model reads and B's
   # delta<=0 check could never fire -- it proved nothing.
-  local pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
+  # r28 L9: the pid must be the REAL server (kvp_server_pid): in docker mode
+  # the pid file holds the HOST docker-run CLIENT ($! of `setsid nohup docker
+  # run &`), whose /proc/<pid>/io proved nothing about cache reads.
+  # KVP_PROC_ROOT (default /proc) keeps the test away from the real /proc.
+  local proot="${KVP_PROC_ROOT:-/proc}"
   local pid=""
-  [ -f "$pidf" ] && pid="$(tr -d '[:space:]' < "$pidf" 2>/dev/null || echo '')"
-  if [ -z "$pid" ] || [ ! -r "/proc/$pid/io" ]; then echo -1; return; fi
-  awk '/^read_bytes:/{print $2}' "/proc/$pid/io" 2>/dev/null || echo -1
+  pid="$(kvp_server_pid "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}")"
+  if [ -z "$pid" ] || [ ! -r "$proot/$pid/io" ]; then echo -1; return; fi
+  awk '/^read_bytes:/{print $2}' "$proot/$pid/io" 2>/dev/null || echo -1
 }
 disk_read_bytes(){ # LEGACY device-wide counter (kept for reference only -- NOT
   # evidence: the disk is shared with the model and the OS). Requires KVP_CACHE_DEVICE.
@@ -330,6 +345,10 @@ echo "== COLD baseline (no cache reuse expected) =="
 api_ready || PA pre "API is not up before the cold baseline -- start the engine first (bash scripts/start-all.sh), wait for it to load, then rerun"
 M0=$(log_mark); B0=$(L2_bytes)
 ask cold "$M0"
+# r28 L7: a failing L2 store is a HARD FAIL with the real cause (the error
+# block from the server log), BEFORE the indirect byte/line counters -- the
+# hardware run looked healthy everywhere while every store batch failed.
+kvp_scan_l2_failures "$LOG" "$M0" || fail "scenario pre: L2 store FAILING (see the block above) -- nothing is being written to NVMe"
 T_COLD=$(python3 -c "import json;d=json.load(open('$OUT/cold.summary.json'));print(d['request_latency_s'])")
 # Review fix (round 18): L2 store is ASYNCHRONOUS -- measure B0/B_WARM only after
 # the directory goes quiet, otherwise the byte delta races the write and can
@@ -349,6 +368,8 @@ docker restart "$CONTAINER" >/dev/null 2>&1 || PA A "docker restart failed"
 api_ready || PA A "API did not come back after vLLM restart (scenario impossible)"
 A_DISK0=$(server_read_bytes)   # sample the SERVER's own reads around the request
 ask afterA "$M_A0"
+# r28 L7: loud L2 store failure check (same contract as the cold baseline).
+kvp_scan_l2_failures "$LOG" "$M_A0" || fail "A: L2 store FAILING (see the block above) -- nothing is being written to NVMe"
 A_DISK1=$(server_read_bytes)
 A_RETR=$(l2_retrievals "$M_A0"); A_CACHED=$(cached_of "$OUT/afterA.json")
 T_A=$(python3 -c "import json;print(json.load(open('$OUT/afterA.summary.json'))['request_latency_s'])")
@@ -461,13 +482,15 @@ bash "$HERE/start-cache.sh" >/dev/null 2>&1 || PA B "start-cache.sh failed (cach
 # really is not there.
 LIVE_PID=""
 for _pid_try in $(seq 1 15); do
-  LIVE_PID="$(cat "$KVP_CACHE_ROOT/lmcache-server.pid" 2>/dev/null || echo "")"
-  LIVE_PID="$(printf '%s' "$LIVE_PID" | tr -d '[:space:]')"
+  # r28 L9: the probe must follow the REAL server pid (kvp_server_pid): in
+  # docker mode the pid file holds the docker-run CLIENT, and kill -0 on it
+  # proved nothing about the server inside the container.
+  LIVE_PID="$(kvp_server_pid "$KVP_CACHE_ROOT")"
   case "$LIVE_PID" in
     ''|*[!0-9]*) : ;;                     # not yet written -- wait
     *)
       if kill -0 "$LIVE_PID" 2>/dev/null; then
-        break                             # pid written + process alive -> OK
+        break                             # server pid resolved + alive -> OK
       fi
       : ;;                                # stale pid -- keep retrying
   esac
@@ -514,9 +537,7 @@ if [ "${KVP_SKIP_IPC_TEST:-0}" != "1" ] && [ -x "$HERE/ipc-test.sh" ]; then
     IMAGE="$(tr -d '[:space:]' < "$ROOT/live/image")"
     echo "  IMAGE resolved from live/image: $IMAGE"
   fi
-  _b_ipc_mode=host
-  _b_pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
-  [ -f "$_b_pidf" ] && [ "$(awk '/^Uid:/{print $2}' "/proc/$(tr -d '[:space:]' < "$_b_pidf")/status" 2>/dev/null || echo '')" = "0" ] && _b_ipc_mode=host-root
+  _b_ipc_mode="$(kvp_ipc_consumer_mode "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}")"
   if IMAGE="${IMAGE:-}" CONSUMER="$_b_ipc_mode" PRODUCER_USER="$(id -u):$(id -g)" bash "$HERE/ipc-test.sh"; then
     echo "  pre-flight: CUDA IPC boundary OK (consumer=$_b_ipc_mode)"
   else
@@ -528,6 +549,8 @@ api_ready || PA B "API did not come back after full restart"
 M_B0=$(log_mark)
 B_DISK0=$(server_read_bytes)   # sample the SERVER's own reads around the request
 ask afterB "$M_B0"
+# r28 L7: loud L2 store failure check (same contract as the cold baseline).
+kvp_scan_l2_failures "$LOG" "$M_B0" || fail "B: L2 store FAILING (see the block above) -- nothing is being written to NVMe"
 B_DISK1=$(server_read_bytes)
 B_RETR=$(l2_retrievals "$M_B0"); B_CACHED=$(cached_of "$OUT/afterB.json")
 T_B=$(python3 -c "import json;print(json.load(open('$OUT/afterB.summary.json'))['request_latency_s'])")

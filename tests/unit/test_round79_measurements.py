@@ -98,13 +98,20 @@ def test_scenario_b_image_from_live_pin(recovery_text):
 # ---- item 6: per-process disk counter ------------------------------------
 
 def test_disk_counter_is_per_process(recovery_text):
-    """The counter must be the LMCache server PROCESS's own read_bytes
-    (/proc/<pid>/io) -- the device-wide /sys/block counter proved nothing."""
+    """r28 L9: the counter must be the REAL cache server's own read_bytes --
+    resolved via kvp_server_pid (docker State.Pid in docker mode, the pid
+    file in host mode), read through KVP_PROC_ROOT (default /proc)."""
     assert "server_read_bytes()" in recovery_text, (
         "a per-process server_read_bytes() counter is required")
     idx = recovery_text.index("server_read_bytes()")
     seg = recovery_text[idx:idx + 900]
-    assert "/proc/$pid/io" in seg, "server_read_bytes must read /proc/<pid>/io"
+    assert "kvp_server_pid" in seg, (
+        "the pid must come from the shared kvp_server_pid (the docker CLIENT's "
+        "pid file proved nothing)")
+    assert "KVP_PROC_ROOT" in seg, (
+        "the /proc root must be overridable (KVP_PROC_ROOT) for tests")
+    assert "$proot/$pid/io" in seg or "/proc/$pid/io" in seg, (
+        "server_read_bytes must read <proc>/<pid>/io")
     assert "read_bytes" in seg, "it must read the read_bytes line"
 
 

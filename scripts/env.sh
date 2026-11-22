@@ -603,6 +603,107 @@ _kvp_resolve_launch_mode(){
   export KVP_LAUNCH_MODE
   printf '%s' "$_mode"
 }
+# ---------------------------------------------------------------------------
+# r28 L9: ONE server-pid resolution shared by test-recovery.sh. In docker
+# mode start-cache.sh writes `echo $!` (the HOST docker-run client) into the
+# pid file -- reading /proc/<that>/io measured the CLIENT's I/O, not the
+# cache server's. The real server pid is the container's State.Pid (host
+# namespace); host mode keeps the pid file.
+# ---------------------------------------------------------------------------
+kvp_server_pid(){ # kvp_server_pid [cache-root]
+  # Prints the PID of the REAL cache server (host namespace), or nothing
+  # when it cannot be resolved.
+  local _croot="${1:-${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}}"
+  local _cname="${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" _pidf _pid
+  _pid="$(docker inspect -f '{{.State.Pid}}' "$_cname" 2>/dev/null || echo '')"
+  case "$_pid" in
+    ""|0|*[!0-9]*) ;;  # no container / no pid -> fall back to the pid file
+    *) echo "$_pid"; return 0 ;;
+  esac
+  _pidf="$_croot/lmcache-server.pid"
+  _pid="$(tr -d '[:space:]' < "$_pidf" 2>/dev/null || echo '')"
+  case "$_pid" in
+    ""|*[!0-9]*) return 0 ;;
+  esac
+  echo "$_pid"
+}
+# ---------------------------------------------------------------------------
+# r28 L8: ONE consumer-mode decision shared by the pre-flight and
+# test-recovery.sh. The docker-mode server runs in a CONTAINER (start-cache.sh
+# launches `docker run`), so the boundary to test is "server container <-> engine
+# container" -- the old test-recovery.sh only knew host/host-root and probed
+# the WRONG boundary (host process <-> engine container), which could pass
+# while the real one was broken.
+# ---------------------------------------------------------------------------
+kvp_ipc_consumer_mode(){ # kvp_ipc_consumer_mode [cache-root]
+  # Prints host | host-root | container:
+  #   container  -- the cache server is a running docker container;
+  #   host-root  -- host server whose pid file points at a root process;
+  #   host       -- anything else.
+  local _croot="${1:-${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}}"
+  local _cname="${KVP_CACHE_CONTAINER:-lmcache-kvp-server}"
+  local _pidf _pid _uid
+  if [ "$(docker inspect -f '{{.State.Running}}' "$_cname" 2>/dev/null)" = "true" ]; then
+    echo container
+    return 0
+  fi
+  _pidf="$_croot/lmcache-server.pid"
+  _pid="$(tr -d '[:space:]' < "$_pidf" 2>/dev/null || echo '')"
+  if [ -n "$_pid" ]; then
+    _uid="$(awk '/^Uid:/{print $2}' "/proc/$_pid/status" 2>/dev/null || echo '')"
+    if [ "$_uid" = "0" ]; then
+      echo host-root
+      return 0
+    fi
+  fi
+  echo host
+}
+# ---------------------------------------------------------------------------
+# r28 L7: the L2 store failure must be LOUD. The hardware run wrote every
+# failure only into lmcache-server.log ("Serde task N (SERIALIZE) failed",
+# "Store task N to adapter 0 failed", "L2 store completed: adapter 0, 0
+# succeeded, 20 failed") while start-all.sh, vLLM and the readiness gate all
+# looked healthy -- the operator learned about it only by reading the log.
+# ---------------------------------------------------------------------------
+kvp_scan_l2_failures(){ # kvp_scan_l2_failures <log> [from_byte]
+  # Prints the first error block + "L2 STORE FAILING" and returns 1 when the
+  # log (from from_byte) contains an L2 store failure; silent, return 0
+  # otherwise. Regexes are mawk-safe (no {n} intervals).
+  local _log="${1:-}" _from="${2:-0}" _fresh _hit _line _block
+  [ -n "$_log" ] && [ -f "$_log" ] || return 0
+  _fresh="$(tail -c "+$(( _from + 1 ))" "$_log" 2>/dev/null || true)"
+  [ -n "$_fresh" ] || return 0
+  _hit="$(printf '%s\n' "$_fresh" | grep -anE \
+    'Serde task [0-9]+ \((SERIALIZE|DESERIALIZE)\) failed|Store task [0-9]+ to adapter [0-9]+ failed|L2 store completed: adapter [0-9]+, [0-9]+ succeeded, [1-9][0-9]* failed' \
+    | head -n 1 || true)"
+  [ -n "$_hit" ] || return 0
+  _line="${_hit%%:*}"
+  # Limited selection (same rule as the r28 L2 traceback fix): from the found
+  # line to the NEXT timestamped line, at most 40 lines -- the server keeps
+  # logging DEBUG noise ("skipping eviction") after the error.
+  _block="$(printf '%s\n' "$_fresh" | awk -v start="$_line" '
+    NR == start {f=1}
+    f && NR > start && /^\[20[0-9][0-9]-/ {exit}
+    f {print}' | head -n 40)"
+  printf '%s\n' "$_block"
+  echo "L2 STORE FAILING: the cache server cannot write to NVMe. L1 (RAM) hits still work, so the service looks healthy, but nothing survives a restart."
+  return 1
+}
+# r28 L7: one-line summary for the `kvp status` subcommand.
+kvp_l2_writes_status(){ # kvp_l2_writes_status <log> [from_byte]
+  local _log="${1:-}" _from="${2:-0}" _fresh _n
+  [ -n "$_log" ] && [ -f "$_log" ] || { echo "L2 writes: OK"; return 0; }
+  _fresh="$(tail -c "+$(( _from + 1 ))" "$_log" 2>/dev/null || true)"
+  _n="$(printf '%s\n' "$_fresh" | grep -acE \
+    'Serde task [0-9]+ \((SERIALIZE|DESERIALIZE)\) failed|Store task [0-9]+ to adapter [0-9]+ failed|L2 store completed: adapter [0-9]+, [0-9]+ succeeded, [1-9][0-9]* failed' \
+    || true)"
+  if [ "${_n:-0}" -gt 0 ]; then
+    echo "L2 writes: FAILING ($_n failed)"
+    return 1
+  fi
+  echo "L2 writes: OK"
+  return 0
+}
 # _kvp_pre_flights <kv-repo-root> <host> <port> <cache-root> <image> <uid> <gid> <same-uid> <launch-mode>
 # Round 77 (review): the mp_ping RPC probe and the CUDA IPC boundary test were
 # wired ONLY into the kv launcher -- after the default switches to
@@ -830,53 +931,63 @@ _kvp_pre_flights(){
     echo "NOTE: scripts/ipc-test.sh not found -- CUDA IPC boundary test skipped"
     return 0
   fi
-  _ipc_mode=host
-  _ipc_pidf="$_croot/lmcache-server.pid"
-  if [ -f "$_ipc_pidf" ]; then
-    _ipc_pid="$(tr -d '[:space:]' < "$_ipc_pidf")"
-    _ipc_uid="$(awk '/^Uid:/{print $2}' "/proc/$_ipc_pid/status" 2>/dev/null || echo '')"
-    if [ "$_ipc_uid" = "0" ]; then _ipc_mode=host-root; fi
-  fi
-  if [ "$_mode" = "docker" ]; then _ipc_mode=container; fi
+  _ipc_mode="$(kvp_ipc_consumer_mode "$_croot")"
   echo "pre-flight: CUDA IPC boundary test (consumer=$_ipc_mode) -- can the cache"
   echo "            server open GPU memory created in the container? (~1 min)"
   _ipc_pu=""
   if [ "$_same" = "1" ] && [ -n "$_uid" ]; then _ipc_pu="$_uid:$_gid"; fi
-  _ipc_out=""
-  if _ipc_out="$(IMAGE="$_image" CONSUMER="$_ipc_mode" PRODUCER_USER="$_ipc_pu" CONSUMER_USER="$_ipc_pu" bash "$_root/scripts/ipc-test.sh" 2>&1)"; then
-    printf '%s\n' "$_ipc_out"
+  local _ipc_rc=0 _ipc_tmp _c_err
+  # r28 L5.2: show the ipc-test output LIVE (the 10s/20s handle-wait counter
+  # used to stay hidden for 60-90s inside $(...)); tee captures it for the
+  # L3 error-line extraction. rc comes from PIPESTATUS[0], never from tee.
+  _ipc_tmp="$(mktemp "${TMPDIR:-/tmp}/kvp-ipc-out.XXXXXX")"
+  IMAGE="$_image" CONSUMER="$_ipc_mode" PRODUCER_USER="$_ipc_pu" CONSUMER_USER="$_ipc_pu" \
+    bash "$_root/scripts/ipc-test.sh" 2>&1 | tee "$_ipc_tmp"
+  _ipc_rc=${PIPESTATUS[0]}
+  if [ "$_ipc_rc" -eq 0 ]; then
+    rm -f "$_ipc_tmp"
     echo "pre-flight: CUDA IPC boundary OK (consumer=$_ipc_mode${_ipc_pu:+, producer UID=$_ipc_pu})"
-  else
-    printf '%s\n' "$_ipc_out" >&2
-    echo "ERROR: CUDA IPC BOUNDARY FAILED (pre-flight): the cache server cannot open" >&2
-    echo "GPU memory created in the container -- this is the EXACT step that killed" >&2
-    echo "register_kv_cache (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle)." >&2
-    echo "The model load would waste ~15 min and fail the same way. Fix the boundary FIRST:" >&2
-    if [ "$_mode" = "docker" ]; then
-      # K7: name BOTH sides' UIDs -- the mismatch is the whole story.
-      local _f_srv_user _f_srv_uid
-      _f_srv_user="$(docker inspect -f '{{.Config.User}}' "${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" 2>/dev/null || echo '?')"
-      case "$_f_srv_user" in ""|0|0:0|root) _f_srv_uid=0:0 ;; *) _f_srv_uid="$_f_srv_user" ;; esac
-      echo "  - the cache server and the engine must run under ONE UID (round 27 review)." >&2
-      echo "    UIDs: cache server=$_f_srv_uid, engine=${_ipc_pu:-$(id -u):$(id -g)}" >&2
-      echo "    Check: docker inspect -f '{{.Config.User}}' ${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" >&2
-      echo "    Then: bash scripts/stop-cache.sh && bash scripts/start-cache.sh" >&2
-    else
-      echo "  - the cache server and the engine must run under ONE UID." >&2
-      echo "    Run the server as the same user as the engine (KVP_SAME_UID=1)," >&2
-      echo "    or both as root (KVP_SAME_UID=0). Mixed pairs never work." >&2
-      echo "  - or run the cache server in the container too:" >&2
-      echo "      KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
-    fi
-    # K7: the LAST consumer error line, so the operator sees the driver's
-    # verdict without scrolling.
-    echo "Last consumer line: $(printf '%s\n' "$_ipc_out" | tail -n 1)" >&2
-    echo "NOTE: a pre-flight catches a dead channel at start -- it cannot catch a" >&2
-    echo "server that dies MID-load; the launcher still fail-fasts on server errors." >&2
-    echo "To bypass this check: KVP_SKIP_IPC_TEST=1 (NOT recommended -- the failure returns)." >&2
+    return 0
+  fi
+  # r28 L3.2: rc=3 is the test's own "TEST INVALID BY CONSTRUCTION" verdict --
+  # it says NOTHING about the CUDA boundary. Never present it as a boundary
+  # failure, never print UID advice for it.
+  if [ "$_ipc_rc" -eq 3 ]; then
+    rm -f "$_ipc_tmp"
+    echo "ERROR: the IPC pre-flight test is INVALID (producer and consumer share a PID) -- a test-construction bug, NOT a CUDA failure" >&2
     return 1
   fi
-  return 0
+  echo "ERROR: CUDA IPC BOUNDARY FAILED (pre-flight): the cache server cannot open" >&2
+  echo "GPU memory created in the container -- this is the EXACT step that killed" >&2
+  echo "register_kv_cache (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle)." >&2
+  echo "The model load would waste ~15 min and fail the same way. Fix the boundary FIRST:" >&2
+  if [ "$_mode" = "docker" ]; then
+    # K7: name BOTH sides' UIDs -- the mismatch is the whole story.
+    local _f_srv_user _f_srv_uid
+    _f_srv_user="$(docker inspect -f '{{.Config.User}}' "${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" 2>/dev/null || echo '?')"
+    case "$_f_srv_user" in ""|0|0:0|root) _f_srv_uid=0:0 ;; *) _f_srv_uid="$_f_srv_user" ;; esac
+    echo "  - the cache server and the engine must run under ONE UID (round 27 review)." >&2
+    echo "    UIDs: cache server=$_f_srv_uid, engine=${_ipc_pu:-$(id -u):$(id -g)}" >&2
+    echo "    Check: docker inspect -f '{{.Config.User}}' ${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" >&2
+    echo "    Then: bash scripts/stop-cache.sh && bash scripts/start-cache.sh" >&2
+  else
+    echo "  - the cache server and the engine must run under ONE UID." >&2
+    echo "    Run the server as the same user as the engine (KVP_SAME_UID=1)," >&2
+    echo "    or both as root (KVP_SAME_UID=0). Mixed pairs never work." >&2
+    echo "  - or run the cache server in the container too:" >&2
+    echo "      KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
+  fi
+  # r28 L3.1: the REAL consumer error line, extracted from the OUTPUT (the old
+  # `tail -n 1` of everything showed the VERDICT tail, e.g. "check GPU drivers
+  # / ECC", which is exactly the wrong hint at the wrong moment).
+  _c_err="$(grep -a 'OPEN FAILED' "$_ipc_tmp" | tail -n 1 || true)"
+  [ -n "$_c_err" ] || _c_err="$(grep -aE 'CUDA_ERROR|AcceleratorError|Returning [0-9]+' "$_ipc_tmp" | tail -n 1 || true)"
+  rm -f "$_ipc_tmp"
+  echo "Consumer error: ${_c_err:-(no consumer error line)}" >&2
+  echo "NOTE: a pre-flight catches a dead channel at start -- it cannot catch a" >&2
+  echo "server that dies MID-load; the launcher still fail-fasts on server errors." >&2
+  echo "To bypass this check: KVP_SKIP_IPC_TEST=1 (NOT recommended -- the failure returns)." >&2
+  return 1
 }
 
 _kvp_load_env(){ # _kvp_load_env <repo root>

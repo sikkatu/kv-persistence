@@ -211,6 +211,21 @@ def _decompress_zstd(data: bytes, max_len: int) -> bytes:
 # ---------------------------------------------------------------------------
 
 
+def _safe(fn, default="?"):
+    """Collect one diagnostic field: never let diagnostics replace the
+    original error (r28 L6.1)."""
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001
+        return default
+def _diag(key, value) -> str:
+    return f"{key}={value}"
+class _LayoutView:
+    """Lightweight MemoryLayoutDesc stand-in (shapes/dtypes only) for the
+    diagnostic fields -- no LMCache import at module load (r28 L6.1)."""
+    def __init__(self, shapes, dtypes):
+        self.shapes = shapes
+        self.dtypes = dtypes
 class LosslessCompressSerializer:
     """Compress KV bytes losslessly into a page-aligned, zero-padded frame."""
 
@@ -249,6 +264,50 @@ class LosslessCompressSerializer:
         ) + payload
         padded = align_up(len(frame), self._align)
         out = memoryview(dst.byte_array).cast("B")
+        # r28 L6.1 (hardware log: all 8 store batches ended "0 succeeded,
+        # 20 failed"): LMCache sizes the temp buffer from the FIRST object of
+        # the batch (objects[0]); a larger object then crashes here with a
+        # bare "memoryview assignment: lvalue and rvalue have different
+        # structures" and the whole batch fails. Refuse BEFORE writing, with
+        # every number the next round needs. The error reaches the server log
+        # via _run_task's logger.exception, and L7 turns it into a loud FAIL.
+        if len(out) < padded:
+            def _kv(field):
+                def _get():
+                    ident = getattr(key, "identity", key)
+                    return getattr(ident, field, "?")
+                return _safe(_get, "?")
+            def _layout_field(field):
+                def _get():
+                    return getattr(src, field)()
+                return _safe(_get, "?")
+            def _plain_from_src():
+                lay = _LayoutView(
+                    shapes=src.get_shapes(), dtypes=src.get_dtypes()
+                )
+                return plaintext_bytes(lay)
+            def _est_from_src():
+                lay = _LayoutView(
+                    shapes=src.get_shapes(), dtypes=src.get_dtypes()
+                )
+                return self.estimate_serialized_size(lay)
+            diag = " ".join([
+                _diag("dst_len", len(out)),
+                _diag("need", padded),
+                _diag("frame", len(frame)),
+                _diag("src_len", len(payload_in)),
+                _diag("src_size", _safe(lambda: src.get_size(), "?")),
+                _diag("plaintext_by_layout", _safe(_plain_from_src, "?")),
+                _diag("estimate_by_layout", _safe(_est_from_src, "?")),
+                _diag("codec", _CODEC_NAME.get(self._codec, "?")),
+                _diag("shapes", _safe(_layout_field("get_shapes"), "?")),
+                _diag("dtypes", _safe(_layout_field("get_dtypes"), "?")),
+                _diag("dst_size", _safe(lambda: dst.get_size(), "?")),
+                _diag("dst_phy", _safe(lambda: dst.get_physical_size(), "?")),
+                _diag("object_group_id", _kv("object_group_id")),
+                _diag("kv_rank", _kv("kv_rank")),
+            ])
+            raise ValueError(f"kvp-serde: destination buffer too small: {diag}")
         out[: len(frame)] = frame
         if padded > len(frame):
             out[len(frame):padded] = b"\x00" * (padded - len(frame))

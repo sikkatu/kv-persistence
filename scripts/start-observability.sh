@@ -121,3 +121,13 @@ if [ "${KVP_OBS_EXTRAS:-1}" != "0" ]; then
   fi
 fi
 # --- extras hook: END ---
+# r28 D1: the network the monitoring stack needs appears only HERE -- if the
+# cache server was started before observability it cannot reach the collector
+# (it is not in this network). One line, no automatic restart.
+if [ "$(docker inspect -f '{{.State.Running}}' obs_otel_collector 2>/dev/null)" = "true" ]; then
+  _srv_net="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' obs_otel_collector 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+  _cache_net="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+  if [ -n "$_cache_net" ] && [ "$_cache_net" != "$_srv_net" ]; then
+    echo "NOTE: the cache server was started before observability; restart it (bash scripts/stop-cache.sh && bash scripts/start-all.sh) so its metrics reach Grafana"
+  fi
+fi

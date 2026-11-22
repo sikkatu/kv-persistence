@@ -122,6 +122,26 @@ def main() -> None:
             "will fail to load",
             file=sys.stderr,
         )
+    # r28 L6.2: size the serde temp buffers from the LARGEST object of the
+    # batch (LMCache sizes them from objects[0] only -- a larger object then
+    # fails the whole store batch). Installed only when the adapter configures
+    # a kvp-* serde; drift-protected (the reference source must match).
+    from . import serde_alloc_patch
+    if serde_alloc_patch.kvp_serde_configured():
+        _sap_status = serde_alloc_patch.install()
+        if _sap_status == "patched":
+            print(
+                "[kvp] serde temp-buffer patch installed "
+                "(buffers sized from the largest object of the batch)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "[kvp] WARNING: serde temp-buffer patch NOT installed: "
+                "LMCache source differs -- store batches may fail on "
+                "mixed-size objects (kvp_scan_l2_failures will flag it loudly)",
+                file=sys.stderr,
+            )
 
     try:
         from lmcache.cli.main import main as lmc_main

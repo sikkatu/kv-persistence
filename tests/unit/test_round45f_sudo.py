@@ -56,15 +56,14 @@ def test_start_cache_launches_with_resolved_python():
 
 
 def test_ipc_mode_follows_server_process_user():
-    """A root-run server needs the host-root IPC consumer (the ipc-test
-    proved root is the fix) -- detected from the pid file, not env alone."""
+    """r28 L8: the consumer-mode decision lives in ONE shared function
+    (kvp_ipc_consumer_mode) used by the pre-flight and test-recovery.sh --
+    it reads the docker container state first (docker boundary) and falls
+    back to the pid file's user from /proc."""
     t = _T.contract_text()
-    assert "host-root" in t, "the pre-flight must support the host-root consumer"
-    assert "/proc/$_ipc_pid/status" in t, (
-        "the server process user must be read from proc"
-    )
-    marker = t.index("CUDA IPC boundary")
-    idx = t.index("_ipc_mode=host-root")
-    assert idx > marker, (
-        "the mode detection must live in the IPC test block"
-    )
+    assert "kvp_ipc_consumer_mode" in t, (
+        "the pre-flight must use the shared consumer-mode function")
+    assert "container" in t, "the docker (container) boundary must be supported"
+    env_sh = (ROOT / "scripts" / "env.sh").read_text()
+    assert "/proc/$_pid/status" in env_sh, (
+        "the host-root detection must read the pid's user from proc")

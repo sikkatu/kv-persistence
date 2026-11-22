@@ -26,11 +26,12 @@ LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 
 
 def _call_line() -> str:
-    # Round 27 (K5): the call line now captures the output --
-    #   if _ipc_out="$(IMAGE=... CONSUMER=... PRODUCER_USER=... CONSUMER_USER=... bash "$_root/scripts/ipc-test.sh" 2>&1)"; then
+    # r28 L5.2: the call streams LIVE through tee --
+    #   IMAGE=... CONSUMER=... PRODUCER_USER=... CONSUMER_USER=... \
+    #     bash "$_root/scripts/ipc-test.sh" 2>&1 | tee "$_ipc_tmp"
     m = re.search(
-        r'^\s*if _ipc_out="\$\((IMAGE="\$_image" CONSUMER="\$_ipc_mode" .*bash "\$_root/scripts/ipc-test\.sh") 2>&1\)"; then',
-        _T.contract_text(), re.M)
+        r'^\s*(IMAGE="\$_image" CONSUMER="\$_ipc_mode" .*?bash "\$_root/scripts/ipc-test\.sh") 2>&1 \| tee',
+        _T.contract_text(), re.M | re.S)
     assert m, "ipc-test call line not found in the launcher"
     return m.group(1)
 def _run(tmp_path, producer_user):
@@ -40,8 +41,7 @@ def _run(tmp_path, producer_user):
         'echo "PU=[${PRODUCER_USER-unset}] CU=[${CONSUMER_USER-unset}] C=[$CONSUMER]"\n')
     script = (f'_root="{tmp_path}"; _image=img; _ipc_mode=host; '
               f'_ipc_pu="{producer_user}"; '
-              f'if {_call_line()}; then echo CALLED; fi; '
-              f'echo "$_ipc_out"')
+              f'{_call_line()}; echo DONE')
     return subprocess.run(["bash", "-c", script],
                           capture_output=True, text=True)
 def test_same_uid_producer_user_reaches_ipc_test(tmp_path):

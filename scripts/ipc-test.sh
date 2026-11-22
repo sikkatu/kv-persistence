@@ -92,12 +92,21 @@ for _ in range(90):
 PY
 
 cat > "$D/consumer.py" <<'PY'
-import os, pickle, sys
-import torch
-fn, args = pickle.load(open("/tmp/kvp-ipc-test/handle.pkl", "rb"))
-t = fn(*args)
-got = float(t.sum().item())
-exp = float(sum(range(1024)))
+import os, pickle, sys, traceback
+# r28 L1: the pid line MUST print before any import that can fail and before
+# fn(*args): on a real CUDA refusal Python exited with rc=1 and NO pid, the
+# script showed "PIDs: producer=1 consumer=?" and blamed ECC instead of UIDs.
+print(f"consumer: pid={os.getpid()}", flush=True)
+try:
+    import torch
+    fn, args = pickle.load(open("/tmp/kvp-ipc-test/handle.pkl", "rb"))
+    t = fn(*args)
+    got = float(t.sum().item())
+    exp = float(sum(range(1024)))
+except BaseException as e:  # noqa: BLE001 - report ANY failure honestly
+    traceback.print_exc()
+    print(f"consumer: OPEN FAILED {type(e).__name__}: {e}", flush=True)
+    sys.exit(4)
 print(f"consumer: torch {torch.__version__}, python {sys.version.split()[0]}, pid={os.getpid()}, sum={got} expected={exp}")
 sys.exit(0 if got == exp else 1)
 PY
@@ -161,7 +170,7 @@ case "$CONSUMER" in
     echo "-- consumer on the host as root (sudo), $HOST_PY (40s limit)"
     CONS_OUT="$(sudo env CUDA_VISIBLE_DEVICES="$GPU_IDX" timeout 40 "$HOST_PY" "$D/consumer.py" 2>&1)" || rc=$? ;;
   container)
-    echo "-- consumer in a second container of the same image${CONSUMER_USER:+ (user $CONSUMER_USER)}, --ipc host, 60s limit)"
+    echo "-- consumer in a second container of the same image${CONSUMER_USER:+ (user $CONSUMER_USER)}, --ipc host, 60s limit"
     CONS_OUT="$(timeout 60 docker run --rm --gpus all --ipc host ${CONSUMER_USER:+--user "$CONSUMER_USER"} \
       -v "$D:/tmp/kvp-ipc-test" \
       --entrypoint python3 "$IMAGE" /tmp/kvp-ipc-test/consumer.py 2>&1)" || rc=$? ;;
@@ -182,6 +191,24 @@ if [ -n "${PROD_PID:-}" ] && [ "$PROD_PID" = "${CONS_PID:-}" ]; then
   exit 3
 fi
 
+uid_hint(){ # r28 L1: ONE honest fix text for a real OPEN failure (any rc except
+  # 0/1-with-sum/124): the usual cause is DIFFERENT UIDs on the two sides.
+  echo "FAIL (exit $rc): the consumer could not open GPU memory created in the"
+  echo "      container. This REPRODUCES the register_kv_caches failure"
+  echo "      (CUDA_ERROR_MAP_FAILED). The usual cause is DIFFERENT UIDs on the two"
+  echo "      sides of the boundary: CUDA IPC only opens when the cache server and"
+  echo "      the engine share ONE UID. Check:"
+  echo "        docker inspect -f '{{.Config.User}}' lmcache-kvp-server"
+  echo "      and the engine UID. Restart the server so both sides match:"
+  echo "        bash scripts/stop-cache.sh && bash scripts/start-cache.sh"
+  echo "      (the default deployment is docker mode: KVP_LAUNCH_MODE=docker)"
+  if [ -n "$PRODUCER_USER" ]; then
+    echo "      SAME-UID result: FAIL -- even matching UIDs is not enough here."
+  else
+    echo "      To test the same-UID path: PRODUCER_USER=\$(id -u):\$(id -g) bash scripts/ipc-test.sh"
+  fi
+  echo "      Last consumer output is above."
+}
 case $rc in
   0)
     echo "PASS: the consumer opened GPU memory created in the container."
@@ -203,23 +230,20 @@ case $rc in
     echo "      It must equal the engine UID. To restart the server correctly:"
     echo "        bash scripts/stop-cache.sh && bash scripts/start-cache.sh" ;;
   1)
-    echo "FAIL (exit 1): the consumer opened the memory but the data does not match."
-    echo "      The IPC path transfers data incorrectly -- check GPU drivers / ECC." ;;
-  *)
-    echo "FAIL (exit $rc): the consumer could not open GPU memory created in the"
-    echo "      container. This REPRODUCES the register_kv_caches failure"
-    echo "      (CUDA_ERROR_MAP_FAILED). The usual cause is DIFFERENT UIDs on the two"
-    echo "      sides of the boundary: CUDA IPC only opens when the cache server and"
-    echo "      the engine share ONE UID. Check:"
-    echo "        docker inspect -f '{{.Config.User}}' lmcache-kvp-server"
-    echo "      and the engine UID. Restart the server so both sides match:"
-    echo "        bash scripts/stop-cache.sh && bash scripts/start-cache.sh"
-    echo "      (the default deployment is docker mode: KVP_LAUNCH_MODE=docker)"
-    if [ -n "$PRODUCER_USER" ]; then
-      echo "      SAME-UID result: FAIL -- even matching UIDs is not enough here."
-    else
-      echo "      To test the same-UID path: PRODUCER_USER=\$(id -u):\$(id -g) bash scripts/ipc-test.sh"
-    fi
-    echo "      Last consumer output is above." ;;
+    # r28 L1: "data does not match" ONLY when the memory actually opened (the
+    # consumer printed sum=). rc=1 without sum= is an OPEN failure whose
+    # exception escaped (rc=1 instead of 4) -- the UID hint is the honest one.
+    case "$CONS_OUT" in
+      *sum=*)
+        echo "FAIL: the consumer opened the memory but the data does not match."
+        echo "      The IPC path transfers data incorrectly -- check GPU drivers / ECC." ;;
+      *)
+        uid_hint ;;
+    esac ;;
+  4|*)
+    # r28 L1: rc=4 = "OPEN FAILED <type>: <text>" from consumer.py (the ONLY
+    # honest refusal code now); any other odd rc also means the boundary did
+    # not open -- never blame ECC/data for it.
+    uid_hint ;;
 esac
 exit $rc

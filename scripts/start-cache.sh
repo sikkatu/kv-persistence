@@ -110,37 +110,42 @@ esac
 case "$LMCACHE_HELP" in *--http-port*) : ;; *) unset LMCACHE_HTTP_PORT ;; esac
 # OTLP push for the observability stack (scripts/start-observability.sh).
 # Review fix (round 47b, user): metrics used to need a manual flag -- pointless.
-# Resolution order:
-#   1. LMCACHE_OTLP_ENDPOINT / KVP_OTLP_ENDPOINT (explicit endpoint),
-#   2. USE_OBSERVABILITY=1 (assume the collector default),
-#   3. AUTO-DETECT: if a collector is listening on 127.0.0.1:4320 right now,
-#      metrics are enabled automatically -- the cache only starts pushing
-#      when the stack is actually up.
+# r28 D1 (hardware log "UNAVAILABLE on host.docker.internal:4320", dashboard
+# "No data"): the old rewrite to host.docker.internal could never work -- the
+# name does not resolve without --add-host AND the collector publishes 4317
+# only on 127.0.0.1:4320 of the HOST, which the docker bridge cannot reach.
+# Now: an explicitly given KVP_OTLP_ENDPOINT / LMCACHE_OTLP_ENDPOINT is used
+# AS-IS (never rewritten); in docker mode the server JOINS the observability
+# network of a running `obs_otel_collector` and pushes to the collector's own
+# service address http://obs_otel_collector:4317. Host mode is unchanged.
 # Explicit opt-out: KVP_NO_OBSERVABILITY=1 (never probe, never push).
-case "${USE_OBSERVABILITY:-}" in
-  1|yes|true) LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-http://localhost:4320}" ;;
-esac
-LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-${KVP_OTLP_ENDPOINT:-}}"
-if [ -z "$LMCACHE_OTLP_ENDPOINT" ] && [ "${KVP_NO_OBSERVABILITY:-0}" != "1" ]; then
-  if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/4320' 2>/dev/null; then
-    LMCACHE_OTLP_ENDPOINT="http://localhost:4320"
-    echo "observability: OTel collector detected at 127.0.0.1:4320 -- metrics enabled automatically (opt out: KVP_NO_OBSERVABILITY=1)"
+OBS_NETWORK=""
+_OTLP_EXPLICIT="${LMCACHE_OTLP_ENDPOINT:-${KVP_OTLP_ENDPOINT:-}}"
+if [ -n "$_OTLP_EXPLICIT" ]; then
+  # explicit endpoint wins and is NEVER rewritten (r28 D1 contract)
+  LMCACHE_OTLP_ENDPOINT="$_OTLP_EXPLICIT"
+elif [ "$KVP_LAUNCH_MODE" = "docker" ]; then
+  if [ "${KVP_NO_OBSERVABILITY:-0}" != "1" ] && \
+     [ "$(docker inspect -f '{{.State.Running}}' obs_otel_collector 2>/dev/null)" = "true" ]; then
+    OBS_NETWORK="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' obs_otel_collector 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+    LMCACHE_OTLP_ENDPOINT="http://obs_otel_collector:4317"
+    echo "observability: collector 'obs_otel_collector' detected -- server joins network '${OBS_NETWORK:-?}' and pushes metrics to $LMCACHE_OTLP_ENDPOINT"
+  elif [ "${KVP_NO_OBSERVABILITY:-0}" != "1" ]; then
+    echo "observability: not detected (no running obs_otel_collector container) -- server metrics are disabled"
+  fi
+else
+  # host mode: unchanged (USE_OBSERVABILITY=1 default + 127.0.0.1:4320 probe)
+  case "${USE_OBSERVABILITY:-}" in
+    1|yes|true) LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT:-http://localhost:4320}" ;;
+  esac
+  if [ -z "${LMCACHE_OTLP_ENDPOINT:-}" ] && [ "${KVP_NO_OBSERVABILITY:-0}" != "1" ]; then
+    if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/4320' 2>/dev/null; then
+      LMCACHE_OTLP_ENDPOINT="http://localhost:4320"
+      echo "observability: OTel collector detected at 127.0.0.1:4320 -- metrics enabled automatically (opt out: KVP_NO_OBSERVABILITY=1)"
+    fi
   fi
 fi
-if [ -n "$LMCACHE_OTLP_ENDPOINT" ] && [ "$KVP_LAUNCH_MODE" = "docker" ]; then
-  # Review fix: inside the sidecar container `localhost` is the CONTAINER
-  # itself, so the default endpoint would silently point nowhere. The
-  # collector runs on the HOST (observability/docker-compose.yml binds
-  # 127.0.0.1), so the container must use the docker bridge gateway.
-  case "$LMCACHE_OTLP_ENDPOINT" in
-    *localhost*|*127.0.0.1*)
-      LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT/localhost/host.docker.internal}"
-      LMCACHE_OTLP_ENDPOINT="${LMCACHE_OTLP_ENDPOINT/127.0.0.1/host.docker.internal}"
-      echo "docker mode: rewriting OTLP endpoint to $LMCACHE_OTLP_ENDPOINT (localhost inside the container would be the container itself)"
-      ;;
-  esac
-fi
-if [ -n "$LMCACHE_OTLP_ENDPOINT" ]; then
+if [ -n "${LMCACHE_OTLP_ENDPOINT:-}" ]; then
   case "$LMCACHE_HELP" in
     *--otlp-endpoint*) : ;;
     *) echo "WARNING: this lmcache build has no --otlp-endpoint flag -- metrics will NOT reach the collector" >&2
@@ -331,6 +336,7 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   setsid nohup docker run --name "$CONTAINER_NAME" --rm \
     --gpus all --ipc host \
     --user "$SERVER_UID:$SERVER_GID" \
+    ${OBS_NETWORK:+--network "$OBS_NETWORK"} \
     -p "127.0.0.1:$LMCACHE_PORT:$LMCACHE_PORT" \
     ${LMCACHE_HTTP_PORT:+-p "127.0.0.1:$LMCACHE_HTTP_PORT:$LMCACHE_HTTP_PORT"} \
     -v "$ROOT_PATH:$ROOT_PATH" \

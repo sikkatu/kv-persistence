@@ -33,6 +33,10 @@ case "$cmd" in
     echo "api key:        $(cat "$CFG/api_key" 2>/dev/null | sed 's/./*/g' | head -c 12) (chmod 600, ~/.config/kvp/api_key)"
     _kvp_cont="$(head -n1 "$KVP_HOME/live/engine_container" 2>/dev/null | tr -d '[:space:]')"
     [ -n "$_kvp_cont" ] && echo "engine container: $_kvp_cont (from live/engine_container)"
+    # r28 L7: one line for the L2 store health (same scanner as
+    # test-recovery.sh) -- a failing store was invisible before.
+    . "$KVP_HOME/scripts/env.sh" 2>/dev/null && \
+      kvp_l2_writes_status "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log" || true
     docker ps --format '{{.Names}}\t{{.Status}}' 2>/dev/null | grep -E 'grafana|prometheus|lmcache|tp4' || echo "(no stack containers running)" ;;
   logs)
     # Round 70 (review checklist): follow the container that was ACTUALLY

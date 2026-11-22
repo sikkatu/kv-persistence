@@ -78,6 +78,11 @@ def _parse_like_pin(argv: list[str]):
             kw["type"] = int
         elif tname == "float":
             kw["type"] = float
+        # r28: spec flags with default False and no type are store_true
+        # booleans (e.g. --enable-tracing) -- without this the builder makes
+        # them value-taking flags and the real argv fails to parse.
+        if meta.get("default") is False and not tname and not meta.get("choices"):
+            kw["action"] = "store_true"
         p.add_argument(fl, **kw)
     try:
         return p.parse_known_args(argv)
@@ -759,7 +764,14 @@ IDENTEOF
     esac
     exit 0 ;;
   inspect)
-    # r25 G1: the readiness gate asks for {{.State.Status}} (absent when the
+    # r28 D1: this stand has NO observability stack -- obs_otel_collector is
+    # NOT running (an honest stub; a running answer would make the OTLP
+    # wiring add a --otlp-endpoint pair the smoke run cannot have). Checked
+    # BEFORE the per-arg loop: the {{.State.Running}} arg would match first.
+    case "$*" in
+      *obs_otel_collector*) echo false; exit 0 ;;
+    esac
+    # r25 G1: the readiness/pre-flight gate asks for {{.State.Status}} (absent when the
     # container was never created; exited/dead refuse at once; created/
     # running -> continue to the ping). Markers (files in bin_dir):
     #   dead-marker     -> exited   (created and stopped at once)

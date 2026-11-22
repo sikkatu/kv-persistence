@@ -28,4 +28,12 @@ KVP_VERIFY_ARGS=()
 if [ "${KVP_VERIFY_SHALLOW:-0}" != "1" ]; then
   KVP_VERIFY_ARGS+=(--deep)
 fi
+# r28 L6.2: the serde temp-buffer patch must be applicable INSIDE the image
+# (the wrapper sizes the buffers from the largest object of the batch -- the
+# store fix). `--selfcheck` runs the patch's own drift check there: OK + 0
+# when the pinned source matches and the patch installs.
+docker run --rm -v "$ROOT/implementation:/kvp-impl:ro" \
+  -e PYTHONPATH=/kvp-impl --entrypoint python3 "$IMG" \
+  -m kvpersist.serde_alloc_patch --selfcheck \
+  || { echo "ERROR(verify-image-custom): serde temp-buffer patch is NOT applicable in the image (LMCache source differs) -- L2 stores may fail on mixed-size objects" >&2; exit 4; }
 exec python3 -m kvpersist.check_image_identity "$IMG" "$ROOT/vendor/patches/lmcache" "${KVP_VERIFY_ARGS[@]}"

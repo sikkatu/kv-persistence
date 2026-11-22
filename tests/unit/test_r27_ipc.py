@@ -60,7 +60,12 @@ case "${{1:-}}" in
   run)
     case "$*" in
       *consumer.py*)
-        echo "consumer: torch 2.5, python 3.12, pid={cons_pid}, sum=523776.0 expected=523776.0"
+        if [ "{consumer_rc}" = "0" ]; then
+          echo "consumer: torch 2.5, python 3.12, pid={cons_pid}, sum=523776.0 expected=523776.0"
+        else
+          echo "consumer: pid={cons_pid}"
+          echo "consumer: OPEN FAILED RuntimeError: CUDA error: invalid device context"
+        fi
         exit {consumer_rc} ;;
       *producer.py*)
         # the producer writes the handle file so the wait loop breaks at once
@@ -145,14 +150,19 @@ def test_t4_pids_reported_on_success(tmp_path):
 # T5 (K5): a failing consumer still yields a verdict + cleanup
 # ===========================================================================
 def test_t5_failing_consumer_gets_verdict_and_cleanup(tmp_path):
-    """> T5: the stub consumer exits 1 -> the script exits non-zero, prints
-    `FAIL (exit`, touches done and runs `docker rm -f`.
+    """> T5: the stub consumer exits 1 (r28 L1: NO sum= line -> an OPEN failure,
+    not "data does not match") -> the script exits non-zero, prints the
+    ONE-UID verdict, touches done and runs `docker rm -f`.
     MUTATION caught: bare `rc=$?` under set -e (no verdict, no cleanup) or
     dropping the trap."""
     r, argv_log, itd = _run_ipc(tmp_path, consumer_rc=1)
     out = r.stdout + r.stderr
     assert r.returncode != 0, f"a failed consumer must exit non-zero:\n{out[-800:]}"
-    assert "FAIL (exit" in out, f"the verdict must print for rc=1:\n{out[-800:]}"
+    # r28 L1: rc=1 without a sum= line is an OPEN failure -> the UID verdict,
+    # NOT "data does not match" (that one needs a sum= line).
+    assert "share ONE UID" in out, f"the verdict must be the UID one:\n{out[-800:]}"
+    assert "data does not match" not in out, (
+        "without a sum= line the data verdict would be a lie")
     assert (itd / "done").exists(), "the done marker must be created (cleanup)"
     rm_lines = [l for l in argv_log.read_text().splitlines()
                 if l.startswith("rm")]

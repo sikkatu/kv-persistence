@@ -12,6 +12,59 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 28 轮（L1–L9 + D1：NVMe 写入曾静默失败——现在会响亮报错并给出诊断）
+**硬件评审（2026 年 11 月 22 日）：** 每个 L2 写入批次都以「0 succeeded,
+20 failed」告终（`kvp-serde: destination buffer too small`——LMCache 只按
+objects[0] 分配缓冲区），服务却看似健康；ipc-test 在真正的 CUDA 拒绝时
+怪罪 ECC；调用栈淹没在 DEBUG 噪声里；test-recovery 检查的是错误的 IPC
+边界和 docker 客户端的 I/O 计数器；仪表盘显示「No data」（OTLP 端点不可达）。
+工作顺序：L6 → L7 → L8 → L9 → D1 → L1–L5。
+* **L6**（阻塞项）：`compress_serde.serialize` 在缓冲区过小时以
+  `kvp-serde: destination buffer too small: dst_len=.. need=.. frame=..
+  src_len=.. src_size=.. plaintext_by_layout=.. estimate_by_layout=..
+  codec=.. shapes=.. dtypes=.. dst_size=.. dst_phy=.. object_group_id=..
+  kv_rank=..` 拒绝（诊断信息安全采集，绝不覆盖原错误）；
+  `kvpersist/serde_alloc_patch.py` 按批次中【最大】的对象分配所有临时缓冲区
+  （防漂移保护：仅当 `_alloc_temp_buffers` 与基准源码一致才安装，否则大声
+  警告、失败由 L7 捕获）；`--selfcheck` 已接入 verify-image-custom.sh。
+  测试 test_r28_serde_alloc.py 在假 TensorMemoryObj 上【逐字】复现 LMCache
+  分配器（7 个测试）。
+* **L7**：`kvp_scan_l2_failures LOG [FROM_BYTE]`（env.sh）打印首个错误块
+  （有界，≤ 40 行，无 DEBUG 噪声）+「L2 STORE FAILING：缓存服务器无法写入
+  NVMe…」并返回 1——在 test-recovery.sh 中每次写入请求后、间接计数器之前
+  调用；`kvp status` 打印一行 `L2 writes: OK|FAILING (n failed)`。
+* **L8**：`kvp_ipc_consumer_mode`（env.sh）为 pre-flight 和 test-recovery.sh
+  统一决定 host/host-root/CONTAINER——docker 模式下的边界是服务器容器 ↔
+  引擎容器（旧测试检查的是错误的边界，真实边界坏了它也可能通过）。
+* **L9**：`kvp_server_pid`（env.sh）解析真实服务器 PID（docker 模式取
+  `State.Pid`，host 模式取 pid 文件）；`server_read_bytes` 和存活探测通过
+  `KVP_PROC_ROOT` 跟随它——旧代码度量的是 docker 客户端。
+* **D1**：服务器容器加入运行中的 `obs_otel_collector` 的监控网络，推送至
+  `http://obs_otel_collector:4317`（改写为 host.docker.internal 从来行不通：
+  收集器只在宿主机的 127.0.0.1:4320 发布 4317）。显式 KVP_OTLP_ENDPOINT
+  原样使用（绝不改写）；无收集器——指标关闭并给出诚实的「not detected」
+  行；start-observability.sh 提示服务器网络已过期；
+  docs/security.md 记录了加入网络一事。
+* **L1**：真正的 consumer.py 首先打印 `consumer: pid=`（在任何 import 之前），
+  把 import/pickle/fn(*args) 包进 try/except →
+  `consumer: OPEN FAILED <类型>: <文本>` + 调用栈 + exit 4；只有内存打开但
+  求和不对时才 exit 1；脚本打印 `PIDs: producer=<n> consumer=<m>`，PID 相同
+  给出 TEST INVALID BY CONSTRUCTION 判定（exit 3）；没有 sum= 行的 rc=1 得到
+  UID 判定，绝不是 ECC。
+* **L2**：四处 `sed … ,$p` 调用栈选取全部【有界】（从错误行到下一个带时间戳
+  的行，≤ 80 行，mawk 兼容）——300 秒的「skipping eviction」不再埋掉异常。
+* **L3/L5**：`Consumer error:` 从输出中提取真正的 OPEN FAILED / CUDA_ERROR
+  行（不是判定尾部）；rc=3 是测试构造缺陷，绝不是边界失败；ipc-test 输出
+  通过 `tee` 实时显示（rc 取自 PIPESTATUS[0]，临时文件删除）；
+  横幅中多余的 `)` 已去除。
+* **L4**（测试漏洞）：6 个此前存活的突变体现已被新测试杀死——KVP_SAME_UID
+  默认值（未设置 → 操作员 UID）、SERVER_GID 取自 `id -g`、K3 检查中的 GID
+  比较、`sudo chown -R <uid>:<gid>` 的精确命令文本、CONSUMER_USER 默认取
+  PRODUCER_USER，以及 test-recovery.sh 的分支（有界选取）。
+* **测试**：test_r28_serde_alloc.py（7）、test_r28_diagnostics.py（15）、
+  test_r28_l1.py（3）、test_r28_l4.py（8）——全部行为式（stub docker/id、
+  IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR/KVP_PROC_ROOT 隔离、随机端口）。
+  验证杀死了 19 个突变体（含 r27 存活的 6 个）。
 ### 第 27 轮（K1-K8：缓存服务器必须使用引擎的 UID）
 **硬件评审（2026 年 11 月 22 日）：** 硬件运行在 `register_kv_cache` 处以
 `CUDA_ERROR_MAP_FAILED` 失败——引擎以 UID 1000 运行（KVP_SAME_UID=1 默认），
