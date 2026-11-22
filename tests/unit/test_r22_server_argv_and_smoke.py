@@ -552,21 +552,77 @@ esac
 # B4: the REAL consumers (start-cache.sh docker + host, smoke) all deliver a
 # ONE-ELEMENT --l2-adapter -- and the argv parity smoke == docker start-cache
 # ---------------------------------------------------------------------------
+def _free_port() -> int:
+    """r25 G4: a FREE port for every stub run (the fixed 15562 kept a
+    running fake_server bound -- the next run failed with
+    'Address already in use')."""
+    import socket as _s
+    s = _s.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def _kill_stub_servers(tmp_path: pathlib.Path):
+    """r25 G4: stop every fake_server this helper spawned (they live for
+    30s when start-cache.sh refuses before SIGTERM -- that held the port)."""
+    me = str(tmp_path)
+    me_bytes = me.encode()
+    for proc in pathlib.Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            cmd = (proc / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if b"fake_server.py" in cmd and me_bytes in cmd:
+            try:
+                os.kill(int(proc.name), 9)
+            except OSError:
+                pass
+
+
 def _start_cache_argv(tmp_path: pathlib.Path, mode: str, cache_root: pathlib.Path,
                       extra_env: dict | None = None,
                       require_launch: bool = True,
-                      docker_running: bool = True,
+                      docker_state: str = "running",
+                      run_dies: bool = False,
+                      create_delay: float = 0.0,
                       docker_pong: bool = True,
                       pong_delay: float = 0.0,
-                      port: int = 15562):
+                      ping_slow: bool = False,
+                      port: int | None = None):
+    """docker_state: running | exited | absent | created_late (G1: the
+    container appears only create_delay seconds after `docker run`);
+    run_dies: the docker-run client exits at once without creating it."""
+    argv_file = tmp_path / f"argv_{mode}.bin"
+    bin_dir = tmp_path / f"bin_{mode}"
+    bin_dir.mkdir(exist_ok=True)
+    # r25 G4: a free port per run + a finalizer that kills the stub servers
+    # even when start-cache.sh refuses before SIGTERM (they sleep 30s).
+    port = port if port is not None else _free_port()
+    try:
+        return _start_cache_argv_inner(
+            tmp_path, mode, cache_root, argv_file, bin_dir, port,
+            extra_env=extra_env, require_launch=require_launch,
+            docker_state=docker_state, run_dies=run_dies,
+            create_delay=create_delay,
+            docker_pong=docker_pong, pong_delay=pong_delay,
+            ping_slow=ping_slow)
+    finally:
+        _kill_stub_servers(tmp_path)
+
+
+def _start_cache_argv_inner(tmp_path, mode, cache_root, argv_file, bin_dir,
+                            port, *, extra_env, require_launch,
+                            docker_state, run_dies, create_delay,
+                            docker_pong, pong_delay, ping_slow):
     """Run the REAL start-cache.sh (docker/host) with stubs recording the
     `kvpersist.launch server` argv and a fake server that holds the request
     port and shuts down cleanly on SIGTERM. r23 D2.1: the helper owns its
     KVP_LIVE_DIR (image + image-identity.env written there -- NEVER the repo
     live/); r23 D1: the `ready` file is touched only after listen() + trap."""
-    argv_file = tmp_path / f"argv_{mode}.bin"
-    bin_dir = tmp_path / f"bin_{mode}"
-    bin_dir.mkdir(exist_ok=True)
     live = tmp_path / "live"
     live.mkdir(exist_ok=True)
     (live / "image").write_text("sha256:" + "c" * 64 + "\n")
@@ -682,6 +738,12 @@ case "$cmd" in
     case "$_all" in
       *kvpersist.launch*server*--help*) echo "--http-host --http-port --otlp-endpoint --enable-tracing" ;;
       *kvpersist.launch*server*)
+        # r25 G1: `run-dies` = the docker-run client fails BEFORE creating
+        # the container (e.g. "could not select device driver") -- exit 125.
+        if [ -f "{bin_dir}/run-dies" ]; then
+          echo "docker: Error response from daemon: could not select device driver \"nvidia\" with capabilities: [[gpu]]" >&2
+          exit 125
+        fi
         prev=""
         {record} ;;
       *--entrypoint*cat*) cat <<'IDENTEOF'
@@ -694,22 +756,42 @@ IDENTEOF
     esac
     exit 0 ;;
   inspect)
-    # r24 F2: `docker inspect -f '{{{{.State.Running}}}}' <name>` -- the
-    # readiness gate checks the CONTAINER, not the docker-run client pid.
-    # The marker is a FILE check (created on ENTRYPOINT failure or by tests).
+    # r25 G1: the readiness gate asks for {{.State.Status}} (absent when the
+    # container was never created; exited/dead refuse at once; created/
+    # running -> continue to the ping). Markers (files in bin_dir):
+    #   dead-marker     -> exited   (created and stopped at once)
+    #   run-dies        -> absent   (docker run failed before creating it)
+    #   appear-after-N  -> absent until N seconds after start, then running
     for a in "$@"; do
       case "$a" in
-        *State.Running*)
-          if [ -f "{bin_dir}/dead-marker" ]; then echo false; else echo true; fi
+        *State.Status*|*State.Running*)
+          _st=running
+          if [ -f "{bin_dir}/run-dies" ]; then
+            _st=absent
+          elif [ -f "{bin_dir}/dead-marker" ]; then
+            _st=exited
+          elif [ -f "{bin_dir}/appear-at" ]; then
+            _at=$(cat "{bin_dir}/appear-at")
+            if [ "$(date +%s)" -lt "$_at" ]; then _st=absent; fi
+          fi
+          case "$a" in
+            *State.Running*)
+              if [ "$_st" = running ]; then echo true; else echo false; fi ;;
+            *)
+              if [ "$_st" = absent ]; then exit 1; fi
+              echo "$_st" ;;
+          esac
           exit 0 ;;
       esac
     done
     echo "sha256:{'c' * 64}" ;;
   exec)
     # r24 F2: `docker exec <name> python3 -m kvpersist.mp_ping ...` -- the
-    # readiness gate pings the server INSIDE the container.
+    # readiness gate pings the server INSIDE the container. r25 G2: a slow
+    # ping (`ping-slow` marker) simulates the real mp_ping (up to 5s per try).
     case "$*" in
       *mp_ping*)
+        if [ -f "{bin_dir}/ping-slow" ]; then sleep 5; fi
         if [ -f "{bin_dir}/pong" ]; then exit 0; else exit 1; fi ;;
     esac
     cat <<'IDENTEOF'
@@ -724,20 +806,27 @@ esac
     # host mode requires a `lmcache` CLI on PATH (its pre-flight checks it)
     (bin_dir / "lmcache").write_text("#!/usr/bin/env bash\nexit 0\n")
     (bin_dir / "lmcache").chmod(0o755)
-    # r24 F2: the docker readiness gate needs a live container + a server that
-    # answers mp_ping. Default stub state = healthy (pong present, no
-    # dead-marker); the flags above control the markers BEFORE the script
-    # runs (docker_running=False -> `State.Running` false; docker_pong=False ->
-    # mp_ping never answers; pong_delay=N -> the pong file appears N seconds
-    # into the run, simulating a slow-starting server).
-    if docker_running:
-        (bin_dir / "dead-marker").unlink(missing_ok=True)
-    else:
+    # r24 F2 / r25 G1: the docker readiness gate needs a created (not dead)
+    # container + a server that answers mp_ping. Markers control the stub
+    # state BEFORE the script runs: docker_state=running|exited|absent,
+    # run_dies -> the docker-run client exits without creating the container,
+    # create_delay -> the container appears only N seconds later,
+    # docker_pong=False -> mp_ping never answers, pong_delay -> a slow server.
+    for m in ("dead-marker", "run-dies", "appear-at"):
+        (bin_dir / m).unlink(missing_ok=True)
+    if docker_state == "exited":
         (bin_dir / "dead-marker").write_text("1\n")
+    if run_dies:
+        (bin_dir / "run-dies").write_text("1\n")
+    if create_delay > 0:
+        (bin_dir / "appear-at").write_text(
+            str(int(time.time() + create_delay)) + "\n")
     if docker_pong:
         (bin_dir / "pong").write_text("1\n")
     else:
         (bin_dir / "pong").unlink(missing_ok=True)
+    if ping_slow:
+        (bin_dir / "ping-slow").write_text("1\n")
     if pong_delay > 0:
         import threading
         def _later():

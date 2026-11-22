@@ -103,14 +103,12 @@ def test_f1_docker_run_with_entrypoint_starts_server(tmp_path):
 # F2: docker readiness = container alive + RPC pong
 # ===========================================================================
 def test_f2_dead_container_refuses_fast(tmp_path):
-    """> F2: a container that exited immediately -> start-cache.sh refuses
-    within seconds (no READY), naming the CONTAINER condition, with the log
-    tail. The old gate (kill -0 of the docker-run client + ss port check)
-    printed READY here -- that was the hardware defect."""
+    """> F2 + G1: a container that was created and exited immediately ->
+    start-cache.sh refuses within seconds (no READY), naming the CONTAINER
+    condition, with the log tail."""
     t0 = time.monotonic()
     argv, r = _start_cache_argv(tmp_path, "docker", tmp_path / "cache",
-                                require_launch=False, docker_running=False,
-                                port=15571,
+                                require_launch=False, docker_state="exited",
                                 extra_env={"KVP_CACHE_READY_TIMEOUT": "6"})
     out = r.stdout + r.stderr
     elapsed = time.monotonic() - t0
@@ -128,7 +126,6 @@ def test_f2_no_pong_refuses_by_timeout(tmp_path):
     t0 = time.monotonic()
     argv, r = _start_cache_argv(tmp_path, "docker", tmp_path / "cache",
                                 require_launch=False, docker_pong=False,
-                                port=15572,
                                 extra_env={"KVP_CACHE_READY_TIMEOUT": "4"})
     out = r.stdout + r.stderr
     elapsed = time.monotonic() - t0
@@ -148,7 +145,6 @@ def test_f2_ready_not_before_pong(tmp_path):
     argv, r = _start_cache_argv(tmp_path, "docker", tmp_path / "cache",
                                 require_launch=False,
                                 docker_pong=False, pong_delay=4.0,
-                                port=15573,
                                 extra_env={"KVP_CACHE_READY_TIMEOUT": "12"})
     out = r.stdout + r.stderr
     elapsed = time.monotonic() - t0
@@ -241,8 +237,7 @@ def test_e2_docker_branch_bad_policy_zero_docker_run(tmp_path):
     cache_root = tmp_path / "cache"
     argv, r = _start_cache_argv(tmp_path, "docker", cache_root,
                                 require_launch=False,
-                                extra_env={"LMCACHE_EVICTION_POLICY": "lfu"},
-                                port=15574)
+                                extra_env={"LMCACHE_EVICTION_POLICY": "lfu"})
     out = r.stdout + r.stderr
     assert r.returncode != 0, f"a bad policy must refuse:\n{out[-800:]}"
     assert "refusing to start the server" in out, (
