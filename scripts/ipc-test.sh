@@ -19,13 +19,21 @@
 #     PRODUCER_USER -- run the producer container with this UID:GID
 #     (e.g. PRODUCER_USER=$(id -u):$(id -g) to test the SAME-UID path:
 #     PASS means the transfer works WITHOUT root).
+#     CONSUMER_USER -- run the container consumer with this UID:GID (the
+#     EXPECTED server UID). Defaults to PRODUCER_USER when set: the cache
+#     server and the engine must share ONE UID (round 27 review).
+#     IPC_TEST_DIR (default /tmp/kvp-ipc-test) and IPC_CONTAINER (default
+#     kvp-ipc-test) -- test isolation, never touch real paths.
 #
 # Result:
 #   PASS  = GPU memory crosses container -> consumer. If the server still
 #           fails, the cause is NOT the IPC boundary.
 #   FAIL / TIMEOUT = this boundary is broken; see the verdict hints.
+#   Round 27 (K4): the verdict always reports both PIDs (producer/consumer);
+#   equal PIDs mean the test topology is invalid ("invalid by construction")
+#   and no boundary verdict is given.
 #
-# Nothing is written outside /tmp/kvp-ipc-test.
+# Nothing is written outside /tmp/kvp-ipc-test (or IPC_TEST_DIR).
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # IMAGE is OPTIONAL: without it, resolve the recipe the same way the
@@ -55,7 +63,8 @@ fi
 HOST_PY="${HOST_PY:-$HOME/.venvs/lmcache/bin/python}"
 GPU_IDX="${GPU_IDX:-0}"
 CONSUMER="${CONSUMER:-host}"
-D=/tmp/kvp-ipc-test
+D="${IPC_TEST_DIR:-/tmp/kvp-ipc-test}"
+CNAME="${IPC_CONTAINER:-kvp-ipc-test}"
 
 die() { echo "ERROR: $*" >&2; exit 2; }
 
@@ -75,7 +84,7 @@ tmp = "/ipc/handle.pkl.tmp"
 with open(tmp, "wb") as f:
     pickle.dump((fn, args), f)
 os.rename(tmp, "/ipc/handle.pkl")
-print(f"producer: torch {torch.__version__}, python {sys.version.split()[0]}, IPC handle written", flush=True)
+print(f"producer: torch {torch.__version__}, python {sys.version.split()[0]}, pid={os.getpid()}, IPC handle written", flush=True)
 for _ in range(90):
     if os.path.exists("/ipc/done"):
         break
@@ -83,13 +92,13 @@ for _ in range(90):
 PY
 
 cat > "$D/consumer.py" <<'PY'
-import pickle, sys
+import os, pickle, sys
 import torch
 fn, args = pickle.load(open("/tmp/kvp-ipc-test/handle.pkl", "rb"))
 t = fn(*args)
 got = float(t.sum().item())
 exp = float(sum(range(1024)))
-print(f"consumer: torch {torch.__version__}, python {sys.version.split()[0]}, sum={got} expected={exp}")
+print(f"consumer: torch {torch.__version__}, python {sys.version.split()[0]}, pid={os.getpid()}, sum={got} expected={exp}")
 sys.exit(0 if got == exp else 1)
 PY
 
@@ -103,10 +112,28 @@ if [ -n "$PRODUCER_USER" ]; then
     *)     echo "   producer UID:GID = $PRODUCER_USER (same-UID test -- no root)" ;;
   esac
 fi
-docker rm -f kvp-ipc-test >/dev/null 2>&1 || true
-docker run -d --rm --name kvp-ipc-test --gpus all --ipc host -e GPU_IDX="$GPU_IDX" \
+# Round 27 (K4): CONSUMER_USER = the EXPECTED server UID (defaults to
+# PRODUCER_USER): the deployed configuration has server and engine on ONE UID.
+CONSUMER_USER="${CONSUMER_USER:-$PRODUCER_USER}"
+
+# Round 27 (K5): cleanup must run on EVERY exit (die, refusal, failed
+# consumer) -- under set -e a failing consumer used to abort the script
+# without a verdict and without cleanup.
+cleanup() {
+  [ -f "$D/done" ] || touch "$D/done" 2>/dev/null || true
+  sleep 1 2>/dev/null || true
+  docker rm -f "$CNAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+docker rm -f "$CNAME" >/dev/null 2>&1 || true
+# Round 27 (K4): the producer is started through `sh -c '...; true'` so its
+# PID is NOT 1 inside the container -- both sides at PID 1 made the driver
+# treat the handle as locally created ("invalid device context", rc 201).
+# No --pid host: hardware proved separate PID namespaces pass.
+docker run -d --rm --name "$CNAME" --gpus all --ipc host -e GPU_IDX="$GPU_IDX" \
   ${PRODUCER_USER:+--user "$PRODUCER_USER"} \
-  -v "$D:/ipc" --entrypoint python3 "$IMAGE" /ipc/producer.py >/dev/null \
+  -v "$D:/ipc" --entrypoint sh "$IMAGE" -c 'python3 /ipc/producer.py; true' >/dev/null \
   || die "docker run failed for $IMAGE"
 
 echo -n "waiting for the IPC handle"
@@ -118,29 +145,42 @@ done
 echo ""
 if [ ! -f "$D/handle.pkl" ]; then
   echo "FAIL: producer did not write the IPC handle within 90s. Container log:" >&2
-  docker logs kvp-ipc-test 2>&1 | tail -15 >&2 || true
-  touch "$D/done"; docker rm -f kvp-ipc-test >/dev/null 2>&1 || true
+  docker logs "$CNAME" 2>&1 | tail -15 >&2 || true
   exit 1
 fi
-docker logs kvp-ipc-test 2>&1 | grep 'producer:' || true
+PROD_LINE="$(docker logs "$CNAME" 2>&1 | grep 'producer:' || true)"
+echo "$PROD_LINE"
+PROD_PID="$(printf '%s' "$PROD_LINE" | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | tail -1)"
 
 rc=0
 case "$CONSUMER" in
   host)
     echo "-- consumer on the host as $(id -un), $HOST_PY (40s limit)"
-    CUDA_VISIBLE_DEVICES="$GPU_IDX" timeout 40 "$HOST_PY" "$D/consumer.py"; rc=$? ;;
+    CONS_OUT="$(CUDA_VISIBLE_DEVICES="$GPU_IDX" timeout 40 "$HOST_PY" "$D/consumer.py" 2>&1)" || rc=$? ;;
   host-root)
     echo "-- consumer on the host as root (sudo), $HOST_PY (40s limit)"
-    sudo env CUDA_VISIBLE_DEVICES="$GPU_IDX" timeout 40 "$HOST_PY" "$D/consumer.py"; rc=$? ;;
+    CONS_OUT="$(sudo env CUDA_VISIBLE_DEVICES="$GPU_IDX" timeout 40 "$HOST_PY" "$D/consumer.py" 2>&1)" || rc=$? ;;
   container)
-    echo "-- consumer in a second container of the same image (root, --ipc host, 60s limit)"
-    timeout 60 docker run --rm --gpus all --ipc host -v "$D:/tmp/kvp-ipc-test" \
-      --entrypoint python3 "$IMAGE" /tmp/kvp-ipc-test/consumer.py; rc=$? ;;
+    echo "-- consumer in a second container of the same image${CONSUMER_USER:+ (user $CONSUMER_USER)}, --ipc host, 60s limit)"
+    CONS_OUT="$(timeout 60 docker run --rm --gpus all --ipc host ${CONSUMER_USER:+--user "$CONSUMER_USER"} \
+      -v "$D:/tmp/kvp-ipc-test" \
+      --entrypoint python3 "$IMAGE" /tmp/kvp-ipc-test/consumer.py 2>&1)" || rc=$? ;;
   *)
     die "CONSUMER must be host | host-root | container (got: $CONSUMER)" ;;
 esac
+printf '%s\n' "$CONS_OUT"
+CONS_PID="$(printf '%s' "$CONS_OUT" | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | tail -1)"
+echo "PIDs: producer=${PROD_PID:-?} consumer=${CONS_PID:-?}"
 
-touch "$D/done"; sleep 1; docker rm -f kvp-ipc-test >/dev/null 2>&1 || true
+# Round 27 (K4): equal PIDs = the test topology is invalid (both sides seen as
+# one process, e.g. PID 1 in both containers) -- that is NOT a boundary verdict.
+if [ -n "${PROD_PID:-}" ] && [ "$PROD_PID" = "${CONS_PID:-}" ]; then
+  echo "VERDICT: TEST INVALID BY CONSTRUCTION -- producer and consumer have the same PID ($PROD_PID)."
+  echo "      The driver then treats the handle as locally created and refuses it (rc 201)."
+  echo "      This says NOTHING about the CUDA IPC boundary. Rerun with a setup where"
+  echo "      the two sides have different PIDs (producer via 'sh -c ...; true')."
+  exit 3
+fi
 
 case $rc in
   0)
@@ -152,28 +192,29 @@ case $rc in
         0:0|0) echo "      ROOT-PRODUCER result: PASS -- the transfer works with a root producer." ;;
         *)     echo "      SAME-UID result: PASS -- the transfer works WITHOUT root." ;;
       esac
-      echo "      This path IS wired: the recipe engine runs same-UID (KVP_SAME_UID=1 is its default)"
-      echo "      (the launcher runs the engine as \$(id -u):\$(id -g) with caches under /tmp)."
+      echo "      This path IS wired: the engine and the cache server must share ONE UID"
+      echo "      (KVP_SAME_UID=1 default; both sides run as \$(id -u):\$(id -g))."
     fi ;;
   124)
     echo "TIMEOUT: the consumer hung while opening GPU memory from the container."
     echo "      This REPRODUCES the register_kv_caches failure."
-    echo "      Fix options (review round 45):"
-    echo "        - run the cache server in the container too:"
-    echo "          KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh"
-    echo "        - or run the cache server as root (same user as the engine container)"
-    echo "      Then rerun: CONSUMER=host-root bash scripts/ipc-test.sh" ;;
+    echo "      The cache server and the engine must run under ONE UID -- check:"
+    echo "        docker inspect -f '{{.Config.User}}' lmcache-kvp-server"
+    echo "      It must equal the engine UID. To restart the server correctly:"
+    echo "        bash scripts/stop-cache.sh && bash scripts/start-cache.sh" ;;
   1)
-    echo "FAIL: the consumer opened the memory but the data does not match."
+    echo "FAIL (exit 1): the consumer opened the memory but the data does not match."
     echo "      The IPC path transfers data incorrectly -- check GPU drivers / ECC." ;;
   *)
     echo "FAIL (exit $rc): the consumer could not open GPU memory created in the"
     echo "      container. This REPRODUCES the register_kv_caches failure"
-    echo "      (CUDA_ERROR_MAP_FAILED). Fix options:"
-    echo "        - run the cache server as root (proven by CONSUMER=host-root):"
-    echo "          sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh"
-    echo "        - or run the cache server in the container too:"
-    echo "          KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh"
+    echo "      (CUDA_ERROR_MAP_FAILED). The usual cause is DIFFERENT UIDs on the two"
+    echo "      sides of the boundary: CUDA IPC only opens when the cache server and"
+    echo "      the engine share ONE UID. Check:"
+    echo "        docker inspect -f '{{.Config.User}}' lmcache-kvp-server"
+    echo "      and the engine UID. Restart the server so both sides match:"
+    echo "        bash scripts/stop-cache.sh && bash scripts/start-cache.sh"
+    echo "      (the default deployment is docker mode: KVP_LAUNCH_MODE=docker)"
     if [ -n "$PRODUCER_USER" ]; then
       echo "      SAME-UID result: FAIL -- even matching UIDs is not enough here."
     else

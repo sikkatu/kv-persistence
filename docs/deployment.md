@@ -145,47 +145,45 @@ a wrong read), so use the same value for every launcher.
 `KVP_L2_COMPRESS_LEVEL` (zstd only, default 3, range 1-19) trades ratio for
 store speed.
 
-### Launch mode A (RECOMMENDED): same-UID, no root (round 45h)
+### Launch mode A (RECOMMENDED, default): same-UID, no root
 
-Instead of sudo, BOTH processes can share the SAME UID -- the engine
-container runs with `--user $(id -u):$(id -g)` (DYNAMIC: works for any
-user, any UID -- nothing is hardcoded). The CUDA IPC test proved this
-path (`PRODUCER_USER=$(id -u):$(id -g) bash scripts/ipc-test.sh` = PASS).
-
+Both processes share the SAME UID -- the engine container runs with
+`--user $(id -u):$(id -g)` (DYNAMIC: works for any user, any UID -- nothing
+is hardcoded) and, since round 27, the cache server container does too. The
+hardware review of round 27 proved the rule: CUDA IPC between the two
+containers opens ONLY when both sides share one UID (1000 + 1000 PASS,
+root + 1000 FAIL with CUDA_ERROR_MAP_FAILED) -- root is NOT required.
 ```bash
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
 USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
-
 In this mode the HF cache mounts at `/tmp/hf-cache` and the torch
-caches (`XDG_CACHE_HOME`, `TRITON_CACHE_DIR`) move under `/tmp` --
-the non-root user cannot write `/root`. The pre-flight IPC test runs
-with `PRODUCER_USER=$(id -u):$(id -g)` so it reproduces EXACTLY the
-production boundary. The cache server runs as your user (no sudo),
-and cache files are owned by you.
+caches (`XDG_CACHE_HOME`, `TRITON_CACHE_DIR`) move under `/tmp` -- a uid
+without a passwd entry has no writable `/root`. The pre-flight IPC test runs
+with `PRODUCER_USER=$(id -u):$(id -g)` and `CONSUMER_USER` the same, so it
+reproduces EXACTLY the production boundary. The cache server runs as your
+user (no sudo), and cache files are owned by you.
 
-### Launch mode B (fallback): both under root (round 45)
+### Launch mode B (fallback): both under root
 
-The CUDA IPC boundary test (`bash scripts/ipc-test.sh`) proved on the
-target host: the engine container (root) creates GPU memory that only
-ROOT on the host can open. A non-root cache server fails at
-`register_kv_caches` with `CUDA_ERROR_MAP_FAILED`. Start BOTH services
-with sudo:
-
+Both services run as root (the engine with KVP_SAME_UID=0). This works
+because both SIDES are root -- it is not a fix for a mixed pair:
 ```bash
 sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
+KVP_SAME_UID=0 USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
-
 `start-cache.sh` resolves the lmcache venv python under sudo
 automatically (`SUDO_UID`/`SUDO_USER` -- no manual export needed).
 Cache files will be root-owned: run `budget-report.sh` / `purge` with
 sudo as well.
 
-**Pick ONE mode (A or B) and use it consistently** -- the engine and the cache
-service must see the same UID for the CUDA IPC boundary. Mode A needs no root
-and is the recommended default; mode B is the fallback when a non-root start is
-not possible in your environment.
+**Pick ONE mode (A or B) and use it consistently.** The engine and the cache
+service must share ONE UID for the CUDA IPC boundary: mode A runs both as the
+operator user (default), mode B runs both as root. **Mixed pairs never
+work** -- a root server + a UID-1000 engine (or the reverse) fails at
+`register_kv_caches` with `CUDA_ERROR_MAP_FAILED`. The pre-flight (round 27)
+reads the running server's `docker inspect -f '{{.Config.User}}'` and refuses
+the engine start on a mismatch, before the model load.
 
 ## 6. Start vLLM with the persistent KV connector
 

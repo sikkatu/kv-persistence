@@ -12,6 +12,36 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 27 轮（K1-K8：缓存服务器必须使用引擎的 UID）
+**硬件评审（2026 年 11 月 22 日）：** 硬件运行在 `register_kv_cache` 处以
+`CUDA_ERROR_MAP_FAILED` 失败——引擎以 UID 1000 运行（KVP_SAME_UID=1 默认），
+而 docker 模式下的缓存服务器以 root 运行（无 `--user`）。六行硬件结果证明了
+规则：两个容器之间的 CUDA IPC 只有在双方 UID 相同时才会打开（1000+1000
+PASS，root+1000 FAIL）；不需要 `--pid host`。「root 必需」（第 45 轮）是错的
+——正确的是「UID 必须一致」。
+* **K1**：start-cache.sh 以 `--user $(id -u):$(id -g)` 启动服务器容器
+  （KVP_SAME_UID=1 默认）或 `--user 0:0`（KVP_SAME_UID=0 的 root 备选）+
+  `HOME=/tmp/kvp-server-home`（+XDG/TRITON），适配 passwd 中没有记录的 uid；
+  「文件由 ROOT 写入」的提示已从默认路径移除。
+* **K2**：残留的 root 状态在服务器 docker run 之前拒绝，并给出精确的一次性
+  修复命令（`sudo chown -R …`、`sudo rm -f …/lmcache_fd_<port>.sock`，通过
+  KVP_SHM_DIR）——不会自动以 root 执行任何操作。
+* **K3**：`_kvp_pre_flights`（docker 模式）读取【运行中】服务器的
+  `docker inspect {{.Config.User}}`（空/0/0:0/root = root），在已证实的不匹配
+  时拒绝启动引擎，同时给出双方 UID——在模型加载之前。
+* **K4/K5**（ipc-test.sh）：生产者通过 `sh -c '…; true'` 启动（PID != 1，
+  不加 --pid host），容器消费者带上 `--user $CONSUMER_USER`（预期的服务器
+  UID），双方打印 `os.getpid()` -> `PIDs: producer=… consumer=…`，PID 相同则
+  给出「测试无效（构造上）」的判定；失败的消费者不再让脚本无判定地中断
+  （trap EXIT 清理，任何退出码都打印 `case $rc`）。
+* **K6**（recipes 启动器 + test-recovery.sh）：fail-fast 打印【完整】调用栈
+  （所有帧 + 「The CUDA driver logged these messages」块——硬件日志中异常的
+  最后一行被 `grep -A20 | head -25` 截掉了），仅对 CUDA IPC 错误给出单一 UID
+  的建议，并在 `exit 1` 之前 `docker stop "$CONTAINER"`（引擎不能占着 GPU）。
+* **K7/K8**：文本 + 文档（deployment ×3：模式 A——双方以操作员用户运行（默认），
+  模式 B——双方以 root 运行，混合搭配不可行）；行为测试 T1-T6
+  （test_r27_uid.py、test_r27_ipc.py、recipes tests/test_r27_launcher_failfast.py），
+  采用 docker/id 测试桩，IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR 隔离路径。
 ### 第 25 轮（G1-G10：就绪竞态已修复，live/ 保护加固，recipes 已隔离）
 **评审（2026 年 11 月 22 日，HEAD 931a9d0）：** r24 就绪门在第 0 秒拒绝（容器异步创建），
 就绪时限超出配置秒数 3-4 倍，F2 测试桩占用固定端口（重复运行变红），单个违规

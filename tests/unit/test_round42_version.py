@@ -144,6 +144,9 @@ def _setup_docker(tmp_path: Path, host_ver: str,
         # r24 F2: the readiness/pre-flight gate asks for .State.Running --
         # answer it from container_present (not from the image lines)
         f'      *State.Running*) {"echo true" if container_present else "echo false"} ;;\n'
+        # r27 K3: the pre-flight reads the RUNNING server's Config.User --
+        # empty = root (docker's default), exactly like the real daemon
+        '      *Config.User*) echo "" ;;\n'
         f'      *".Image"*) echo "{img_line}" ;;\n'
         f'      *".Id"*) echo "{eng_img}" ;;\n'
         # any OTHER format (a tag / name query) answers the SAME value for

@@ -205,11 +205,12 @@ _kvp_resolve_l2_serde(){
 }
 
 # Round 45f: resolve the lmcache venv python EVEN UNDER SUDO. `sudo` resets
-# HOME and PATH, so `python3` would miss ~/.venvs/lmcache -- and the cache
-# server must be able to run as root (the ipc-test proved root is required
-# to open CUDA IPC memory created by the engine container). Under sudo we
-# derive the ORIGINAL user's home from SUDO_USER/SUDO_UID; otherwise $HOME
-# is used. Prints the python path; falls back to plain python3.
+# HOME and PATH, so `python3` would miss ~/.venvs/lmcache. Round 27 (review):
+# root is NOT required for the cache server -- CUDA IPC opens when both sides
+# (server and engine) share ONE UID (proven on hardware: 1000+1000 PASS,
+# root+1000 FAIL). Under sudo we derive the ORIGINAL user's home from
+# SUDO_USER/SUDO_UID; otherwise $HOME is used. Prints the python path; falls
+# back to plain python3.
 _kvp_python(){
   local _home="$HOME" _py
   if [ -n "${SUDO_UID:-}" ] && [ "${SUDO_UID}" != "0" ]; then
@@ -632,6 +633,39 @@ _kvp_pre_flights(){
       return 1
     fi
     echo "pre-flight: cache container '$_pf_cname' is running"
+    # Round 27 (K3): the RUNNING server's UID must match the engine's. The
+    # hardware run showed a root server + UID-1000 engine fails at
+    # register_kv_cache (CUDA_ERROR_MAP_FAILED): the engine starts only when
+    # both sides share ONE UID. docker Config.User: empty / 0 / 0:0 / root
+    # all mean root. Expected: operator UID:GID when _same=1, root when 0.
+    local _srv_user _srv_uid _srv_gid _exp_uid _exp_gid
+    _srv_user="$(docker inspect -f '{{.Config.User}}' "$_pf_cname" 2>/dev/null || echo '')"
+    case "$_srv_user" in
+      ""|0|0:0|root) _srv_uid=0; _srv_gid=0 ;;
+      [0-9]*:[0-9]*)
+        case "$_srv_user" in
+          *[!0-9:]* ) _srv_uid=""; _srv_gid="" ;;   # garbage inside -> unparsed
+          *) _srv_uid="${_srv_user%%:*}"; _srv_gid="${_srv_user##*:}" ;;
+        esac ;;
+      [0-9]*) _srv_uid="$_srv_user"; _srv_gid="$_srv_user" ;;
+      *) _srv_uid=""; _srv_gid="" ;;                # unparsed: not a proven mismatch
+    esac
+    if [ -z "$_srv_uid" ]; then
+      echo "NOTE: cannot parse the cache server's docker Config.User ('$_srv_user') -- the server/engine UID check is skipped (pre-flight)"
+    else
+      if [ "$_same" = "1" ]; then
+        _exp_uid="${_uid:-$(id -u)}"; _exp_gid="${_gid:-$(id -g)}"
+      else
+        _exp_uid=0; _exp_gid=0
+      fi
+      if [ "$_srv_uid" != "$_exp_uid" ] || [ "$_srv_gid" != "$_exp_gid" ]; then
+        echo "ERROR: the cache server runs as UID $_srv_uid:$_srv_gid, the engine would run as $_exp_uid:$_exp_gid." >&2
+        echo "CUDA IPC will NOT open across mismatched UIDs (register_kv_cache fails with CUDA_ERROR_MAP_FAILED)." >&2
+        echo "Run: bash scripts/stop-cache.sh and rerun bash scripts/start-all.sh" >&2
+        return 1
+      fi
+      echo "pre-flight: cache server UID matches the engine ($_srv_uid:$_srv_gid)"
+    fi
   fi
   # Round 80b: bash /dev/tcp (NOT python3) -- test stubs replace python3 and
   # would break a python-based probe; /dev/tcp has no interpreter dependency.
@@ -808,19 +842,35 @@ _kvp_pre_flights(){
   echo "            server open GPU memory created in the container? (~1 min)"
   _ipc_pu=""
   if [ "$_same" = "1" ] && [ -n "$_uid" ]; then _ipc_pu="$_uid:$_gid"; fi
-  if IMAGE="$_image" CONSUMER="$_ipc_mode" PRODUCER_USER="$_ipc_pu" bash "$_root/scripts/ipc-test.sh"; then
+  _ipc_out=""
+  if _ipc_out="$(IMAGE="$_image" CONSUMER="$_ipc_mode" PRODUCER_USER="$_ipc_pu" CONSUMER_USER="$_ipc_pu" bash "$_root/scripts/ipc-test.sh" 2>&1)"; then
+    printf '%s\n' "$_ipc_out"
     echo "pre-flight: CUDA IPC boundary OK (consumer=$_ipc_mode${_ipc_pu:+, producer UID=$_ipc_pu})"
   else
+    printf '%s\n' "$_ipc_out" >&2
     echo "ERROR: CUDA IPC BOUNDARY FAILED (pre-flight): the cache server cannot open" >&2
     echo "GPU memory created in the container -- this is the EXACT step that killed" >&2
     echo "register_kv_cache (CUDA_ERROR_MAP_FAILED from cuIpcOpenEventHandle)." >&2
     echo "The model load would waste ~15 min and fail the same way. Fix the boundary FIRST:" >&2
-    echo "  - run the cache server in the container (same environment as the engine):" >&2
-    echo "      KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
-    echo "    then rerun with KVP_LAUNCH_MODE=docker so this test uses the container consumer;" >&2
-    echo "  - or run the cache server as the engine UID (KVP_SAME_UID=1), so both" >&2
-    echo "    sides of the IPC boundary share one uid." >&2
-    echo "Isolate the blocker: CONSUMER=host-root vs CONSUMER=container in ipc-test.sh." >&2
+    if [ "$_mode" = "docker" ]; then
+      # K7: name BOTH sides' UIDs -- the mismatch is the whole story.
+      local _f_srv_user _f_srv_uid
+      _f_srv_user="$(docker inspect -f '{{.Config.User}}' "${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" 2>/dev/null || echo '?')"
+      case "$_f_srv_user" in ""|0|0:0|root) _f_srv_uid=0:0 ;; *) _f_srv_uid="$_f_srv_user" ;; esac
+      echo "  - the cache server and the engine must run under ONE UID (round 27 review)." >&2
+      echo "    UIDs: cache server=$_f_srv_uid, engine=${_ipc_pu:-$(id -u):$(id -g)}" >&2
+      echo "    Check: docker inspect -f '{{.Config.User}}' ${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" >&2
+      echo "    Then: bash scripts/stop-cache.sh && bash scripts/start-cache.sh" >&2
+    else
+      echo "  - the cache server and the engine must run under ONE UID." >&2
+      echo "    Run the server as the same user as the engine (KVP_SAME_UID=1)," >&2
+      echo "    or both as root (KVP_SAME_UID=0). Mixed pairs never work." >&2
+      echo "  - or run the cache server in the container too:" >&2
+      echo "      KVP_LAUNCH_MODE=docker USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh" >&2
+    fi
+    # K7: the LAST consumer error line, so the operator sees the driver's
+    # verdict without scrolling.
+    echo "Last consumer line: $(printf '%s\n' "$_ipc_out" | tail -n 1)" >&2
     echo "NOTE: a pre-flight catches a dead channel at start -- it cannot catch a" >&2
     echo "server that dies MID-load; the launcher still fail-fasts on server errors." >&2
     echo "To bypass this check: KVP_SKIP_IPC_TEST=1 (NOT recommended -- the failure returns)." >&2

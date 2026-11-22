@@ -105,12 +105,13 @@ cache miss（绝不会错误命中），因此请在所有启动器中使用同�
 `KVP_L2_COMPRESS_LEVEL`（仅 zstd，默认 3，范围 1-19）用于权衡压缩率与
 写入速度。
 
-### 启动模式 A（推荐）：same-UID，无需 root（第 45h 轮）
+### 启动模式 A（推荐，默认）：same-UID，无需 root
 
-不必用 sudo——两个进程可以共享同一个 UID：引擎容器以
-`--user $(id -u):$(id -g)` 启动（动态：适用于任何用户、任何 UID——
-绝无硬编码）。CUDA IPC 测试已验证此路径
-（`PRODUCER_USER=$(id -u):$(id -g) bash scripts/ipc-test.sh` = PASS）。
+两个进程共用同一个 UID——引擎容器以 `--user $(id -u):$(id -g)` 启动（动态：
+适用于任何用户、任何 UID——绝无硬编码），自第 27 轮起缓存服务器容器亦然。
+第 27 轮的硬件验证证明了规则：两个容器之间的 CUDA IPC 只有在双方 UID 相同
+时才会打开（1000 + 1000 PASS，root + 1000 以 CUDA_ERROR_MAP_FAILED
+失败）——root 并非必需。
 
 ```bash
 USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
@@ -118,30 +119,31 @@ USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 此模式下 HF 缓存挂载到 `/tmp/hf-cache`，torch 缓存
-（`XDG_CACHE_HOME`、`TRITON_CACHE_DIR`）移到 `/tmp` 下——非 root 用户
-无法写 `/root`。预检 IPC 测试以 `PRODUCER_USER=$(id -u):$(id -g)`
-运行，恰好复现生产边界。缓存服务器以您的用户运行（无需 sudo），
-缓存文件归您所有。
+（`XDG_CACHE_HOME`、`TRITON_CACHE_DIR`）移到 `/tmp` 下——passwd 中没有记录
+的 UID 没有可写的 `/root`。预检 IPC 测试以
+`PRODUCER_USER=$(id -u):$(id -g)` 和相同的 `CONSUMER_USER` 运行，恰好复现
+生产边界。缓存服务器以您的用户运行（无需 sudo），缓存文件归您所有。
 
-### 启动模式 B（备选）：均以 root 运行（第 45 轮）
+### 启动模式 B（备选）：均以 root 运行
 
-CUDA IPC 边界测试（`bash scripts/ipc-test.sh`）在目标主机上证实：引擎容器
-（root）创建的 GPU 内存只有主机上的 ROOT 能打开。非 root 的缓存服务器会在
-`register_kv_caches` 处以 `CUDA_ERROR_MAP_FAILED` 失败。请用 sudo 启动两个
-服务：
+两个服务都以 root 运行（引擎用 KVP_SAME_UID=0）。这之所以可行，是因为双方
+都是 root——它并不能治好混合搭配：
 
 ```bash
 sudo USE_LOSSLESS_SERDE=1 bash scripts/start-cache.sh
-USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
+KVP_SAME_UID=0 USE_LOSSLESS_SERDE=1 bash scripts/start-all.sh
 ```
 
 `start-cache.sh` 在 sudo 下自动解析 lmcache venv 的 python
 （`SUDO_UID`/`SUDO_USER`——无需手动 export）。缓存文件将属 root：
 `budget-report.sh` / `purge` 也请用 sudo 运行。
 
-**选择一种模式（A 或 B）并一致使用**——引擎和缓存服务在 CUDA IPC 边界必须
-看到相同的 UID。模式 A 无需 root，为推荐默认；模式 B 是无法以非 root 启动时
-的备选。
+**选择一种模式（A 或 B）并一致使用。** 引擎和缓存服务在 CUDA IPC 边界必须
+共用同一个 UID：模式 A 双方都以操作员用户运行（默认），模式 B 双方都以 root
+运行。**混合搭配绝不可行**——root 服务器 + UID 1000 的引擎（反之亦然）会在
+`register_kv_caches` 处以 `CUDA_ERROR_MAP_FAILED` 失败。预检（第 27 轮）
+读取运行中服务器的 `docker inspect -f '{{.Config.User}}'`，在模型加载之前
+发现不匹配就拒绝启动引擎。
 
 ## 6. 启动带缓存的 vLLM
 

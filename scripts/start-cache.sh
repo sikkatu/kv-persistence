@@ -27,6 +27,19 @@ case "$LMCACHE_HOST" in
   *) die "LMCACHE_HOST must be loopback-only (127.0.0.1/localhost/::1), got '$LMCACHE_HOST'" ;;
 esac
 CONTAINER_NAME="${KVP_CACHE_CONTAINER:-lmcache-kvp-server}"   # docker-mode container name
+# Round 27 (review K1): the cache server must run under the SAME UID as the
+# engine. The engine launcher (run-tp4-hotsplit.sh) runs as $(id -u):$(id -g)
+# when KVP_SAME_UID=1 (its default) and as root when KVP_SAME_UID=0. CUDA IPC
+# between the two containers only opens when BOTH sides share one UID -- the
+# hardware review proved a root server + UID-1000 engine fails (MAP_FAILED)
+# while 1000+1000 passes. Same source as the engine launcher.
+KVP_SAME_UID="${KVP_SAME_UID:-1}"
+SERVER_UID=""; SERVER_GID=""
+if [ "$KVP_SAME_UID" = "1" ]; then
+  SERVER_UID="$(id -u)"; SERVER_GID="$(id -g)"
+else
+  SERVER_UID="0"; SERVER_GID="0"
+fi
 case "$KVP_LAUNCH_MODE" in
   host)
     command -v lmcache >/dev/null || die "lmcache CLI missing — see docs/deployment.md (or set KVP_LAUNCH_MODE=docker)" ;;
@@ -74,8 +87,9 @@ esac
 # filename fix AND the lossless compression serde registration. The probe must
 # run through the same launcher to match the actual server.
 export PYTHONPATH="$ROOT/implementation${PYTHONPATH:+:$PYTHONPATH}"
-# Round 45f: resolve the lmcache venv python even under sudo (the cache
-# server runs as root to open CUDA IPC memory; sudo resets HOME/PATH).
+# Round 45f: resolve the lmcache venv python even under sudo (sudo resets
+# HOME/PATH). Round 27 (review): root is NOT required -- the server and the
+# engine must simply share ONE UID.
 KVP_PY="$(_kvp_python)"
 echo "python: $KVP_PY"
 LAUNCH=("$KVP_PY" -m kvpersist.launch)
@@ -247,16 +261,40 @@ fi
 # Never wipe on startup: only report what is already there.
 if [ -d "$ROOT_PATH" ]; then
   EXISTING="$(du -sh "$ROOT_PATH" 2>/dev/null | cut -f1)"
-  # Review fix (round 45): in docker mode the cache files are written by
-# root (the container user). Scripts run as the operator user (e.g. 'de')
-# may then hit PermissionError on purge/budget-report -- say so up front.
-if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
-  echo "NOTE (docker mode): cache files under $ROOT_PATH are written by ROOT"
-  echo "      (the container user). If purge/budget-report.sh fails with"
-  echo "      Permission denied, run them with sudo -- or use KVP_LAUNCH_MODE=host"
-  echo "      with the cache server as the same user as the engine."
-fi
+  # Round 27 (K1): the note applies only to the explicit root fallback. With
+  # KVP_SAME_UID=1 the server runs as the operator user -- the files it writes
+  # are the operator's own, nothing is "written by ROOT" anymore.
+  if [ "$KVP_LAUNCH_MODE" = "docker" ] && [ "$KVP_SAME_UID" = "0" ]; then
+    echo "NOTE (docker mode, KVP_SAME_UID=0): cache files under $ROOT_PATH are written by ROOT"
+    echo "      (the container user). If purge/budget-report.sh fails with"
+    echo "      Permission denied, run them with sudo."
+  fi
 echo "existing cache data preserved: $EXISTING (automatic wipe on start is disabled by design)"
+fi
+
+# Round 27 (K2): previous ROOT-owned runs may leave files the new same-UID
+# server cannot handle. Detect and refuse with an EXACT fix command -- the
+# operator runs it once, nothing is executed under root automatically.
+# KVP_SHM_DIR overridable for tests (default /dev/shm).
+KVP_SHM_DIR="${KVP_SHM_DIR:-/dev/shm}"
+if [ "$KVP_LAUNCH_MODE" = "docker" ] && [ "$KVP_SAME_UID" = "1" ]; then
+  _foreign_root="$(find "$ROOT_PATH" -mindepth 1 ! -uid "$SERVER_UID" -print -quit 2>/dev/null || true)"
+  if [ -n "$_foreign_root" ]; then
+    die "Found objects owned by a different UID in $ROOT_PATH (left over from a root server).
+Run ONCE, then rerun start-cache.sh:
+  sudo chown -R $SERVER_UID:$SERVER_GID $ROOT_PATH
+(Found: $_foreign_root)"
+  fi
+  _shm_sock="$KVP_SHM_DIR/lmcache_fd_${LMCACHE_PORT}.sock"
+  if [ -e "$_shm_sock" ]; then
+    _sock_uid="$(stat -c '%u' "$_shm_sock" 2>/dev/null || echo '?')"
+    if [ "$_sock_uid" != "$SERVER_UID" ]; then
+      die "Found a leftover socket owned by UID $_sock_uid: $_shm_sock
+The sticky-bit dir prevents the new server from removing it. Run ONCE:
+  sudo rm -f $_shm_sock
+Then rerun start-cache.sh."
+    fi
+  fi
 fi
 
 # setsid detaches the service from this shell's terminal -- closing the SSH
@@ -292,11 +330,15 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   # already sets --entrypoint; this one (the production server) did not.
   setsid nohup docker run --name "$CONTAINER_NAME" --rm \
     --gpus all --ipc host \
+    --user "$SERVER_UID:$SERVER_GID" \
     -p "127.0.0.1:$LMCACHE_PORT:$LMCACHE_PORT" \
     ${LMCACHE_HTTP_PORT:+-p "127.0.0.1:$LMCACHE_HTTP_PORT:$LMCACHE_HTTP_PORT"} \
     -v "$ROOT_PATH:$ROOT_PATH" \
     -v "$ROOT/implementation:/kvp-impl:ro" \
     -e PYTHONPATH=/kvp-impl \
+    -e HOME=/tmp/kvp-server-home \
+    -e XDG_CACHE_HOME=/tmp/kvp-server-home/.cache \
+    -e TRITON_CACHE_DIR=/tmp/kvp-server-home/triton \
     -e "LMCACHE_LOG_LEVEL=${LMCACHE_LOG_LEVEL:-DEBUG}" \
     -e PYTHONFAULTHANDLER=1 \
     --entrypoint python3 "$DOCKER_IMAGE" -m kvpersist.launch "${_srv[@]}" \

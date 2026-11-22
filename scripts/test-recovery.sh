@@ -127,9 +127,20 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
       _srverr="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" 2>/dev/null | grep -a -m1 'Error handling operation register_kv_cache' || true)"
       if [ -n "$_srverr" ]; then
         echo "  ABORT: cache server FAILED a request during the wait (fail-fast):" >&2
-        tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | grep -a -A20 'Error handling operation register_kv_cache' | head -25 >&2
+        # Round 27 (K6): print the WHOLE traceback (every frame + the
+        # exception line + the "The CUDA driver logged these messages"
+        # block) -- never truncate at N lines.
+        tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | sed -n '/Error handling operation register_kv_cache/,$p' >&2
         echo "  This is the root cause -- waiting 300s cannot fix it." >&2
-        echo "  Fix: restart both services same-UID (KVP_SAME_UID=1 default) and rerun." >&2
+        # Round 27 (K6): the CUDA-IPC advice only for IPC failures.
+        _srverr_trace="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | sed -n '/Error handling operation register_kv_cache/,$p')"
+        case "$_srverr_trace" in
+          *cuIpc*|*CUDA_ERROR_MAP_FAILED*|*"invalid device context"*)
+            echo "  Fix (CUDA IPC boundary): the cache server and the engine must run under ONE UID." >&2
+            echo "    Check: docker inspect --format '{{.Config.User}}' lmcache-kvp-server" >&2
+            echo "    It must equal the engine UID. Restart the server correctly:" >&2
+            echo "      bash scripts/stop-cache.sh && bash scripts/start-cache.sh" >&2 ;;
+        esac
         return 2
       fi
     fi
@@ -143,7 +154,12 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
          docker logs --tail 60 "$CONTAINER" >&2 || true
          if [ -n "$LOG" ] && [ -f "$LOG" ]; then
            echo "         ---- server log: last 'Error handling operation' (grep -a for NUL bytes) ----" >&2
-           grep -a -A20 'Error handling operation register_kv_cache' "$LOG" | tail -25 >&2 || true
+           # Round 27 (K6): print to the END of the log -- the traceback runs
+           # more than 25 lines and the exception line must reach the output.
+           _kvp_e1="$(grep -a -n 'Error handling operation register_kv_cache' "$LOG" | tail -n 1 || true)"
+           if [ -n "$_kvp_e1" ]; then
+             sed -n "${_kvp_e1%%:*},\$p" "$LOG" >&2 || true
+           fi
          fi
          return 2 ;;
     esac

@@ -26,37 +26,35 @@ LAUNCHER = _T.recipe_launcher()  # Round 80b: recipe owns the engine launch
 
 
 def _call_line() -> str:
+    # Round 27 (K5): the call line now captures the output --
+    #   if _ipc_out="$(IMAGE=... CONSUMER=... PRODUCER_USER=... CONSUMER_USER=... bash "$_root/scripts/ipc-test.sh" 2>&1)"; then
     m = re.search(
-        r'^\s*if (IMAGE="\$_image" CONSUMER="\$_ipc_mode" .*bash "\$_root/scripts/ipc-test\.sh"); then',
+        r'^\s*if _ipc_out="\$\((IMAGE="\$_image" CONSUMER="\$_ipc_mode" .*bash "\$_root/scripts/ipc-test\.sh") 2>&1\)"; then',
         _T.contract_text(), re.M)
     assert m, "ipc-test call line not found in the launcher"
     return m.group(1)
-
-
 def _run(tmp_path, producer_user):
     (tmp_path / "scripts").mkdir(exist_ok=True)
     (tmp_path / "scripts" / "ipc-test.sh").write_text(
         '#!/usr/bin/env bash\n'
-        'echo "PU=[${PRODUCER_USER-unset}] C=[$CONSUMER]"\n')
+        'echo "PU=[${PRODUCER_USER-unset}] CU=[${CONSUMER_USER-unset}] C=[$CONSUMER]"\n')
     script = (f'_root="{tmp_path}"; _image=img; _ipc_mode=host; '
               f'_ipc_pu="{producer_user}"; '
-              f'if {_call_line()}; then echo CALLED; fi')
+              f'if {_call_line()}; then echo CALLED; fi; '
+              f'echo "$_ipc_out"')
     return subprocess.run(["bash", "-c", script],
                           capture_output=True, text=True)
-
-
 def test_same_uid_producer_user_reaches_ipc_test(tmp_path):
-    """The UID must really arrive at ipc-test.sh (not 'command not found')."""
+    """The UID must really arrive at ipc-test.sh (not 'command not found').
+    Round 27: CONSUMER_USER (the expected server UID) travels with it."""
     r = _run(tmp_path, "1234:5678")
     assert "command not found" not in r.stderr, r.stderr
-    assert "PU=[1234:5678] C=[host]" in r.stdout, (r.stdout, r.stderr)
-
-
+    assert "PU=[1234:5678] CU=[1234:5678] C=[host]" in r.stdout, (r.stdout, r.stderr)
 def test_root_mode_passes_empty_producer_user(tmp_path):
     """Empty is fine -- ipc-test treats it as unset (root producer)."""
     r = _run(tmp_path, "")
     assert "command not found" not in r.stderr, r.stderr
-    assert "PU=[] C=[host]" in r.stdout, (r.stdout, r.stderr)
+    assert "PU=[] CU=[] C=[host]" in r.stdout, (r.stdout, r.stderr)
 
 
 def test_same_uid_sets_home_user_for_any_uid():

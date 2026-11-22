@@ -13,6 +13,41 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 27 (K1-K8: the cache server must run under the ENGINE's UID)
+**Hardware review (22 Nov 2026):** the hardware run failed at
+`register_kv_cache` with `CUDA_ERROR_MAP_FAILED` -- the engine ran as UID
+1000 (KVP_SAME_UID=1 default) while the docker-mode cache server ran as
+root (no `--user`). Six hardware rows prove the rule: CUDA IPC between the
+two containers opens ONLY when both sides share ONE UID (1000+1000 PASS,
+root+1000 FAIL); `--pid host` is NOT needed. "root is required" (round 45)
+was wrong -- "the UIDs must match" is the rule.
+* **K1**: start-cache.sh runs the server container `--user $(id -u):$(id -g)`
+  (KVP_SAME_UID=1 default) or `--user 0:0` (KVP_SAME_UID=0 root fallback) +
+  `HOME=/tmp/kvp-server-home` (+XDG/TRITON) for uids without a passwd home;
+  the "files written by ROOT" note is gone from the default path.
+* **K2**: leftover ROOT state refuses BEFORE the server docker run with the
+  exact one-shot fix (`sudo chown -R …`, `sudo rm -f …/lmcache_fd_<port>.sock`
+  via KVP_SHM_DIR) -- nothing runs under root automatically.
+* **K3**: `_kvp_pre_flights` (docker mode) reads the RUNNING server's
+  `docker inspect {{.Config.User}}` (empty/0/0:0/root = root) and refuses the
+  engine start on a proven mismatch, naming BOTH UIDs, before the model load.
+* **K4/K5** (ipc-test.sh): the producer runs via `sh -c '…; true'` (PID != 1,
+  no --pid host), the container consumer gets `--user $CONSUMER_USER` (the
+  expected server UID), both print `os.getpid()` -> `PIDs: producer=…
+  consumer=…` and equal PIDs give the "TEST INVALID BY CONSTRUCTION"
+  verdict; a failing consumer can no longer abort the script without a
+  verdict (trap EXIT cleanup, `case $rc` prints for every code).
+* **K6** (recipes launcher + test-recovery.sh): the fail-fast prints the
+  WHOLE traceback (every frame + the "The CUDA driver logged these messages"
+  block -- the hardware log lost the exception's last line to
+  `grep -A20 | head -25`), the ONE-UID advice only for CUDA IPC errors, and
+  `docker stop "$CONTAINER"` before `exit 1` (the engine must not hold the
+  GPUs).
+* **K7/K8**: texts + docs (deployment ×3: mode A = both sides the operator
+  user (default), mode B = both root, mixed pairs never work); behavioural
+  tests T1-T6 (test_r27_uid.py, test_r27_ipc.py,
+  recipes tests/test_r27_launcher_failfast.py) with stub docker/id, isolated
+  IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR.
 ### Round 25 (G1-G10: readiness race fixed, live/ guard hardened, recipes isolated)
 **Review (22 Nov 2026, HEAD 931a9d0):** the r24 readiness gate refused at 0s
 (the container is created asynchronously), its ready limit ran 3-4x past the
