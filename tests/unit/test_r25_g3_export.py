@@ -137,3 +137,52 @@ def test_g3_export_is_present_in_start_all():
     at = t.index('KVP_LAUNCH_MODE="$(_kvp_resolve_launch_mode)"')
     assert "export KVP_LAUNCH_MODE" in t[at:at + 300], (
         "start-all.sh must export KVP_LAUNCH_MODE right after the assignment")
+
+
+def test_g3_pre_flights_default_mode_is_docker(tmp_path):
+    """> G3/F3-5 (behavioural): _kvp_pre_flights called WITHOUT the 9th
+    argument must run the docker branch (it inspects the cache container);
+    mutation F3-5 (its default back to host) leaves the docker log empty."""
+    import socket
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "docker.log"
+    (bin_dir / "docker").write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$@" >> "{log}"\n'
+        "exit 0\n")
+    (bin_dir / "docker").chmod(0o755)
+    real_py = subprocess.run(["which", "python3"], capture_output=True,
+                             text=True).stdout.strip()
+    (bin_dir / "python3").write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        "  *kvpersist.mp_ping*) exit 0 ;;\n"
+        f'  *) exec "{real_py}" "$@" ;;\n'
+        "esac\n")
+    (bin_dir / "python3").chmod(0o755)
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    port = srv.getsockname()[1]
+    try:
+        script = (
+            f' set -u\n. "{ROOT}/scripts/env.sh"\n'
+            f'_kvp_pre_flights "/nonexistent-root" 127.0.0.1 {port} "/nonexistent-croot" '
+            '"x@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" '
+            '"" "" 1\n'
+            'echo PF_RC=$?\n'
+        )
+        env = dict(os.environ,
+                   PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
+                   KVP_SKIP_IPC_TEST="1")
+        r = subprocess.run(["bash", "-c", script], capture_output=True,
+                           text=True, timeout=60, env=env)
+        docker_calls = log.read_text() if log.exists() else ""
+        assert "lmcache-kvp-server" in docker_calls, (
+            f"the docker branch must inspect the cache container when the "
+            f"9th argument is omitted (the default is docker):\n"
+            f"docker log={docker_calls!r}\n{r.stdout}{r.stderr}")
+    finally:
+        srv.close()
