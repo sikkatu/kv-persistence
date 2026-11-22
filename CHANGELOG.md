@@ -13,6 +13,25 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 25 (G1-G10: readiness race fixed, live/ guard hardened, recipes isolated)
+**Review (22 Nov 2026, HEAD 931a9d0):** the r24 readiness gate refused at 0s
+(the container is created asynchronously), its ready limit ran 3-4x past the
+configured seconds, the F2 stubs held fixed ports (repeated runs went red),
+and one violation cascaded into every later test.
+* **G1/G2**: readiness waits for CONTAINER CREATION (KVP_CACHE_CREATE_TIMEOUT,
+  default 60s) and distinguishes "docker-run client died" / "container
+  exited" / "not created yet"; the ready limit is REAL elapsed seconds
+  (date +%s) and the refusal reports the real time.
+* **G3/G4**: start-all.sh exports the resolved KVP_LAUNCH_MODE (the resolver
+  runs in a subshell -- its own export is lost); every test stub gets a FREE
+  port and a finalizer kills the fake servers (50x runs green).
+* **G5-G10**: the live/ guard restores what it flags (one red test, the next
+  green, live/image back to its original bytes) and costs O(1) per test in
+  the number of files under lmcache-build/; the recipes suite runs against a
+  per-session tmp COPY of kv-persistence (its live/ and observability/extras
+  stay byte-identical); Round 21 restored in this CHANGELOG; the wiki
+  documents the readiness/shutdown timers + a Troubleshooting entry.
+
 ### Round 24 (hardware blockers F1-F3 + test gaps E1-E4)
 **Hardware log (22 Nov 2026, HEAD f45f3e3):** the cache server never started
 (`vllm: error: unrecognized arguments: -m kvpersist.launch ...`) and the
@@ -113,6 +132,62 @@ a clean SIGTERM shutdown exited 143, which the smoke called unclean.
   "exit 143 after SIGTERM is normal" in `docs/lmcache-build` x3.
 * Full run: see the follow-up counts in the report (kv-persistence and
   recipes, sequential, 0 failed).
+
+
+
+### Round 21 (namespace bound to the running image, honest K6.4 test, test holes)
+* `775cc64` **L1** (P1, K7 bound to the RUNNING image): `check_image_identity.py`
+  `--print-wheel-version` was dead code; `cli model-name` derived `lmcache_build`
+  from `live/image-identity.env` (the LAST build's record, not the image being
+  launched); the gate cross-checked only with an operator pin (empty by default).
+  Now `verify_custom_image` returns `wheel_version`, the CLI prints
+  `KVP_WHEEL_VERSION=`, `_kvp_require_custom_image` captures it and exports
+  `KVP_LMCACHE_BUILD` on every successful resolve path (except
+  `KVP_SKIP_IMAGE_CHECK=1`). `read_lmcache_build` priority: env > baked identity
+  JSON > live/ record. `verify-engine-identity.sh` cross-checks ALWAYS (pin or
+  effective value) vs the container's identity JSON; mismatch -> exit 4 naming
+  `lmcache_build`. Tests: scenario A!=B (live/ says A, image carries B) -- the
+  namespace follows B; the gate without a pin refuses; 3 honest mutations RED
+  (resolver stops exporting / gate only checks with a pin / module copy with
+  live/ preferred).
+* `626dcb1` **L2** (P1, the K6.4 test was green by accident): the r20 stub
+  answered `image inspect` with `{}` -- start-cache.sh refused earlier on the
+  custom-image check and the codec probe was NEVER reached. The stub now
+  answers labels + identity of a real build (the deep check passes) and only
+  the codec probe fails. Asserts: `lossless codec 'zstd' is not available`,
+  `build-image.sh`, NO `MISMATCH`/`NOT the custom`, the server was NEVER
+  started. Mutation: neutralizing the codec probe in a mutant start-cache.sh
+  makes the refusal DISAPPEAR (RED detector).
+* `cc675d8` **L3** (P2, two surviving mutants closed):
+  **K1d** -- `test_b2_same_digest_other_repo_tag_accepted` (the same base
+  digest under another repo:tag is accepted; a different digest is refused) +
+  honest mutation (a COPY of `check_image_identity.py` with string comparison
+  restored -> REFUSES the same-digest case). **K6c** --
+  `test_smoke_runs_for_both_codecs_and_markers_gated` is now BEHAVIOURAL:
+  the stub prints smoke markers for only ONE codec -> build refuses AND
+  `live/image` is NOT written (both zstd-only and none-only).
+* `d98f59c` **L4** (P2, honest error text): the "LMCache build is unknown"
+  message names the REAL fix -- launch via `scripts/start-all.sh` (it resolves
+  the image and exports the build) or run `bash scripts/build-image.sh`.
+  No `/etc` in-image path, no `setup-identity.sh` hint for this cause (that
+  hint stays only for identity.env pin errors). Tests: a complete identity.env
+  without the resolver gives exactly this text; the gate's `lmcache_build`
+  hint block names the real actions.
+* `0f0248d` **L5** (P2, K7 test hygiene): `test_gate_crosschecks_lmcache_build`
+  no longer writes `identity.env.local` into the REAL `configs/` -- it runs on
+  a MINI REPO in tmp (configs copied + pins filled, real repo never touched).
+  `test_mutation_dropping_lmcache_build_from_namespace_is_red` is now an HONEST
+  mutation: a COPY of the identity module with `lmcache_build` removed from the
+  hashed payload -> builds A and B collapse to ONE namespace on the mutant.
+* `189ce4e` **L6** (P3, bare tag in IMAGE): `IMAGE=kvp-lmcache:latest` gets a
+  clear refusal -- "IMAGE must be `repo:tag@sha256:<64hex>` (base pin) or
+  `sha256:<id>` (custom), a bare tag is NOT accepted, take `$(cat live/image)`"
+  -- not the misleading "base pin mismatch, rebuild" advice. A properly pinned
+  stock still resolves (K1 path intact). Tests: behavioural, on the REAL
+  `_kvp_resolve_runtime_image`.
+* Full run: kv-persistence **716 passed, 26 skipped** (all skips environment:
+  promtool, nginx, zstd/lz4, lmcache CLI, live-LMCache, hardware-only);
+  recipes **448 passed, 5 skipped** (unchanged this round).
 
 ### Round 16 (4136 test fixtures, junit gates, engine-pin blind spot, fast rerun)
 * `c354ba9` **P0** (hardware log 19.11 18:53: C0-C10 passed on the new base,
