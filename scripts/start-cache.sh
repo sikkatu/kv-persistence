@@ -333,14 +333,53 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   case "$READY_TIMEOUT" in
     ''|*[!0-9]*|0) die "KVP_CACHE_READY_TIMEOUT must be an integer >= 1, got '$READY_TIMEOUT'" ;;
   esac
-  _waited=0
-  while [ "$_waited" -lt "$READY_TIMEOUT" ]; do
-    if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" != "true" ]; then
-      echo "ERROR: the cache container '$CONTAINER_NAME' is not running (exited or removed) after ${_waited}s." >&2
-      echo "Failed condition: the CONTAINER must stay alive. Last log lines:" >&2
-      tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
-      exit 1
-    fi
+  # r25 G1: the container creation itself takes hundreds of ms (--gpus all
+  # device allocation). Three states are distinct now:
+  #   * no container yet + the docker-run client alive  -> WAIT for creation
+  #     (KVP_CACHE_CREATE_TIMEOUT, default 60s);
+  #   * no container + the client EXITED                -> refuse at once
+  #     (the log tail carries the docker-run error, e.g. "could not select
+  #     device driver");
+  #   * container exists but exited/dead                -> refuse at once.
+  # r25 G2: the limit counts REAL elapsed seconds (a failing mp_ping can take
+  # 5s per try -- the old +2-per-iteration counter ran 3-4x past the limit).
+  CREATE_TIMEOUT="${KVP_CACHE_CREATE_TIMEOUT:-60}"
+  case "$CREATE_TIMEOUT" in
+    ''|*[!0-9]*|0) die "KVP_CACHE_CREATE_TIMEOUT must be an integer >= 1, got '$CREATE_TIMEOUT'" ;;
+  esac
+  _start_ts=$(date +%s)
+  _deadline=$((_start_ts + READY_TIMEOUT))
+  _create_deadline=$((_start_ts + CREATE_TIMEOUT))
+  _container_state=""
+  while :; do
+    _now=$(date +%s)
+    _elapsed=$((_now - _start_ts))
+    [ "$_now" -lt "$_deadline" ] || break
+    # -- state of the container (absent / created-but-dead / running) --
+    _container_state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo absent)"
+    case "$_container_state" in
+      absent)
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+          echo "ERROR: the cache container '$CONTAINER_NAME' was never created -- the" >&2
+          echo "docker-run client exited immediately (see the error below and the log tail)." >&2
+          tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
+          exit 1
+        fi
+        if [ "$_now" -ge "$_create_deadline" ]; then
+          echo "ERROR: the cache container '$CONTAINER_NAME' was NOT created within ${CREATE_TIMEOUT}s." >&2
+          echo "Failed condition: the CONTAINER must appear (docker create is stuck)." >&2
+          tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
+          exit 1
+        fi
+        sleep 1
+        continue ;;
+      exited|dead)
+        echo "ERROR: the cache container '$CONTAINER_NAME' is $_container_state after ${_elapsed}s." >&2
+        echo "Failed condition: the CONTAINER must stay alive. Last log lines:" >&2
+        tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true
+        exit 1 ;;
+    esac
+    # -- the container is created and not dead: error-line + RPC ping --
     NEW_BYTES=$(wc -c < "$LOG" 2>/dev/null || echo 0)
     if [ "$NEW_BYTES" -gt "$LOG_START_BYTES" ] && tail -c "+$((LOG_START_BYTES + 1))" "$LOG" 2>/dev/null | grep -Eiq 'traceback|fatal error|cannot load|failed to (open|register|parse)'; then
       echo "ERROR: lmcache server reported a startup error (adapter load or port bind). Last log lines:" >&2
@@ -352,11 +391,13 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
       READY=1
       break
     fi
-    sleep 2
-    _waited=$((_waited + 2))
+    sleep 1
   done
   if [ "$READY" != 1 ]; then
+    _now=$(date +%s)
+    _elapsed=$((_now - _start_ts))
     echo "ERROR: the cache server did NOT answer an RPC ping within ${READY_TIMEOUT}s" >&2
+    echo "  (real elapsed time: ${_elapsed}s; each ping attempt can take up to 5s)" >&2
     echo "Failed condition: the SERVER must answer mp_ping (the container is alive," >&2
     echo "but the server inside is not accepting requests)." >&2
     tail -c "+$((LOG_START_BYTES + 1))" "$LOG" >&2 || true

@@ -27,6 +27,10 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # start-cache default) while the engine-side checks ran in the host branch ->
 # a false "LMCACHE VERSION MISMATCH" refusal at step 3/3.
 KVP_LAUNCH_MODE="$(_kvp_resolve_launch_mode)" || exit 1
+# r25 G3: the assignment above runs the resolver in a SUBSHELL -- its own
+# `export` is lost there. Without THIS line the recipe launcher (whose
+# default is host) never sees the resolved value.
+export KVP_LAUNCH_MODE
 # r20 K1: remember whether IMAGE came from the ENVIRONMENT before tp4.env is
 # seeded (the seed exports IMAGE=stock from tp4.env as the base pin -- the
 # NOTE wording distinguishes the two sources).
