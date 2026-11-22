@@ -13,6 +13,57 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 29 (N1-N7: finishing r28 -- real diagnostics values, honest `kvp status`, SIGPIPE-safe tracebacks, obs start regression)
+**Review (22 Nov 2026, kv 9992bd6 / recipes 781a5b2 + hardware run):** the
+hardware run PASSED (L2 writes 366212 KiB, test-recovery VERDICT: PASS,
+D1 metrics 298 lmcache lines) but the "make L2 store failures visible" path
+had two defects that defeated exactly that goal, plus test holes and an r28
+regression.
+* **N7** (first): `start-observability.sh` exited 1 silently under
+  `set -Eeuo pipefail` when the cache container did not exist yet (the
+  NORMAL start-all order: step 1/3 precedes the cache) -- start-all printed
+  a false "observability failed to start". Both `docker inspect` assignments
+  get `|| true`; the D1 block never flips the exit code.
+* **N1**: `shapes`/`dtypes` in the L6 diagnostic were always `?` -- a double
+  wrapper `_safe(_layout_field(...), "?")` called a VALUE as a function.
+  Unwrapped; values print via str(), exceptions fall back to `?`. New tests
+  assert exact values for a deterministic 1024/8192 pair (numbers computed
+  independently) -- kills the surviving mutants M24/M25 too.
+* **N2**: `kvp status` judged the WHOLE append-only log, so pre-fix failures
+  stayed forever ("L2 writes: FAILING" on a healthy server -- confirmed on
+  hardware). `start-cache.sh` records `wc -c` at every start into
+  `lmcache-server.log.start`; `kvp status` passes it as the offset and the
+  verdict names the period: `FAILING (N failed since this server started)`.
+* **N4** (two halves): (a) `head -n 80` cut exactly the LAST exception line
+  on deep stacks -- all five traceback sites now use `_kvp_bound_block`
+  (keeps the first 20 + a `lines skipped` marker + the last 60); (b) the
+  selector awk `exit` closed the pipe and tail died with SIGPIPE under
+  pipefail (rc 141, script dies SILENTLY before `docker stop` / `return 2`)
+  -- replaced with a `done` flag + `next` so the whole input is consumed.
+  The T6 fixture is back to 40 frames with `frame_39` asserted.
+* **N3** (five surviving r28 mutants now killed): M18 -- a REAL
+  `python3 -m kvpersist.launch server --l2-adapter ...` run against a fake
+  `lmcache` package (3 cases: kvp-serde installs + patched=True / no serde
+  does not install / mutated source -> loud WARNING, patched=False, rc 0);
+  M19/M20 -- the three real `kvp_scan_l2_failures` call lines of
+  test-recovery.sh are EXECUTED (not grepped) with the right scenario tags
+  (scenario pre / A / B); M24/M25 -- exact diagnostic values (in N1).
+* **N5**: tests no longer depend on the coder's machine -- recipes path from
+  `KVP_RECIPES_DIR` (else sibling ../recipes, else skip) and the pinned
+  `_alloc_temp_buffers` source captured VERBATIM into
+  `tests/fixtures/lmcache_alloc_temp_buffers.py.txt` (normalize-equal to
+  REFERENCE_SOURCE; built into a temp lmcache module and installed by the
+  REAL install() without any reference_matches monkeypatching; mutated
+  source refused).
+* **N6**: (a) `tr < "$_pidf"` before `2>/dev/null` printed
+  "No such file or directory" in the normal "server not started" state ->
+  guarded by `[ -f ]`; (b) install() is now idempotent (a second call in the
+  same process returns `patched`, no double wrapping); (c) the selfcheck
+  line is SIGNED: `serde_alloc_patch selfcheck: OK`.
+* **Tests**: 16 new/updated behavioural tests (test_r29_n3.py 9,
+  test_r28_serde_alloc.py +4, test_r28_diagnostics.py +3). 16 mutations
+  verified killed (N1, N2, N4a-e, N6b, N6c, N7, M18, M19, M20, M-pre, M24,
+  M25).
 ### Round 28 (L1-L9 + D1: NVMe stores were silently failing -- now loud and diagnosed)
 **Hardware review (22 Nov 2026):** every L2 store batch ended "0 succeeded,
 20 failed" (`kvp-serde: destination buffer too small` -- LMCache sizes the

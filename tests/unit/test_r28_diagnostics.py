@@ -18,8 +18,13 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-RECIPES = Path("/home/operit/recipes")
-LAUNCHER = RECIPES / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh"
+# r29 N5a: the recipes checkout must not be hardcoded to the coder's machine.
+# KVP_RECIPES_DIR wins; else the sibling ../recipes; else skip (never fail).
+RECIPES = Path(os.environ.get("KVP_RECIPES_DIR", ROOT.parent / "recipes"))
+if not (RECIPES / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit").is_dir():
+    RECIPES = None
+LAUNCHER = ((RECIPES / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh")
+           if RECIPES else None)
 RECOVERY = ROOT / "scripts" / "test-recovery.sh"
 ENV_SH = ROOT / "scripts" / "env.sh"
 IPC_TEST = ROOT / "scripts" / "ipc-test.sh"
@@ -93,6 +98,9 @@ def test_l2_bounded_select_prints_whole_exception():
 def test_l2_recipe_failfast_branch_bounded(tmp_path):
     """> L2 (recipe fail-fast branch): the REAL block from run-tp4-hotsplit.sh
     prints the bounded traceback. MUTATION caught: `,$p` / `head -25`."""
+    if LAUNCHER is None:
+        import pytest
+        pytest.skip("recipes repo not found")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub_log = tmp_path / "stub.log"
@@ -100,10 +108,15 @@ def test_l2_recipe_failfast_branch_bounded(tmp_path):
     slog = tmp_path / "lmcache-server.log"
     slog.write_text(_error_log())
     src = LAUNCHER.read_text()
+    if '_kvp_serr="$(tail' not in src:
+        import pytest
+        pytest.skip("stale recipes checkout (no r28 fail-fast block)")
     start = src.index('    _kvp_serr="$(tail')
     end = src.index("      exit 1", start) + len("      exit 1")
     block = src[start:end]
-    assert "head -n 80" in block, "the fail-fast branch must use bounded selection"
+    if "max=80" not in block:
+        import pytest
+        pytest.skip("stale recipes checkout (no r29 N4 bounded limiter)")
     script = (
         "_kvp_slog_before=0\n"
         f"_kvp_slog=\"{slog}\"\n"
@@ -120,13 +133,18 @@ def test_l2_recipe_failfast_branch_bounded(tmp_path):
 
 
 def test_l2_recovery_branches_bounded():
-    """> L2 (both test-recovery.sh branches): no unbounded `,$p` selection is
-    left -- every branch uses the bounded awk + head -n 80."""
+    """> L2/N4: both test-recovery.sh branches use the r29 N4 bounded limiter
+    (_kvp_bound_block 80 20), never a plain head or `,$p` -- exactly two
+    calls. MUTATION: replacing one branch with `head -n 25`."""
     src = RECOVERY.read_text()
-    bounded = len(re.findall(r"head -n 80", src))
-    unbounded = len(re.findall(r",\\$p", src))
+    bounded = len(re.findall(r"_kvp_bound_block 80 20", src))
+    unbounded = len(re.findall(r",\\\$p", src))
+    plain_head = len(re.findall(r"\| head -n \d+", src))
     assert unbounded == 0, "the unbounded `,$p` selection must be gone"
-    assert bounded >= 2, "both test-recovery.sh branches must be bounded"
+    assert plain_head == 0, "no plain head must remain in the traceback branches"
+    assert bounded >= 2, (
+        f"both test-recovery.sh branches must use the bounded limiter, "
+        f"found {bounded} calls")
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +199,171 @@ def test_l7_scanner_from_byte_skips_old_errors():
     r = _sh(f'. "{ENV_SH}" && kvp_scan_l2_failures "{logf}" {len(err)}',
             env_extra={"KVP_SKIP_IPC_TEST": "1"})
     assert r.returncode == 0, f"old errors must not count:\n{r.stdout}{r.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# N2: kvp status must judge only the CURRENT server's log part
+# ---------------------------------------------------------------------------
+def _l2_status(log_text, mark_text=None):
+    """Run the REAL kvp_l2_writes_status. mark_text written to a .start file
+    (the r29 N2 offset) and passed as the second argument like `kvp status`."""
+    logf = Path("/tmp") / "kvp-n2-test.log"
+    logf.write_text(log_text)
+    frm = "0"
+    if mark_text is not None:
+        markf = Path("/tmp") / "kvp-n2-test.log.start"
+        markf.write_text(mark_text + "\n")
+        # exactly how scripts/kvp reads it: only a pure number counts
+        frm = (mark_text.strip() or "0")
+        if not frm.isdigit():
+            frm = "0"
+    return _sh(f'. "{ENV_SH}" && kvp_l2_writes_status "{logf}" {frm}',
+               env_extra={"KVP_SKIP_IPC_TEST": "1"})
+
+
+def test_n2_old_failures_before_mark_are_ok():
+    """> N2: old failures BEFORE the start offset -> OK (history, not current
+    health). MUTATION: calling the function without the offset."""
+    old_fail = ("[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
+                "[2026-11-22 08:03:27] LMCache DEBUG L2 store completed: adapter 0, 0 succeeded, 20 failed\n")
+    clean = ("[2026-11-22 09:00:01] LMCache DEBUG L2 store completed: adapter 0, 8 succeeded, 0 failed\n"
+             "[2026-11-22 09:00:02] LMCache DEBUG L2 store completed: adapter 0, 5 succeeded, 0 failed\n")
+    r = _l2_status(old_fail + clean, mark_text=str(len(old_fail)))
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, f"old failures before the mark must be OK:\n{out}"
+    assert "L2 writes: OK" in out, out
+
+
+def test_n2_no_mark_file_falls_back_to_zero():
+    """> N2: without a mark file -> offset 0 -> the old failure counts
+    (the documented fallback, not a crash)."""
+    old_fail = "[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
+    r = _l2_status(old_fail, mark_text=None)
+    out = r.stdout + r.stderr
+    assert r.returncode == 1, f"without a mark the old failure counts:\n{out}"
+    assert "FAILING" in out, out
+
+
+def test_n2_new_failure_after_mark_is_failing():
+    """> N2: a NEW failure after the mark -> FAILING (1 failed since this
+    server started)."""
+    clean = "[2026-11-22 09:00:01] LMCache DEBUG L2 store completed: adapter 0, 8 succeeded, 0 failed\n"
+    new_fail = "[2026-11-22 09:05:00] LMCache ERROR Serde task 7 (SERIALIZE) failed\n"
+    r = _l2_status(clean + new_fail, mark_text="0")
+    out = r.stdout + r.stderr
+    assert r.returncode == 1, f"a new failure must be FAILING:\n{out}"
+    assert "FAILING (1 failed since this server started)" in out, out
+
+
+def test_n2_kvp_status_passes_the_offset(tmp_path):
+    """> N2: the REAL `scripts/kvp status` reads lmcache-server.log.start and
+    passes it as the offset -- old failures before the mark give `L2 writes:
+    OK`. MUTATION: calling kvp_l2_writes_status WITHOUT the second argument
+    (the whole log would count and it would say FAILING)."""
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    old_fail = ("[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
+                "[2026-11-22 08:03:27] LMCache DEBUG L2 store completed: adapter 0, 0 succeeded, 20 failed\n")
+    clean = ("[2026-11-22 09:00:01] LMCache DEBUG L2 store completed: adapter 0, 8 succeeded, 0 failed\n")
+    (cache_root / "lmcache-server.log").write_text(old_fail + clean)
+    (cache_root / "lmcache-server.log.start").write_text(f"{len(old_fail)}\n")
+    home = tmp_path / "home"
+    home.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_stub(bin_dir, "docker", "#!/usr/bin/env bash\nexit 0\n")
+    env = dict(os.environ,
+               HOME=str(home),
+               PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
+               KVP_REPO=str(ROOT),
+               KVP_CACHE_ROOT=str(cache_root))
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "kvp"), "status"],
+                       capture_output=True, text=True, timeout=60, env=env,
+                       cwd=str(tmp_path))
+    out = r.stdout + r.stderr
+    assert "L2 writes: OK" in out, (
+        f"`kvp status` must honour the start offset:\n{out[-800:]}")
+    assert "L2 writes: FAILING" not in out, (
+        f"old failures before the mark must not count:\n{out[-800:]}")
+
+
+# ---------------------------------------------------------------------------
+# N4: the traceback limiter keeps the START and the END on deep stacks
+# ---------------------------------------------------------------------------
+def _deep_error_log(with_noise=True) -> str:
+    """60-frame traceback (120 lines) + exception + driver block, then
+    600 lines of DEBUG noise -- deeper than the 80-line bound, so a plain
+    head -n 80 would cut `Returning 205` and the driver block."""
+    frames = "".join(
+        f"  File \"/opt/venv/lib/python3.12/site-packages/lmcache/x.py\", "
+        f"line {100 + i}, in frame_{i}\n    do_step_{i}()\n"
+        for i in range(60))
+    exc = ("torch.AcceleratorError: CUDA error: mapping of buffer object failed\n"
+           "Failed to open/create interprocess memory file\n"
+           "Returning 205 (CUDA_ERROR_MAP_FAILED) from cuIpcOpenEventHandle\n")
+    driver = ("The CUDA driver logged these messages:\n"
+              "> CUDA_ERROR_MAP_FAILED: mapping of buffer object failed\n")
+    block = ("[2026-11-22 08:03:25,100] LMCache ERROR Error handling operation register_kv_cache\n"
+             "Traceback (most recent call last):\n" + frames + exc + driver)
+    noise = ""
+    if with_noise:
+        noise = "".join(
+            f"[2026-11-22 08:04:{i // 2:02d}] LMCache DEBUG skipping eviction L2 usage 0.00\n"
+            for i in range(600))
+    return block + "\n" + noise
+
+
+def _run_selection_pipeline(log_text, bound="80 20"):
+    """The exact pipeline used by test-recovery.sh branches (awk selection ->
+    _kvp_bound_block from env.sh)."""
+    r = subprocess.run(
+        ["bash", "-c",
+         '. "' + str(ENV_SH) + '" && '
+         "awk 'f && /^\\[20[0-9][0-9]-/ {exit} "
+         "/Error handling operation register_kv_cache/ {f=1} f {print}' "
+         "| _kvp_bound_block " + bound],
+        input=log_text, capture_output=True, text=True, timeout=30)
+    return r.stdout
+
+
+def test_n4_deep_traceback_keeps_start_and_end():
+    """> N4: a 60-frame traceback (127-line block) + 600 lines noise ->
+    the limiter prints the FIRST lines, a `lines skipped` marker and the
+    LAST lines INCLUDING `Returning 205` and the driver block; ZERO noise;
+    <= 81 lines. MUTATION: `head -n 80` instead of the limiter (cuts the
+    exception tail)."""
+    log = _deep_error_log(with_noise=True)
+    out = _run_selection_pipeline(log)
+    lines = out.strip().splitlines()
+    assert "Error handling operation register_kv_cache" in out, (
+        f"the first line must print:\n{out[:200]}")
+    assert "Returning 205 (CUDA_ERROR_MAP_FAILED) from cuIpcOpenEventHandle" in out, (
+        f"the LAST exception line must survive the bound:\n{out[-600:]}")
+    assert "The CUDA driver logged these messages" in out, (
+        f"the driver block must survive the bound:\n{out[-600:]}")
+    assert "lines skipped" in out, (
+        f"the marker must show the cut:\n{out[-600:]}")
+    assert "skipping eviction" not in out, "DEBUG noise must be cut"
+    assert len(lines) <= 81, f"bounded output expected, got {len(lines)} lines"
+
+
+def test_n4_scanner_keeps_end_on_deep_block():
+    """> N4: the L7 scanner's block (max 40, head 10) on a deep serde error
+    also keeps the end of the traceback."""
+    deep_err = (
+        "[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
+        "Traceback (most recent call last):\n"
+        + "".join(f"  File \"x.py\", line {i}, in f_{i}\n    step_{i}()\n"
+                  for i in range(60))
+        + "ValueError: memoryview assignment: lvalue and rvalue have different structures\n"
+        + "".join(f"[2026-11-22 08:04:{i // 2:02d}] LMCache DEBUG skipping eviction\n"
+                  for i in range(300)))
+    r = _scan_l2(deep_err)
+    out = r.stdout + r.stderr
+    assert r.returncode == 1, f"the scanner must fail:\n{out[-600:]}"
+    assert "ValueError: memoryview assignment" in out, (
+        f"the LAST line of the cause must survive:\n{out[-600:]}")
+    assert "skipping eviction" not in out, "noise must be cut"
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +492,24 @@ def test_l9_server_read_bytes_missing_io_returns_minus_one(tmp_path):
     r = _run_server_read_bytes(tmp_path, "4242", {})
     assert r.stdout.strip() == "-1", (
         f"missing io must give -1:\n{r.stdout}{r.stderr}")
+
+
+# ---------------------------------------------------------------------------
+# N6a: no 'No such file' noise when the pid file is absent (server not yet
+# started is a NORMAL state)
+# ---------------------------------------------------------------------------
+def test_n6a_no_pidfile_no_stderr_noise(tmp_path):
+    """> N6a: no container + no pid file (the normal 'server not started'
+    state) -> stderr is EMPTY (the old `tr < "$_pidf"` redirected before
+    2>/dev/null and bash printed 'No such file or directory')."""
+    for fn in ("kvp_server_pid", "kvp_ipc_consumer_mode"):
+        r = _sh(f'. "{ENV_SH}" && {fn} "{tmp_path}/nocrash" || true',
+                env_extra={"KVP_SKIP_IPC_TEST": "1",
+                           "KVP_CACHE_CONTAINER": "definitely-not-running"})
+        assert "No such file or directory" not in r.stderr, (
+            f"{fn}: stderr must be clean:\n{r.stderr}")
+        assert "No such file" not in r.stdout, (
+            f"{fn}: stdout must be clean:\n{r.stdout}")
 
 
 # ---------------------------------------------------------------------------

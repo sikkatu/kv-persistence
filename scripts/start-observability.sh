@@ -125,8 +125,13 @@ fi
 # cache server was started before observability it cannot reach the collector
 # (it is not in this network). One line, no automatic restart.
 if [ "$(docker inspect -f '{{.State.Running}}' obs_otel_collector 2>/dev/null)" = "true" ]; then
-  _srv_net="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' obs_otel_collector 2>/dev/null | head -n 1 | tr -d '[:space:]')"
-  _cache_net="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+  # r29 N7: both assignments must survive a missing container (docker
+  # inspect returns 1 -> pipefail would kill the whole script under
+  # set -Eeuo and start-all would print a false "observability failed").
+  # This block is an optional layer -- it never changes this script's exit
+  # status (same principle as the extras hook above).
+  _srv_net="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' obs_otel_collector 2>/dev/null | head -n 1 | tr -d '[:space:]' || true)"
+  _cache_net="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "${KVP_CACHE_CONTAINER:-lmcache-kvp-server}" 2>/dev/null | head -n 1 | tr -d '[:space:]' || true)"
   if [ -n "$_cache_net" ] && [ "$_cache_net" != "$_srv_net" ]; then
     echo "NOTE: the cache server was started before observability; restart it (bash scripts/stop-cache.sh && bash scripts/start-all.sh) so its metrics reach Grafana"
   fi

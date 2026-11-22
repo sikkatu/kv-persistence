@@ -1,0 +1,47 @@
+    def _alloc_temp_buffers(
+        self,
+        keys: list[ObjectKey],
+        objects: list[MemoryObj],
+    ) -> tuple[list[ObjectKey], list[MemoryObj] | None]:
+        """Reserve one temp byte buffer per input key. All-or-nothing:
+        any single failure releases the partial successes and returns
+        ``(temp_keys, None)``.
+
+        Args:
+            keys: Original logical keys; used only to derive temp keys.
+            objects: Source (store) or destination (load) MemoryObjs.
+                All entries must share a single ``(shape, dtype)`` — the
+                caller (store/prefetch controller) is responsible for
+                shape-grouping before submission.
+        """
+        shape_0 = objects[0].get_shapes()
+        dtype_0 = objects[0].get_dtypes()
+        temp_keys = [make_temp_key(k) for k in keys]
+        layout = serialized_layout_desc(
+            MemoryLayoutDesc(shapes=shape_0, dtypes=dtype_0), self._serde
+        )
+        results = self._l1_manager.reserve_write(
+            keys=temp_keys,
+            is_temporary=[True] * len(temp_keys),
+            layout_desc=layout,
+            tag=_L1_WRITE_TAG,
+        )
+        # First pass: collect every key whose reserve_write succeeded.
+        # We must scan the full list (not bail on the first failure)
+        # so a mixed-success result still releases all reserved keys.
+        successful_temp_keys: list[ObjectKey] = []
+        for temp_key in temp_keys:
+            r = results.get(temp_key)
+            if r is not None and r[0] == L1Error.SUCCESS:
+                successful_temp_keys.append(temp_key)
+        if len(successful_temp_keys) != len(temp_keys):
+            self._release_write_temps(successful_temp_keys)
+            return temp_keys, None
+        temp_objs: list[MemoryObj] = []
+        for temp_key in temp_keys:
+            temp_obj = results[temp_key][1]
+            # Every key succeeded above, and a successful reservation carries
+            # its object.
+            assert temp_obj is not None
+            temp_objs.append(temp_obj)
+        return temp_keys, temp_objs

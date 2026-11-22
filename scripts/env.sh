@@ -621,7 +621,8 @@ kvp_server_pid(){ # kvp_server_pid [cache-root]
     *) echo "$_pid"; return 0 ;;
   esac
   _pidf="$_croot/lmcache-server.pid"
-  _pid="$(tr -d '[:space:]' < "$_pidf" 2>/dev/null || echo '')"
+  _pid=""
+  [ -f "$_pidf" ] && _pid="$(tr -d '[:space:]' < "$_pidf" 2>/dev/null || echo '')"
   case "$_pid" in
     ""|*[!0-9]*) return 0 ;;
   esac
@@ -648,7 +649,8 @@ kvp_ipc_consumer_mode(){ # kvp_ipc_consumer_mode [cache-root]
     return 0
   fi
   _pidf="$_croot/lmcache-server.pid"
-  _pid="$(tr -d '[:space:]' < "$_pidf" 2>/dev/null || echo '')"
+  _pid=""
+  [ -f "$_pidf" ] && _pid="$(tr -d '[:space:]' < "$_pidf" 2>/dev/null || echo '')"
   if [ -n "$_pid" ]; then
     _uid="$(awk '/^Uid:/{print $2}' "/proc/$_pid/status" 2>/dev/null || echo '')"
     if [ "$_uid" = "0" ]; then
@@ -657,6 +659,25 @@ kvp_ipc_consumer_mode(){ # kvp_ipc_consumer_mode [cache-root]
     fi
   fi
   echo host
+}
+# ---------------------------------------------------------------------------
+# r29 N4: a traceback block that keeps the START and the END. The old
+# `head -n 80` cut off exactly the last exception line and the driver block
+# on deep stacks -- the same defect K6 in a new place. Over max lines the
+# limiter prints the first hd lines, a "... (N lines skipped) ..." marker
+# and the last (max-hd) lines.
+# ---------------------------------------------------------------------------
+_kvp_bound_block(){ # _kvp_bound_block [max] [head]  (stdin -> stdout)
+  # r29 N4: reads the WHOLE input (no early exit -- an early `exit` would
+  # close the pipe and tail would die with SIGPIPE under pipefail).
+  awk -v max="${1:-80}" -v hd="${2:-20}" '
+    { a[NR] = $0 }
+    END {
+      if (NR <= max) { for (i = 1; i <= NR; i++) print a[i]; exit }
+      for (i = 1; i <= hd; i++) print a[i]
+      printf "... (%d lines skipped) ...\n", NR - max
+      for (i = NR - (max - hd) + 1; i <= NR; i++) print a[i]
+    }'
 }
 # ---------------------------------------------------------------------------
 # r28 L7: the L2 store failure must be LOUD. The hardware run wrote every
@@ -683,22 +704,27 @@ kvp_scan_l2_failures(){ # kvp_scan_l2_failures <log> [from_byte]
   # logging DEBUG noise ("skipping eviction") after the error.
   _block="$(printf '%s\n' "$_fresh" | awk -v start="$_line" '
     NR == start {f=1}
-    f && NR > start && /^\[20[0-9][0-9]-/ {exit}
-    f {print}' | head -n 40)"
+    done {next}
+    f && NR > start && /^\[20[0-9][0-9]-/ {done=1; next}
+    f {print}' | _kvp_bound_block 40 10)"
   printf '%s\n' "$_block"
   echo "L2 STORE FAILING: the cache server cannot write to NVMe. L1 (RAM) hits still work, so the service looks healthy, but nothing survives a restart."
   return 1
 }
 # r28 L7: one-line summary for the `kvp status` subcommand.
 kvp_l2_writes_status(){ # kvp_l2_writes_status <log> [from_byte]
+  # r29 N2: from_byte is the offset of the CURRENT server's log part
+  # (lmcache-server.log.start, written by start-cache.sh at every start).
+  # Old failures before that offset are HISTORY, not current health.
   local _log="${1:-}" _from="${2:-0}" _fresh _n
+  case "$_from" in ''|*[!0-9]*) _from=0 ;; esac   # missing file or garbage -> 0
   [ -n "$_log" ] && [ -f "$_log" ] || { echo "L2 writes: OK"; return 0; }
   _fresh="$(tail -c "+$(( _from + 1 ))" "$_log" 2>/dev/null || true)"
   _n="$(printf '%s\n' "$_fresh" | grep -acE \
     'Serde task [0-9]+ \((SERIALIZE|DESERIALIZE)\) failed|Store task [0-9]+ to adapter [0-9]+ failed|L2 store completed: adapter [0-9]+, [0-9]+ succeeded, [1-9][0-9]* failed' \
     || true)"
   if [ "${_n:-0}" -gt 0 ]; then
-    echo "L2 writes: FAILING ($_n failed)"
+    echo "L2 writes: FAILING ($_n failed since this server started)"
     return 1
   fi
   echo "L2 writes: OK"

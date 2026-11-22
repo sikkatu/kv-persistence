@@ -303,20 +303,221 @@ def test_l6_patch_not_installed_on_different_source():
             sys.modules.pop(name, None)
 
 
+def test_l6_diag_shapes_and_dtypes_have_real_values():
+    """> N1: shapes and dtypes must print their REAL values, not `?`.
+    MUTATION caught: the double wrapper `_safe(_layout_field(...), "?")`
+    (returns ? for every shape/dtype)."""
+    import io
+    buf = bytearray(4096)
+    dst = FakeObj(4096, bytes(buf))
+    src = FakeObj(8192, b"\x02" * 8192)
+    # make shapes/dtypes recognisable via str()
+    class Shaped:
+        def get_shapes(self):
+            return [(8192,)]
+        def get_dtypes(self):
+            return ["uint8"]
+        def get_size(self):
+            return 8192
+        def get_physical_size(self):
+            return 8192
+        @property
+        def byte_array(self):
+            return memoryview(bytearray(b"\x02" * 8192))
+    serde = LosslessCompressSerializer("raw", align_bytes=4096)
+    with pytest.raises(ValueError) as ei:
+        serde.serialize(Shaped(), dst, None)
+    msg = str(ei.value)
+    assert "shapes=[(8192,)]" in msg, f"real shapes must print:\n{msg}"
+    assert "dtypes=['uint8']" in msg, f"real dtypes must print:\n{msg}"
+    assert "shapes=?" not in msg, f"shapes=? is the bug:\n{msg}"
+    assert "dtypes=?" not in msg, f"dtypes=? is the bug:\n{msg}"
+
+
+def test_l6_diag_shapes_dtypes_fallback_on_exception():
+    """> N1: if get_shapes raises, the diagnostic prints `shapes=?` and the
+    ORIGINAL ValueError survives (not replaced by a TypeError from the
+    diagnostic collection)."""
+    class BrokenShapes:
+        def get_shapes(self):
+            raise RuntimeError("no shapes")
+        def get_dtypes(self):
+            raise RuntimeError("no dtypes")
+        def get_size(self):
+            return 8192
+        def get_physical_size(self):
+            return 8192
+        @property
+        def byte_array(self):
+            return memoryview(bytearray(b"\x02" * 8192))
+    serde = LosslessCompressSerializer("raw", align_bytes=4096)
+    dst = FakeObj(4096, bytes(bytearray(4096)))
+    with pytest.raises(ValueError) as ei:
+        serde.serialize(BrokenShapes(), dst, None)
+    msg = str(ei.value)
+    assert msg.startswith("kvp-serde: destination buffer too small"), (
+        f"the original ValueError must survive:\n{msg}")
+    assert "shapes=?" in msg, f"broken shapes must fall back to ?:\n{msg}"
+    assert "dtypes=?" in msg, f"broken dtypes must fall back to ?:\n{msg}"
+
+
+def test_l6_diag_exact_values_deterministic_pair():
+    """> N3 (M24/M25): exact values for the deterministic pair (1024 + 8192
+    bytes, raw codec, align 4096) -- computed independently from the code:
+    dst_len=4096 (align_up(1024+28, 4096) = 4096), need=12288
+    (align_up(8192+28, 4096) = 12288), frame=8220 (28+8192),
+    src_len=8192, src_size=8192, plaintext_by_layout=8192,
+    estimate_by_layout=12288, codec=raw, dst_size=4096, dst_phy=4096.
+    MUTATIONS caught: estimate_by_layout -> ?, need -> ?."""
+    # first object 1024 -> dst 4096; second object 8192 -> needs 12288
+    small = FakeObj(1024, b"\x01" * 1024)
+    big = FakeObj(8192, b"\x02" * 8192)
+    serde = LosslessCompressSerializer("raw", align_bytes=4096)
+    # allocate a dst sized for the SMALL object (like objects[0] would)
+    dst = FakeObj(4096, bytes(bytearray(4096)))
+    with pytest.raises(ValueError) as ei:
+        serde.serialize(big, dst, None)
+    msg = str(ei.value)
+    # independently computed:
+    #   frame = 28 + 8192 = 8220
+    #   need  = align_up(8220, 4096) = 12288
+    #   estimate_by_layout = align_up(8192 + 28, 4096) = 12288
+    for field, value in [
+        ("dst_len", "dst_len=4096"),
+        ("need", "need=12288"),
+        ("frame", "frame=8220"),
+        ("src_len", "src_len=8192"),
+        ("src_size", "src_size=8192"),
+        ("plaintext_by_layout", "plaintext_by_layout=8192"),
+        ("estimate_by_layout", "estimate_by_layout=12288"),
+        ("codec", "codec=raw"),
+        ("dst_size", "dst_size=4096"),
+        ("dst_phy", "dst_phy=4096"),
+    ]:
+        assert value in msg, f"field {field} must be exact:\n{msg}"
+
+
 def test_l6_reference_matches_the_pinned_source():
-    """> The REFERENCE_SOURCE constant must equal the pinned LMCache source
-    (whitespace-normalized) -- the drift check is meaningful only then."""
-    pinned = (Path("/home/lmc-src/lmcache/v1/distributed/l2_adapters"
-                   "/serde_wrapper.py"))
-    if not pinned.exists():
-        pinned = (Path("/home/operit/LMCache/lmcache/v1/distributed"
-                       "/l2_adapters/serde_wrapper.py"))
-    if not pinned.exists():
-        pytest.skip("pinned LMCache checkout not found")
-    import re
-    src = pinned.read_text()
-    m = re.search(r"    def _alloc_temp_buffers\(.*?return temp_keys, temp_objs\n",
-                  src, re.S)
-    assert m, "pinned source must contain _alloc_temp_buffers"
-    assert _normalize(m.group(0)) == _normalize(REFERENCE_SOURCE), (
-        "REFERENCE_SOURCE must match the pinned _alloc_temp_buffers")
+    """> N5b: REFERENCE_SOURCE must equal the pinned LMCache source captured
+    VERBATIM into the repo fixture (tests/fixtures/lmcache_alloc_temp_buffers.py.txt,
+    inspect.getsource, unedited). No machine-specific paths, no skip -- the
+    drift check is meaningful everywhere."""
+    fixture = ROOT / "tests" / "fixtures" / "lmcache_alloc_temp_buffers.py.txt"
+    assert fixture.exists(), "the pinned-source fixture must be in the repo"
+    src = fixture.read_text()
+    assert _normalize(src) == _normalize(REFERENCE_SOURCE), (
+        "REFERENCE_SOURCE must match the fixture (_alloc_temp_buffers)")
+
+
+def _install_from_fixture(tmp_path, mutate_method=False):
+    """Build a temp lmcache package whose SerdeL2AdapterWrapper carries the
+    FIXTURE method (optionally with one line changed) and run the REAL
+    install() with the REAL reference_matches (no monkeypatching)."""
+    import sys
+    import types
+    from kvpersist import serde_alloc_patch as sap
+
+    fixture = (ROOT / "tests" / "fixtures"
+               / "lmcache_alloc_temp_buffers.py.txt").read_text()
+    if mutate_method:
+        fixture = fixture.replace("shape_0 = objects[0].get_shapes()",
+                                  "shape_0 = objects[9].get_shapes()")
+    fake_pkg = tmp_path / "fake_lmcache"
+    for sub in ("", "v1", "v1/distributed", "v1/distributed/l2_adapters"):
+        (fake_pkg / sub).mkdir(parents=True, exist_ok=True)
+    (fake_pkg / "__init__.py").write_text("")
+    (fake_pkg / "v1" / "__init__.py").write_text("")
+    (fake_pkg / "v1" / "distributed" / "__init__.py").write_text("")
+    (fake_pkg / "v1" / "distributed" / "l2_adapters" / "__init__.py").write_text("")
+    # stubs for everything the fixture method needs at RUN time (not import)
+    (fake_pkg / "v1" / "distributed" / "l2_adapters" / "serde_wrapper.py").write_text(
+        "from __future__ import annotations\n"
+        "class _L1Error:\n"
+        "    SUCCESS = 0\n"
+        "L1Error = _L1Error\n"
+        "_L1_WRITE_TAG = 'tag'\n"
+        "class MemoryLayoutDesc:\n"
+        "    def __init__(self, shapes, dtypes):\n"
+        "        self.shapes = shapes\n"
+        "        self.dtypes = dtypes\n"
+        "def make_temp_key(k):\n"
+        "    return k\n"
+        "def serialized_layout_desc(layout, serde):\n"
+        "    return layout\n"
+        "class SerdeL2AdapterWrapper:\n"
+        + fixture
+    )
+    # make the fake package importable as `lmcache`
+    sys.modules.pop("lmcache", None)
+    for name in list(sys.modules):
+        if name.startswith("lmcache."):
+            sys.modules.pop(name, None)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "lmcache.v1.distributed.l2_adapters.serde_wrapper",
+        fake_pkg / "v1" / "distributed" / "l2_adapters" / "serde_wrapper.py")
+    mod = importlib.util.module_from_spec(spec)
+    # register the parent packages so inspect.getsource can find the file
+    for name, path in [
+        ("lmcache", fake_pkg),
+        ("lmcache.v1", fake_pkg / "v1"),
+        ("lmcache.v1.distributed", fake_pkg / "v1" / "distributed"),
+        ("lmcache.v1.distributed.l2_adapters",
+         fake_pkg / "v1" / "distributed" / "l2_adapters"),
+    ]:
+        pkg = types.ModuleType(name)
+        pkg.__path__ = [str(path)]
+        sys.modules[name] = pkg
+    sys.modules["lmcache.v1.distributed.l2_adapters.serde_wrapper"] = mod
+    spec.loader.exec_module(mod)
+    return sap, mod
+
+
+def test_l6_install_works_on_the_fixture_source(tmp_path):
+    """> N5b: on a module carrying the FIXTURE method (exact pinned source) the
+    REAL install() returns 'patched' and wraps the method -- WITHOUT any
+    reference_matches monkeypatching."""
+    sap, mod = _install_from_fixture(tmp_path)
+    try:
+        assert sap.reference_matches(), "the fixture source must match"
+        status = sap.install()
+        assert status == "patched", f"install() must patch the fixture module: {status}"
+        assert (mod.SerdeL2AdapterWrapper._alloc_temp_buffers
+                is sap._patched_alloc), "the class must carry the wrapper"
+    finally:
+        for name in list(sys.modules):
+            if name.startswith("lmcache"):
+                del sys.modules[name]
+
+
+def test_l6_install_refuses_mutated_source(tmp_path):
+    """> N5b: one changed line in the method -> reference_matches False and
+    install() returns 'missing' (the drift guard)."""
+    sap, mod = _install_from_fixture(tmp_path, mutate_method=True)
+    try:
+        assert not sap.reference_matches(), "a mutated source must not match"
+        assert sap.install() == "missing"
+    finally:
+        for name in list(sys.modules):
+            if name.startswith("lmcache"):
+                del sys.modules[name]
+
+
+def test_n6b_install_is_idempotent(tmp_path):
+    """> N6b: two install() calls in one process -> BOTH return 'patched'
+    and the wrapper is applied exactly once (the original is saved, not
+    wrapped twice). MUTATION: the second call returns 'missing'."""
+    sap, mod = _install_from_fixture(tmp_path)
+    try:
+        first = sap.install()
+        assert first == "patched", f"first install: {first}"
+        original = sap._original_alloc
+        second = sap.install()
+        assert second == "patched", (
+            f"second install must stay 'patched', got '{second}'")
+        assert sap._original_alloc is original, (
+            "the original must be saved once, not wrapped twice")
+    finally:
+        for name in list(sys.modules):
+            if name.startswith("lmcache"):
+                del sys.modules[name]

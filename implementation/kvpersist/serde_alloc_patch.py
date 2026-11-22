@@ -90,8 +90,14 @@ _original_alloc = None
 
 def install() -> str:
     """Install the wrapper. Returns 'patched' or 'missing' (drift / no module).
-    The reference check runs FIRST: on drift nothing is touched."""
+    The reference check runs FIRST: on drift nothing is touched. A second
+    call in the same process is idempotent -- the wrapper is already in
+    place and must NOT be reported as 'missing' (r29 N6b)."""
     global _original_alloc
+    for mod in _wrapper_module():
+        cls = mod.SerdeL2AdapterWrapper
+        if getattr(cls, "_alloc_temp_buffers", None) is _patched_alloc:
+            return "patched"   # already installed in this process
     if not reference_matches():
         return "missing"
     for mod in _wrapper_module():
@@ -131,11 +137,12 @@ def kvp_serde_configured(argv: list[str] | None = None) -> bool:
 
 def selfcheck() -> int:
     """`--selfcheck` entry: OK + exit 0 only when the reference matched and
-    the patch is in place."""
+    the patch is in place. The line is SIGNED (r29 N6c) -- a bare OK in the
+    middle of a log is impossible to attribute."""
     if install() == "patched":
-        print("OK")
+        print("serde_alloc_patch selfcheck: OK")
         return 0
-    print("NOT INSTALLED (LMCache source differs or module unavailable)")
+    print("serde_alloc_patch selfcheck: NOT INSTALLED (LMCache source differs or module unavailable)")
     return 1
 
 def main() -> None:

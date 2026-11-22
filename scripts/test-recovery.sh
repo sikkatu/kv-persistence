@@ -127,15 +127,17 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
       _srverr="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" 2>/dev/null | grep -a -m1 'Error handling operation register_kv_cache' || true)"
       if [ -n "$_srverr" ]; then
         echo "  ABORT: cache server FAILED a request during the wait (fail-fast):" >&2
-        # Round 27 (K6) / r28 L2: print the WHOLE traceback (every frame + the
-        # exception line + the "The CUDA driver logged these messages"
-        # block) -- bounded selection (from the error line to the next
-        # timestamped line, at most 80 lines). The old `,$p` ran to EOF and
-        # the "skipping eviction" DEBUG noise buried the exception.
+        # Round 27 (K6) / r28 L2 / r29 N4: print the WHOLE traceback (every
+        # frame + the exception line + the "The CUDA driver logged these
+        # messages" block) -- bounded selection (from the error line to the
+        # next timestamped line), and on deep stacks the limiter keeps the
+        # START and the END (the old head -n 80 cut off exactly the last
+        # exception line).
         _srverr_trace="$(tail -c "+$(( $_srv_mark + 1 ))" "$LOG" | awk '
-          f && /^\[20[0-9][0-9]-/ {exit}
+          done {next}
+          f && /^\[20[0-9][0-9]-/ {done=1; next}
           /Error handling operation register_kv_cache/ {f=1}
-          f {print}' | head -n 80)"
+          f {print}' | _kvp_bound_block 80 20)"
         printf '%s\n' "$_srverr_trace" >&2
         echo "  This is the root cause -- waiting 300s cannot fix it." >&2
         # Round 27 (K6): the CUDA-IPC advice only for IPC failures.
@@ -163,13 +165,14 @@ api_ready(){ echo "  waiting for the engine API (container=$CONTAINER, up to 30 
            # more than 25 lines and the exception line must reach the output.
            _kvp_e1="$(grep -a -n 'Error handling operation register_kv_cache' "$LOG" | tail -n 1 || true)"
            if [ -n "$_kvp_e1" ]; then
-             # r28 L2: bounded selection (from the found line to the next
-             # timestamped line, at most 80 lines) -- the old `,$p` ran to EOF
-             # and the "skipping eviction" DEBUG noise buried the exception.
+             # r28 L2 / r29 N4: bounded selection (from the found line to the
+             # next timestamped line) with the start+end limiter -- the old
+             # `,$p` ran to EOF and `head -n 80` cut the tail on deep stacks.
              awk -v start="${_kvp_e1%%:*}" '
                NR == start {f=1}
-               f && NR > start && /^\[20[0-9][0-9]-/ {exit}
-               f {print}' "$LOG" | head -n 80 >&2 || true
+               done {next}
+               f && NR > start && /^\[20[0-9][0-9]-/ {done=1; next}
+               f {print}' "$LOG" | _kvp_bound_block 80 20 >&2 || true
            fi
          fi
          return 2 ;;

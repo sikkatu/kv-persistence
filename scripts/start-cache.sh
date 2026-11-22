@@ -216,6 +216,12 @@ fi
 
 LOG="$ROOT_PATH/lmcache-server.log"
 PIDF="$ROOT_PATH/lmcache-server.pid"
+# r29 N2: the offset where THIS server's log part starts. The log grows
+# append-only across restarts, so old failures (e.g. from before the L6 fix)
+# stay in it forever -- `kvp status` must judge only what the CURRENT server
+# wrote. Rewritten at every start, BEFORE the server is launched.
+LOG_START_BYTES_PRE=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+printf '%s\n' "$LOG_START_BYTES_PRE" > "$ROOT_PATH/lmcache-server.log.start"
 # Review fix (round 37): refuse to start when a server is ALREADY running --
 # the old behaviour overwrote this PID file and orphaned the live server
 # (stop-cache.sh then reported "already exited" for the stale PID).

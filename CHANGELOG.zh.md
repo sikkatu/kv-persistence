@@ -12,6 +12,48 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 29 轮（N1–N7：收尾 r28——真实的诊断数值、诚实的 `kvp status`、SIGPIPE 安全的调用栈、obs 启动回归）
+**评审（2026 年 11 月 22 日，kv 9992bd6 / recipes 781a5b2 + 硬件运行）：**
+硬件运行通过（L2 写入 366212 KiB，test-recovery VERDICT: PASS，D1 指标
+298 行 lmcache），但在「让 L2 写入失败可见」这条路上发现两个恰好抵消该目标
+的缺陷，外加测试漏洞和 r28 的回归。
+* **N7**（优先）：`start-observability.sh` 在 `set -Eeuo pipefail` 下、缓存
+  容器尚不存在时（start-all 的正常顺序：第 1/3 步在缓存之前）静默以 1 退出
+  ——start-all 打印了虚假的「observability failed to start」。两个
+  `docker inspect` 赋值都加 `|| true`；D1 块永不改变脚本退出码。
+* **N1**：L6 诊断中的 `shapes`/`dtypes` 一直是 `?`——双重包装
+  `_safe(_layout_field(...), "?")` 把值当函数调用。包装已去掉；值通过 str()
+  打印，异常回退为 `?`。新测试断言确定性 1024/8192 对的精确值（数字独立
+  计算）——同时杀死了存活的 M24/M25。
+* **N2**：`kvp status` 按整个 append-only 日志判定，旧失败永远留下
+  （健康服务器显示「L2 writes: FAILING」——硬件已确认）。`start-cache.sh`
+  每次启动把 `wc -c` 记入 `lmcache-server.log.start`；`kvp status` 将其作为
+  偏移量传入，判定注明时段：`FAILING (N failed since this server started)`。
+* **N4**（两半）：（a）深栈上 `head -n 80` 恰好切掉最后一行异常——五处
+  调用栈输出全部改用 `_kvp_bound_block`（保留前 20 行 + `lines skipped`
+  标记 + 后 60 行）；（b）选择器 awk 的 `exit` 关闭管道，tail 在 pipefail 下
+  死于 SIGPIPE（rc 141，脚本在 `docker stop` / `return 2` 之前静默死亡）
+  ——改为 `done` 标志 + `next`，读完整个输入。T6 固件恢复为 40 帧并断言
+  `frame_39`。
+* **N3**（r28 存活的五个突变体现在全部被杀死）：M18——真实运行
+  `python3 -m kvpersist.launch server --l2-adapter ...` 配假 `lmcache` 包
+  （三种情况：kvp-serde 安装 + patched=True / 无 serde 不安装 / 变异源码 →
+  响亮 WARNING，patched=False，rc 0）；M19/M20——test-recovery.sh 的三行
+  `kvp_scan_l2_failures` 真实调用被【执行】（不是 grep），带正确的场景
+  标签（scenario pre / A / B）；M24/M25——诊断精确值（见 N1）。
+* **N5**：测试不再依赖编码者机器——recipes 路径取自 `KVP_RECIPES_DIR`
+  （否则相邻 ../recipes，否则 skip），pinned `_alloc_temp_buffers` 源码
+  逐字存入 `tests/fixtures/lmcache_alloc_temp_buffers.py.txt`（归一化等同
+  REFERENCE_SOURCE；装入临时 lmcache 模块并由真正的 install() 安装，不
+  monkeypatch reference_matches；变异源码被拒绝）。
+* **N6**：（a）`tr < "$_pidf"` 在 `2>/dev/null` 之前，在「服务器未启动」的
+  正常状态下打印「No such file or directory」→ 用 `[ -f ]` 守卫；
+  （b）install() 幂等（同一进程第二次调用返回 `patched`，不重复包装）；
+  （c）selfcheck 行带签名：`serde_alloc_patch selfcheck: OK`。
+* **测试**：16 个新增/更新的行为测试（test_r29_n3.py 9、
+  test_r28_serde_alloc.py +4、test_r28_diagnostics.py +3）。16 个突变体
+  验证被杀死（N1、N2、N4a–e、N6b、N6c、N7、M18、M19、M20、M-pre、M24、
+  M25）。
 ### 第 28 轮（L1–L9 + D1：NVMe 写入曾静默失败——现在会响亮报错并给出诊断）
 **硬件评审（2026 年 11 月 22 日）：** 每个 L2 写入批次都以「0 succeeded,
 20 failed」告终（`kvp-serde: destination buffer too small`——LMCache 只按
