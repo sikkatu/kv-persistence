@@ -628,6 +628,9 @@ def _start_cache_argv_inner(tmp_path, mode, cache_root, argv_file, bin_dir,
     (live / "image").write_text("sha256:" + "c" * 64 + "\n")
     (live / "image-identity.env").write_text(
         "KVP_LMC_VERSION=0.5.8rc1.post48+kvp.bbbbbbbbbbbb\n")
+    # r25 G4: the readiness marker lives in THIS helper's tmp_path -- callers
+    # that run the helper twice give each run its own tmp dir, so a stale
+    # marker of a former run can never prove readiness of the current one.
     ready = tmp_path / "ready"
     real_py = subprocess.run(["which", "python3"], capture_output=True,
                              text=True).stdout.strip()

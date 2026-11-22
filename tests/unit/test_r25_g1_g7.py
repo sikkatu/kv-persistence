@@ -115,9 +115,9 @@ def test_g2_ready_timeout_uses_real_seconds(tmp_path):
     elapsed = time.monotonic() - t0
     assert r.returncode != 0, (
         f"a server that never pongs must be refused:\n{out[-800:]}")
-    assert elapsed <= 13, (
-        f"the timeout must be REAL seconds (6 + one 5s ping + slack), took "
-        f"{elapsed:.1f}s:\n{out[-800:]}")
+    assert 5 <= elapsed <= 13, (
+        f"the timeout must be REAL seconds: >= one 5s ping cycle and "
+        f"<= 6 + 7s, measured {elapsed:.1f}s:\n{out[-800:]}")
     assert "did NOT answer" in out, out[-800:]
 
 
@@ -173,17 +173,41 @@ def test_g3_export_reaches_the_recipe_launcher(tmp_path):
 # G4: repeated runs stay green (free ports + finalizer)
 # ===========================================================================
 def test_g4_two_runs_in_a_row_are_green(tmp_path):
-    """> G4: the F2 stubs used to hold fixed ports (15571-3) for 30s after a
-    refusal -- the next run failed 'Address already in use'. Now the ports
-    are free per run and the finalizer kills the stub servers."""
-    for i in range(2):
-        argv, r = _start_cache_argv(tmp_path, "docker", tmp_path / f"c{i}",
-                                    require_launch=False,
-                                    docker_pong=False,
-                                    extra_env={"KVP_CACHE_READY_TIMEOUT": "3",
-                                               "KVP_CACHE_CREATE_TIMEOUT": "3"})
-        out = r.stdout + r.stderr
-        assert r.returncode != 0, f"run {i}:\n{out[-600:]}"
+    """> G4 acceptance: the SUCCESS scenario must pass right after a REFUSED
+    run of the same helper. The r24 stubs held a fixed port (15562) and
+    never killed the stub server: run 1's refusal left its fake_server
+    sleeping 30s on the port, run 2's fake_server died on bind ('Address
+    already in use') -- yet run 2 could still go READY by talking to run
+    1's LEFTOVER server, silently proving nothing about this run. The test
+    therefore demands that run 2 is green through its OWN server: its ready
+    marker (touched only after listen() succeeded) must exist and rc == 0."""
+    run1 = tmp_path / "run1"
+    run2 = tmp_path / "run2"
+    run1.mkdir()
+    run2.mkdir()
+    # run 1: the REFUSAL path (no pong) -- start-cache.sh exits before it
+    # ever SIGTERMs the server, so the stub server outlives the call.
+    _argv1, r1 = _start_cache_argv(run1, "docker", tmp_path / "c1",
+                                   require_launch=False, docker_pong=False,
+                                   extra_env={"KVP_CACHE_READY_TIMEOUT": "3",
+                                              "KVP_CACHE_CREATE_TIMEOUT": "3"})
+    out1 = r1.stdout + r1.stderr
+    assert r1.returncode != 0, (
+        f"run 1 must refuse (the server never pongs):\n{out1[-800:]}")
+    # run 2: the SUCCESS scenario right behind it.  Green is only accepted
+    # when THIS run's own fake_server reached listen() (ready marker).
+    _argv2, r2 = _start_cache_argv(run2, "host", tmp_path / "c2",
+                                   require_launch=True, docker_pong=True,
+                                   extra_env={"KVP_CACHE_READY_TIMEOUT": "15",
+                                              "KVP_CACHE_CREATE_TIMEOUT": "10"})
+    out2 = r2.stdout + r2.stderr
+    assert (run2 / "ready").exists(), (
+        "run 2's own fake_server must reach listen() and touch its ready "
+        "marker -- readiness proved by a leftover server of a former run is "
+        "exactly the fixed-port + no-finalizer defect (Address already in "
+        f"use, bind failed silently):\n{out2[-800:]}")
+    assert r2.returncode == 0, (
+        f"run 2 must reach READY (repeated runs must not go red):\n{out2[-800:]}")
 
 
 def test_g4_no_stub_servers_left(tmp_path):
