@@ -318,10 +318,17 @@ def test_p5c_collector_dies_between_inspects(tmp_path):
 # P5d: kvp_l2_writes_status must normalize a garbage/empty offset by itself
 # ---------------------------------------------------------------------------
 def _l2_status_raw(arg: str, log_text: str):
+    """Run the REAL kvp_l2_writes_status under the REAL strict header of
+    scripts/kvp (`set -Eeuo pipefail`) -- the garbage-offset normalizer is
+    the ONLY thing keeping `abc` from hitting `$_from + 1` arithmetic, where
+    set -u turns it into 'unbound variable' (a bare numeric-name variable IS
+    resolved before arithmetic, so only the case-guard protects this path)."""
     logf = Path("/tmp") / "kvp-p5d-test.log"
     logf.write_text(log_text)
-    return _sh(f'. "{ENV_SH}" && kvp_l2_writes_status "{logf}" {arg}',
-               env_extra={"KVP_SKIP_IPC_TEST": "1"})
+    return _sh(
+        f'set -Eeuo pipefail; rc=0; . "{ENV_SH}" && '
+        f'kvp_l2_writes_status "{logf}" {arg} || rc=$?; exit $rc',
+        env_extra={"KVP_SKIP_IPC_TEST": "1"})
 def test_p5d_garbage_and_empty_offset_normalized():
     """P5d: a direct call with an EMPTY offset and with `abc` on a log with
     one failure must give the SAME verdict as offset 0:
