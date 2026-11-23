@@ -91,10 +91,11 @@ def test_ambiguous_model_layout_refuses_silently(tmp_path):
 
 
 # --- quote parsing parity (review: KVP_X='abc' disagreed between loaders) ---
-
-
-def _shell_parse(value: str) -> str:
-    tmp = Path("/tmp/kvp-quote-test.env")
+def _shell_parse(value: str, tdir: Path) -> str:
+    # r31 Q2: the scratch env file goes to tdir (tmp_path), never a shared
+    # fixed /tmp path (parallel runs overwrite each other, a symlink there
+    # redirects the write).
+    tmp = tdir / "kvp-quote-test.env"
     tmp.write_text(f"KVP_QUOTE_TEST={value}\n")
     out = subprocess.run(
         ["bash", "-c",
@@ -106,12 +107,10 @@ def _shell_parse(value: str) -> str:
     assert out.returncode == 0, out.stderr
     return out.stdout
 
-
-def _python_parse(value: str) -> str:
+def _python_parse(value: str, tdir: Path) -> str:
     sys.path.insert(0, str(ROOT / "implementation"))
     from kvpersist.config import _parse_env_file
-
-    tmp = Path("/tmp/kvp-quote-test-py.env")
+    tmp = tdir / "kvp-quote-test-py.env"
     tmp.write_text(f"KVP_QUOTE_TEST={value}\n")
     return _parse_env_file(tmp).get("KVP_QUOTE_TEST", "")
 
@@ -133,14 +132,12 @@ def _python_parse(value: str) -> str:
         "'don''t'",
     ],
 )
-def test_quote_parsing_identical_in_bash_and_python(raw):
+def test_quote_parsing_identical_in_bash_and_python(raw, tmp_path):
     """Review fix: `KVP_X='abc'` must give `abc` in BOTH loaders.
-
     Before the fix bash kept the single quotes (only double quotes were
     stripped), so the two loaders disagreed despite the documented
     "MUST match scripts/env.sh `_kvp_parse_line`" contract.
     """
-    assert _shell_parse(raw) == _python_parse(raw), (
+    assert _shell_parse(raw, tmp_path) == _python_parse(raw, tmp_path), (
         f"bash and python env parsers disagree for {raw!r}: "
-        f"{_shell_parse(raw)!r} != {_python_parse(raw)!r}"
-    )
+        f"{_shell_parse(raw, tmp_path)!r} != {_python_parse(raw, tmp_path)!r}")

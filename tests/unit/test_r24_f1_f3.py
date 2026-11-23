@@ -375,12 +375,13 @@ def test_e3_build_image_identity_dir_created(tmp_path):
 # ===========================================================================
 # E4.1: KVP_SMOKE_TERM_TIMEOUT validation
 # ===========================================================================
-def test_e4_smoke_term_timeout_must_be_integer():
+def test_e4_smoke_term_timeout_must_be_integer(tmp_path):
     """> E4.1: a non-numeric KVP_SMOKE_TERM_TIMEOUT -> clear error + exit 1
     BEFORE anything starts (the old code let `seq` fail silently and then
     lied "did NOT exit within Xs")."""
     for bad in ("abc", "", "0", "-3", "1.5"):
-        bin_dir = pathlib.Path("/tmp") / f"e4bin_{abs(hash(bad)) % 10**8}"
+        # r31 Q2: the stub dir goes under tmp_path, never a shared /tmp path
+        bin_dir = tmp_path / f"e4bin_{abs(hash(bad)) % 10**8}"
         bin_dir.mkdir(exist_ok=True)
         real_py = subprocess.run(["which", "python3"], capture_output=True,
                                  text=True).stdout.strip()
