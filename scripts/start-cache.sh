@@ -216,12 +216,12 @@ fi
 
 LOG="$ROOT_PATH/lmcache-server.log"
 PIDF="$ROOT_PATH/lmcache-server.pid"
-# r29 N2: the offset where THIS server's log part starts. The log grows
-# append-only across restarts, so old failures (e.g. from before the L6 fix)
-# stay in it forever -- `kvp status` must judge only what the CURRENT server
-# wrote. Rewritten at every start, BEFORE the server is launched.
-LOG_START_BYTES_PRE=$(wc -c < "$LOG" 2>/dev/null || echo 0)
-printf '%s\n' "$LOG_START_BYTES_PRE" > "$ROOT_PATH/lmcache-server.log.start"
+# r30 P2: the start offset is written ONCE, AFTER every check that can exit
+# the script (already-running, codec, persist policy, adapter render, ...) and
+# immediately before the server launch -- see the note above the launch
+# block below. A refused start must never move the offset (a second
+# start-cache.sh against a live server used to slide the mark to the end of
+# the log and `kvp status` then printed a false `L2 writes: OK`).
 # Review fix (round 37): refuse to start when a server is ALREADY running --
 # the old behaviour overwrote this PID file and orphaned the live server
 # (stop-cache.sh then reported "already exited" for the stale PID).
@@ -317,6 +317,24 @@ fi
 # json.loads(raw) on the value). Passing the file PATH fails with
 # "Invalid JSON for --l2-adapter #1", so the rendered file is passed inline;
 # the file itself is still written for inspection and for the tests.
+# r29 N2 / r30 P2: the offset where THIS server's log part starts. The log
+# grows append-only across restarts, so old failures (e.g. from before the L6
+# fix) stay in it forever -- `kvp status` must judge only what the CURRENT
+# server wrote. Written ONCE per start (see the calls right before the
+# launches below): after EVERY check that can refuse the start (already
+# running, codec, persist policy, adapter render, argv build), immediately
+# before the launch -- a refused start never moves it.
+# r30 P2b: size without stderr noise -- `wc -c < missing 2>/dev/null` still
+# printed "No such file or directory" (the `<` redirect is parsed before
+# 2>/dev/null); the [ -f ] guard fixes that (same class as N6a).
+_kvp_write_log_start(){
+  if [ -f "$LOG" ]; then
+    LOG_START_BYTES_PRE=$(wc -c < "$LOG")
+  else
+    LOG_START_BYTES_PRE=0
+  fi
+  printf '%s\n' "$LOG_START_BYTES_PRE" > "$ROOT_PATH/lmcache-server.log.start"
+}
 if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   # r20 K6.3: the server arg list is built by _kvp_server_argv (env.sh) --
   # the SAME source the image-build server smoke uses. docker binds 0.0.0.0
@@ -339,6 +357,8 @@ if [ "$KVP_LAUNCH_MODE" = "docker" ]; then
   # rejects them ("vllm: error: unrecognized arguments: -m kvpersist.launch ...")
   # and the container exits immediately. Every OTHER docker run in the repo
   # already sets --entrypoint; this one (the production server) did not.
+  # r30 P2: the log-start mark, after ALL refusals, immediately before launch.
+  _kvp_write_log_start
   setsid nohup docker run --name "$CONTAINER_NAME" --rm \
     --gpus all --ipc host \
     --user "$SERVER_UID:$SERVER_GID" \
@@ -361,6 +381,8 @@ else
   # PYTHONFAULTHANDLER=1 (round 44): if a server thread hangs, SIGABRT dumps
   # every thread stack to the log -- a hang becomes identifiable by stack,
   # not by silence (the register_kv_caches timeout gave no clue).
+  # r30 P2: the log-start mark, after ALL refusals, immediately before launch.
+  _kvp_write_log_start
   PYTHONFAULTHANDLER=1 setsid nohup "${LAUNCH[@]}" "${_srv[@]}" \
     >>"$LOG" 2>&1 &
 fi

@@ -27,8 +27,9 @@ store failures are then caught loudly by ``kvp_scan_l2_failures`` (r28 L7).
 
 Usage (inside the image / host venv):
     PYTHONPATH=<repo>/implementation python3 -m kvpersist.serde_alloc_patch --selfcheck
-``--selfcheck`` prints ``OK`` and exits 0 when the reference matched and the
-patch is in place (wired into scripts/verify-image-custom.sh).
+``--selfcheck`` prints ``serde_alloc_patch selfcheck: OK`` and exits 0 when
+the reference matched and the patch is in place (wired into
+scripts/verify-image-custom.sh).
 """
 from __future__ import annotations
 import inspect

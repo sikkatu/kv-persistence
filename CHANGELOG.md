@@ -40,21 +40,27 @@ regression.
   selector awk `exit` closed the pipe and tail died with SIGPIPE under
   pipefail (rc 141, script dies SILENTLY before `docker stop` / `return 2`)
   -- replaced with a `done` flag + `next` so the whole input is consumed.
-  The T6 fixture is back to 40 frames with `frame_39` asserted.
+  The T6 fixture is back to 40 frames; `test_t6a` asserts the first line of
+  the traceback and the `lines skipped` marker (`frame_39` is named only in
+  a comment).
 * **N3** (five surviving r28 mutants now killed): M18 -- a REAL
   `python3 -m kvpersist.launch server --l2-adapter ...` run against a fake
   `lmcache` package (3 cases: kvp-serde installs + patched=True / no serde
   does not install / mutated source -> loud WARNING, patched=False, rc 0);
-  M19/M20 -- the three real `kvp_scan_l2_failures` call lines of
-  test-recovery.sh are EXECUTED (not grepped) with the right scenario tags
-  (scenario pre / A / B); M24/M25 -- exact diagnostic values (in N1).
-* **N5**: tests no longer depend on the coder's machine -- recipes path from
-  `KVP_RECIPES_DIR` (else sibling ../recipes, else skip) and the pinned
-  `_alloc_temp_buffers` source captured VERBATIM into
-  `tests/fixtures/lmcache_alloc_temp_buffers.py.txt` (normalize-equal to
+  M19/M20 -- the three `kvp_scan_l2_failures` call lines of test-recovery.sh
+  are extracted from the script text by regex (one regex per call site) and
+  then EXECUTED against a stub scanner that always fails, verifying the
+  scenario tags (scenario pre / A / B) and the fail() wiring; M24/M25 --
+  exact diagnostic values (in N1).
+* **N5**: the recipes locator and the pinned fixture are machine-independent
+  -- recipes path from `KVP_RECIPES_DIR`
+  (else sibling ../recipes, else skip) and the pinned `_alloc_temp_buffers`
+  source captured VERBATIM into `tests/fixtures/lmcache_alloc_temp_buffers.py.txt`
+  (normalize-equal to
   REFERENCE_SOURCE; built into a temp lmcache module and installed by the
   REAL install() without any reference_matches monkeypatching; mutated
-  source refused).
+  source refused). The NEW N2 test however still read live/ of the working
+  tree and was red in a fresh clone (r30 P1).
 * **N6**: (a) `tr < "$_pidf"` before `2>/dev/null` printed
   "No such file or directory" in the normal "server not started" state ->
   guarded by `[ -f ]`; (b) install() is now idempotent (a second call in the

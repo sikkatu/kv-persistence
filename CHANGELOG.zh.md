@@ -33,19 +33,22 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   调用栈输出全部改用 `_kvp_bound_block`（保留前 20 行 + `lines skipped`
   标记 + 后 60 行）；（b）选择器 awk 的 `exit` 关闭管道，tail 在 pipefail 下
   死于 SIGPIPE（rc 141，脚本在 `docker stop` / `return 2` 之前静默死亡）
-  ——改为 `done` 标志 + `next`，读完整个输入。T6 固件恢复为 40 帧并断言
-  `frame_39`。
+  ——改为 `done` 标志 + `next`，读完整个输入。T6 固件恢复为 40 帧；
+  `test_t6a` 断言调用栈首行和 `lines skipped` 标记（`frame_39` 仅出现在
+  注释里）。
 * **N3**（r28 存活的五个突变体现在全部被杀死）：M18——真实运行
   `python3 -m kvpersist.launch server --l2-adapter ...` 配假 `lmcache` 包
   （三种情况：kvp-serde 安装 + patched=True / 无 serde 不安装 / 变异源码 →
   响亮 WARNING，patched=False，rc 0）；M19/M20——test-recovery.sh 的三行
-  `kvp_scan_l2_failures` 真实调用被【执行】（不是 grep），带正确的场景
-  标签（scenario pre / A / B）；M24/M25——诊断精确值（见 N1）。
-* **N5**：测试不再依赖编码者机器——recipes 路径取自 `KVP_RECIPES_DIR`
+  `kvp_scan_l2_failures` 调用先用正则从脚本文本中切出（每次调用一条
+  正则），再针对总是失败的 stub 扫描器【执行】，验证场景标签
+  （scenario pre / A / B）和 fail() 接线；M24/M25——诊断精确值（见 N1）。
+* **N5**：recipes 定位器和 pinned 固件与机器无关——recipes 路径取自 `KVP_RECIPES_DIR`
   （否则相邻 ../recipes，否则 skip），pinned `_alloc_temp_buffers` 源码
   逐字存入 `tests/fixtures/lmcache_alloc_temp_buffers.py.txt`（归一化等同
   REFERENCE_SOURCE；装入临时 lmcache 模块并由真正的 install() 安装，不
-  monkeypatch reference_matches；变异源码被拒绝）。
+  monkeypatch reference_matches；变异源码被拒绝）。但新的 N2 测试仍然读取工作
+  树的 live/，在全新克隆中是红的（r30 P1）。
 * **N6**：（a）`tr < "$_pidf"` 在 `2>/dev/null` 之前，在「服务器未启动」的
   正常状态下打印「No such file or directory」→ 用 `[ -f ]` 守卫；
   （b）install() 幂等（同一进程第二次调用返回 `patched`，不重复包装）；

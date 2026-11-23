@@ -256,10 +256,19 @@ def test_n2_new_failure_after_mark_is_failing():
 
 
 def test_n2_kvp_status_passes_the_offset(tmp_path):
-    """> N2: the REAL `scripts/kvp status` reads lmcache-server.log.start and
+    """> N2/P1: the REAL `scripts/kvp status` reads lmcache-server.log.start and
     passes it as the offset -- old failures before the mark give `L2 writes:
-    OK`. MUTATION: calling kvp_l2_writes_status WITHOUT the second argument
-    (the whole log would count and it would say FAILING)."""
+    OK`. Runs in a TMP copy of the repo WITHOUT live/ (the r30 P1 contract:
+    a fresh clone must not make this test red). MUTATIONS: calling
+    kvp_l2_writes_status WITHOUT the second argument (the whole log would
+    count and it would say FAILING); dropping `|| true` in the head|tr
+    substitution (silent rc=1 death before the L2 line)."""
+    import shutil
+    repo = tmp_path / "kvp"
+    (repo / "scripts").mkdir(parents=True)
+    for f in (ROOT / "scripts").iterdir():
+        if f.is_file():
+            shutil.copy2(f, repo / "scripts" / f.name)
     cache_root = tmp_path / "cache"
     cache_root.mkdir()
     old_fail = ("[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
@@ -275,12 +284,14 @@ def test_n2_kvp_status_passes_the_offset(tmp_path):
     env = dict(os.environ,
                HOME=str(home),
                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
-               KVP_REPO=str(ROOT),
+               KVP_REPO=str(repo),
                KVP_CACHE_ROOT=str(cache_root))
-    r = subprocess.run(["bash", str(ROOT / "scripts" / "kvp"), "status"],
+    r = subprocess.run(["bash", str(repo / "scripts" / "kvp"), "status"],
                        capture_output=True, text=True, timeout=60, env=env,
                        cwd=str(tmp_path))
     out = r.stdout + r.stderr
+    assert r.returncode == 0, (
+        f"`kvp status` must not die in a fresh clone (no live/):\n{out[-800:]}")
     assert "L2 writes: OK" in out, (
         f"`kvp status` must honour the start offset:\n{out[-800:]}")
     assert "L2 writes: FAILING" not in out, (
@@ -313,18 +324,31 @@ def _deep_error_log(with_noise=True) -> str:
     return block + "\n" + noise
 
 
-def _run_selection_pipeline(log_text, bound="80 20"):
-    """The exact pipeline used by test-recovery.sh branches (awk selection ->
-    _kvp_bound_block from env.sh)."""
-    r = subprocess.run(
-        ["bash", "-c",
-         '. "' + str(ENV_SH) + '" && '
-         "awk 'f && /^\\[20[0-9][0-9]-/ {exit} "
-         "/Error handling operation register_kv_cache/ {f=1} f {print}' "
-         "| _kvp_bound_block " + bound],
-        input=log_text, capture_output=True, text=True, timeout=30)
-    return r.stdout
+def _real_selector(src: str, start_marker: str, end_marker: str) -> str:
+    """r30 P4: the REAL awk invocation cut out of the script text (the shape of
+    test_n4_sigpipe_no_silent_death_on_huge_noise) -- a hand-copied selector in
+    the test drifts from the scripts and tests code that no longer exists.
+    Returns everything from `awk ` up to (not including) end_marker -- the
+    invocation INCLUDING any -v arguments (like `-v start="$_line"`), with its
+    closing single quote restored (the end marker starts at that quote)."""
+    anchor = src.index(start_marker)
+    awk_pos = src.index("awk ", anchor)
+    end = src.index(end_marker, awk_pos)
+    return src[awk_pos:end] + "'"
 
+def _selection_pipelines():
+    """r30 P4: the THREE real selections -- both test-recovery.sh places and
+    the env.sh scanner. The 2nd recovery selection reads the log FILE as awk
+    input (not a pipe), so `exit` there is harmless -- the pipe-fed ones
+    (1st recovery, scanner) must use the done-flag or they die of SIGPIPE."""
+    rec = RECOVERY.read_text()
+    env = ENV_SH.read_text()
+    re_first = _real_selector(rec, '_srverr_trace="', "' | _kvp_bound_block")
+    re_second = _real_selector(rec, 'awk -v start="${_kvp_e1%%:*}"',
+                               ' "$LOG" | _kvp_bound_block')
+    scanner = _real_selector(env, '_block="', "' | _kvp_bound_block")
+    return {"recovery_wait": re_first, "recovery_dead": re_second,
+            "scanner": scanner}
 
 def test_n4_deep_traceback_keeps_start_and_end():
     """> N4: a 60-frame traceback (127-line block) + 600 lines noise ->
@@ -333,18 +357,37 @@ def test_n4_deep_traceback_keeps_start_and_end():
     <= 81 lines. MUTATION: `head -n 80` instead of the limiter (cuts the
     exception tail)."""
     log = _deep_error_log(with_noise=True)
-    out = _run_selection_pipeline(log)
-    lines = out.strip().splitlines()
-    assert "Error handling operation register_kv_cache" in out, (
-        f"the first line must print:\n{out[:200]}")
-    assert "Returning 205 (CUDA_ERROR_MAP_FAILED) from cuIpcOpenEventHandle" in out, (
-        f"the LAST exception line must survive the bound:\n{out[-600:]}")
-    assert "The CUDA driver logged these messages" in out, (
-        f"the driver block must survive the bound:\n{out[-600:]}")
-    assert "lines skipped" in out, (
-        f"the marker must show the cut:\n{out[-600:]}")
-    assert "skipping eviction" not in out, "DEBUG noise must be cut"
-    assert len(lines) <= 81, f"bounded output expected, got {len(lines)} lines"
+    for name, selector in _selection_pipelines().items():
+        if name == "recovery_dead":
+            # the 2nd recovery selection reads the FILE via awk's file operand
+            continue
+        r = subprocess.run(
+            ["bash", "-c",
+             f'. "{ENV_SH}" && _line=1 && cat | ' + selector +
+             " | _kvp_bound_block 80 20"],
+            input=log, capture_output=True, text=True, timeout=30)
+        out = r.stdout
+        assert "Error handling operation register_kv_cache" in out, (
+            f"[{name}] the first line must print:\n{out[:200]}")
+        assert "Returning 205 (CUDA_ERROR_MAP_FAILED) from cuIpcOpenEventHandle" in out, (
+            f"[{name}] the LAST exception line must survive the bound:\n{out[-600:]}")
+        assert "The CUDA driver logged these messages" in out, (
+            f"[{name}] the driver block must survive the bound:\n{out[-600:]}")
+        assert "lines skipped" in out, (
+            f"[{name}] the marker must show the cut:\n{out[-600:]}")
+        assert "skipping eviction" not in out, f"[{name}] DEBUG noise must be cut"
+        assert len(out.strip().splitlines()) <= 81, f"[{name}] bounded output expected"
+def test_n4_selectors_have_no_early_exit():
+    """> N4: both pipe-fed real selections (test-recovery.sh wait branch, env.sh
+    scanner) must use the done FLAG -- an early `exit` closes the pipe and the
+    writer dies of SIGPIPE under pipefail (the r29 N4 defect class). The
+    2nd recovery selection and the launcher's 2nd place read their input as a
+    FILE (no writer to signal) -- that `exit` is equivalent and is covered by
+    grep in recipes. MUTATION: replacing the flag with `exit` in either
+    pipe-fed selector."""
+    for name, prog in _selection_pipelines().items():
+        assert "exit" not in prog, f"[{name}] an early exit would risk SIGPIPE:\n{prog}"
+        assert "done=1" in prog, f"[{name}] the done flag must be present:\n{prog}"
 
 
 def test_n4_scanner_keeps_end_on_deep_block():
