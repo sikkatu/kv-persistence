@@ -191,6 +191,56 @@ def test_p2c_mark_equals_log_size(tmp_path):
     mark = cache_root / "lmcache-server.log.start"
     assert mark.read_text().strip() == "201", f"mark must be 201: {mark.read_text()!r}"
 # ---------------------------------------------------------------------------
+# Q1: the mark must not move on refusals AFTER the already-running check
+# ---------------------------------------------------------------------------
+def _late_refusal_mark(tmp_path, extra_env):
+    """198-byte log, mark 91, NO live server pid -> force a LATE refusal (one
+    of the checks AFTER `already running`) and assert the mark file is
+    byte-identical. Returns (returncode, output, before, after)."""
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    old = "[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
+    old = old + "x" * (91 - len(old))
+    tail = "[2026-11-22 08:09:00] LMCache ERROR Store task 7 to adapter 0 failed for keys ['a']\n"
+    tail = tail + "y" * (198 - 91 - len(tail))
+    log = cache_root / "lmcache-server.log"
+    log.write_text(old + tail)
+    assert log.stat().st_size == 198, f"fixture must be 198 bytes: {log.stat().st_size}"
+    mark = cache_root / "lmcache-server.log.start"
+    mark.write_text("91\n")
+    with open(mark, "rb") as fh:
+        before = fh.read()
+    r, _, _ = _start_cache(tmp_path, extra_env=extra_env, cache_root=cache_root,
+                           same_uid="1")
+    with open(mark, "rb") as fh:
+        after = fh.read()
+    return r, before, after
+def test_q1_persist_disabled_refusal_does_not_move_the_mark(tmp_path):
+    """Q1: `KVP_PERSIST_ENABLED=false` (a refusal way AFTER `already
+    running`) -> the script dies "is not supported" AND the mark is untouched
+    byte for byte. MUTATION: a silent mark write before
+    `# Render the L2 adapter spec...` (the r30 P2 defect all over again)."""
+    r, before, after = _late_refusal_mark(
+        tmp_path, {"KVP_PERSIST_ENABLED": "false"})
+    out = r.stdout + r.stderr
+    assert "is not supported" in out, out[-800:]
+    assert r.returncode != 0
+    assert after == before, (
+        "a LATE refusal must not move the log-start mark: "
+        f"before={before!r} after={after!r}")
+def test_q1_bad_eviction_policy_refusal_does_not_move_the_mark(tmp_path):
+    """Q1: an invalid LMCACHE_EVICTION_POLICY fails the argv build -- the
+    LAST refusal before the mark write -> refused, mark untouched byte for
+    byte. MUTATION: a silent mark write before the argv build."""
+    r, before, after = _late_refusal_mark(
+        tmp_path, {"LMCACHE_EVICTION_POLICY": "NoSuchPolicy"})
+    out = r.stdout + r.stderr
+    assert "server argv build failed" in out, out[-800:]
+    assert r.returncode != 0
+    assert after == before, (
+        "an ARGV-BUILD refusal must not move the log-start mark: "
+        f"before={before!r} after={after!r}")
+# ---------------------------------------------------------------------------
 # P4: _kvp_bound_block exact arithmetic (inputs line_NNN, NO strip)
 # ---------------------------------------------------------------------------
 def _run_bound(inp: str, max_: int = 80, hd: int = 20):
@@ -317,19 +367,20 @@ def test_p5c_collector_dies_between_inspects(tmp_path):
 # ---------------------------------------------------------------------------
 # P5d: kvp_l2_writes_status must normalize a garbage/empty offset by itself
 # ---------------------------------------------------------------------------
-def _l2_status_raw(arg: str, log_text: str):
+def _l2_status_raw(arg: str, log_text: str, tdir: Path):
     """Run the REAL kvp_l2_writes_status under the REAL strict header of
     scripts/kvp (`set -Eeuo pipefail`) -- the garbage-offset normalizer is
     the ONLY thing keeping `abc` from hitting `$_from + 1` arithmetic, where
     set -u turns it into 'unbound variable' (a bare numeric-name variable IS
-    resolved before arithmetic, so only the case-guard protects this path)."""
-    logf = Path("/tmp") / "kvp-p5d-test.log"
+    resolved before arithmetic, so only the case-guard protects this path).
+    The log goes to tdir (tmp_path) -- never to a shared fixed path (Q2)."""
+    logf = tdir / "kvp-p5d-test.log"
     logf.write_text(log_text)
     return _sh(
         f'set -Eeuo pipefail; rc=0; . "{ENV_SH}" && '
         f'kvp_l2_writes_status "{logf}" {arg} || rc=$?; exit $rc',
         env_extra={"KVP_SKIP_IPC_TEST": "1"})
-def test_p5d_garbage_and_empty_offset_normalized():
+def test_p5d_garbage_and_empty_offset_normalized(tmp_path):
     """P5d: a direct call with an EMPTY offset and with `abc` on a log with
     one failure must give the SAME verdict as offset 0:
     `FAILING (1 failed since this server started)`, no arithmetic error.
@@ -337,7 +388,7 @@ def test_p5d_garbage_and_empty_offset_normalized():
     kvp_l2_writes_status (bash arithmetic on `abc` -> unbound/crash)."""
     fail = "[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
     for arg in ('""', "abc"):
-        r = _l2_status_raw(arg, fail)
+        r = _l2_status_raw(arg, fail, tmp_path)
         out = r.stdout + r.stderr
         assert "FAILING (1 failed since this server started)" in out, (
             f"offset {arg} must fall back to 0 (as with offset 0):\n{out}")

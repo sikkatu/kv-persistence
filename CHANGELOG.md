@@ -13,6 +13,42 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 30 (P1-P5: honest tests for the r29 fixes -- fresh-clone kvp status, the log-start mark, SIGPIPE-proof tracebacks)
+**Review (23 Nov 2026, kv 7f723e5 / recipes d943b4f):** the r29 code was
+accepted, but the acceptance was not met: one red test in a clean clone,
+two code defects and test gaps. All fixed here, r29 code untouched except
+where named below.
+* **P1**: `kvp status` died silently (rc=1) without `live/engine_container`
+  (fresh clone): the `head|tr` substitution needed `|| true` INSIDE it under
+  `set -e` (both status and logs lines fixed). The N2 test now runs against a
+  tmp copy of the repo WITHOUT live/ -- genuinely machine-independent.
+* **P2**: the log-start mark moved on refused starts (a second
+  `start-cache.sh` against a live server slid it to the end of the log ->
+  false `L2 writes: OK`) and `wc -c < missing 2>/dev/null` printed stderr
+  noise on first start. `start-cache.sh` now writes the mark ONCE per start,
+  after EVERY refusal (already running, codec, persist policy, adapter
+  render, argv build), immediately before the launch, both modes; the size
+  is taken via `[ -f ]`. Tests: refusals leave the mark byte-identical, mark
+  0 without a log, mark == log size. (Q1 round 31 extends this to the late
+  refusals.)
+* **P3** (recipes, tests only): the fail-fast block now runs under the REAL
+  `set -Eeuo pipefail` of the launcher with a 40-frame traceback + 5 MB DEBUG
+  noise -- killing the surviving `exit` (rc 141 SIGPIPE) and marker-number
+  mutants; `test_t6a` asserts `frame_39` again.
+* **P4**: exact `_kvp_bound_block` arithmetic on line_NNN inputs without
+  `strip()` (0/80/81/125 lines at 80/20, 100 at 40/10); the scanner survives
+  a 9.4 MB log under strict mode (rc 1, not 141); the hand-copied test
+  selector is gone -- selectors are cut from the real scripts.
+* **P5**: selfcheck docstring names the signed line; r29 CHANGELOG notes now
+  describe what the tests really do (all three locales); the collector dying
+  between `State.Running` and the network inspect must not flip the exit
+  code (N7++); garbage mark offsets are normalized under the real strict
+  header.
+
+**Tests (verified red beforehand):** 2 Q1 mark-immobility tests; 13 r30 tests
+(P1-P5); 11 mutations P1-P5 + 2 Q1 mutations. Full suites: kv 888 passed /
+27 skipped, recipes 454 passed / 5 skipped, both in clean clones without
+`live/`.
 ### Round 29 (N1-N7: finishing r28 -- real diagnostics values, honest `kvp status`, SIGPIPE-safe tracebacks, obs start regression)
 **Review (22 Nov 2026, kv 9992bd6 / recipes 781a5b2 + hardware run):** the
 hardware run PASSED (L2 writes 366212 KiB, test-recovery VERDICT: PASS,
@@ -40,9 +76,7 @@ regression.
   selector awk `exit` closed the pipe and tail died with SIGPIPE under
   pipefail (rc 141, script dies SILENTLY before `docker stop` / `return 2`)
   -- replaced with a `done` flag + `next` so the whole input is consumed.
-  The T6 fixture is back to 40 frames; `test_t6a` asserts the first line of
-  the traceback and the `lines skipped` marker (`frame_39` is named only in
-  a comment).
+  The T6 fixture is back to 40 frames.
 * **N3** (five surviving r28 mutants now killed): M18 -- a REAL
   `python3 -m kvpersist.launch server --l2-adapter ...` run against a fake
   `lmcache` package (3 cases: kvp-serde installs + patched=True / no serde
@@ -133,41 +167,6 @@ unreachable). Order of work: L6 -> L7 -> L8 -> L9 -> D1 -> L1-L5.
   test_r28_l1.py (3), test_r28_l4.py (8) -- all behavioural (stub docker/id,
   IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR/KVP_PROC_ROOT isolation, free
   ports). 19 mutations verified killed (incl. the 6 survivors of r27).
-### Round 27 (K1-K8: the cache server must run under the ENGINE's UID)
-**Hardware review (22 Nov 2026):** the hardware run failed at
-`register_kv_cache` with `CUDA_ERROR_MAP_FAILED` -- the engine ran as UID
-1000 (KVP_SAME_UID=1 default) while the docker-mode cache server ran as
-root (no `--user`). Six hardware rows prove the rule: CUDA IPC between the
-two containers opens ONLY when both sides share ONE UID (1000+1000 PASS,
-root+1000 FAIL); `--pid host` is NOT needed. "root is required" (round 45)
-was wrong -- "the UIDs must match" is the rule.
-* **K1**: start-cache.sh runs the server container `--user $(id -u):$(id -g)`
-  (KVP_SAME_UID=1 default) or `--user 0:0` (KVP_SAME_UID=0 root fallback) +
-  `HOME=/tmp/kvp-server-home` (+XDG/TRITON) for uids without a passwd home;
-  the "files written by ROOT" note is gone from the default path.
-* **K2**: leftover ROOT state refuses BEFORE the server docker run with the
-  exact one-shot fix (`sudo chown -R …`, `sudo rm -f …/lmcache_fd_<port>.sock`
-  via KVP_SHM_DIR) -- nothing runs under root automatically.
-* **K3**: `_kvp_pre_flights` (docker mode) reads the RUNNING server's
-  `docker inspect {{.Config.User}}` (empty/0/0:0/root = root) and refuses the
-  engine start on a proven mismatch, naming BOTH UIDs, before the model load.
-* **K4/K5** (ipc-test.sh): the producer runs via `sh -c '…; true'` (PID != 1,
-  no --pid host), the container consumer gets `--user $CONSUMER_USER` (the
-  expected server UID), both print `os.getpid()` -> `PIDs: producer=…
-  consumer=…` and equal PIDs give the "TEST INVALID BY CONSTRUCTION"
-  verdict; a failing consumer can no longer abort the script without a
-  verdict (trap EXIT cleanup, `case $rc` prints for every code).
-* **K6** (recipes launcher + test-recovery.sh): the fail-fast prints the
-  WHOLE traceback (every frame + the "The CUDA driver logged these messages"
-  block -- the hardware log lost the exception's last line to
-  `grep -A20 | head -25`), the ONE-UID advice only for CUDA IPC errors, and
-  `docker stop "$CONTAINER"` before `exit 1` (the engine must not hold the
-  GPUs).
-* **K7/K8**: texts + docs (deployment ×3: mode A = both sides the operator
-  user (default), mode B = both root, mixed pairs never work); behavioural
-  tests T1-T6 (test_r27_uid.py, test_r27_ipc.py,
-  recipes tests/test_r27_launcher_failfast.py) with stub docker/id, isolated
-  IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR.
 ### Round 25 (G1-G10: readiness race fixed, live/ guard hardened, recipes isolated)
 **Review (22 Nov 2026, HEAD 931a9d0):** the r24 readiness gate refused at 0s
 (the container is created asynchronously), its ready limit ran 3-4x past the

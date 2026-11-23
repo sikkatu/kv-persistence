@@ -150,14 +150,15 @@ def test_l2_recovery_branches_bounded():
 # ---------------------------------------------------------------------------
 # L7: the L2 store-failure scanner
 # ---------------------------------------------------------------------------
-def _scan_l2(log_text: str, from_byte: int = 0):
-    logf = Path("/tmp") / "kvp-l7-test.log"
+def _scan_l2(log_text: str, tdir: Path, from_byte: int = 0):
+    # Q2: the log goes to tdir (tmp_path), never to a shared fixed path
+    logf = tdir / "kvp-l7-test.log"
     logf.write_text(log_text)
     return _sh(f'. "{ENV_SH}" && kvp_scan_l2_failures "{logf}" {from_byte}',
                env_extra={"KVP_SKIP_IPC_TEST": "1"})
 
 
-def test_l7_scanner_detects_store_failure_with_noise():
+def test_l7_scanner_detects_store_failure_with_noise(tmp_path):
     """> L7: serde error + Store task failed + '0 succeeded, 20 failed' +
     300 lines noise -> rc=1, bounded block, 'L2 STORE FAILING', ZERO noise.
     MUTATION caught: removing any of the three patterns."""
@@ -170,7 +171,7 @@ def test_l7_scanner_detects_store_failure_with_noise():
         "[2026-11-22 08:03:27] LMCache DEBUG L2 store completed: adapter 0, 0 succeeded, 20 failed\n"
         + "".join(f"[2026-11-22 08:04:{i // 2:02d}] LMCache DEBUG skipping eviction\n"
                   for i in range(300)))
-    r = _scan_l2(log)
+    r = _scan_l2(log, tmp_path)
     out = r.stdout + r.stderr
     assert r.returncode == 1, f"rc=1 expected:\n{out[-800:]}"
     assert "L2 STORE FAILING" in out
@@ -178,23 +179,23 @@ def test_l7_scanner_detects_store_failure_with_noise():
     assert "ValueError: memoryview assignment" in out, "the cause must print"
 
 
-def test_l7_scanner_silent_on_success():
+def test_l7_scanner_silent_on_success(tmp_path):
     """> L7: 'L2 store completed: adapter 0, 8 succeeded, 0 failed' -> rc=0,
     EMPTY output. MUTATION caught: removing [1-9] from the third pattern."""
     log = ("[2026-11-22 08:03:27] LMCache DEBUG "
            "L2 store completed: adapter 0, 8 succeeded, 0 failed\n")
-    r = _scan_l2(log)
+    r = _scan_l2(log, tmp_path)
     assert r.returncode == 0, f"rc=0 expected:\n{r.stdout}{r.stderr}"
     assert not r.stdout.strip(), f"no output expected:\n{r.stdout}"
 
 
-def test_l7_scanner_from_byte_skips_old_errors():
+def test_l7_scanner_from_byte_skips_old_errors(tmp_path):
     """> L7: FROM_BYTE past the errors -> rc=0 (old errors don't count).
     MUTATION caught: ignoring FROM_BYTE."""
     err = "[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
     fresh = ("[2026-11-22 08:10:00] LMCache DEBUG "
              "L2 store completed: adapter 0, 8 succeeded, 0 failed\n")
-    logf = Path("/tmp") / "kvp-l7-test2.log"
+    logf = tmp_path / "kvp-l7-test2.log"
     logf.write_text(err + fresh)
     r = _sh(f'. "{ENV_SH}" && kvp_scan_l2_failures "{logf}" {len(err)}',
             env_extra={"KVP_SKIP_IPC_TEST": "1"})
@@ -204,14 +205,15 @@ def test_l7_scanner_from_byte_skips_old_errors():
 # ---------------------------------------------------------------------------
 # N2: kvp status must judge only the CURRENT server's log part
 # ---------------------------------------------------------------------------
-def _l2_status(log_text, mark_text=None):
+def _l2_status(log_text, tdir: Path, mark_text=None):
     """Run the REAL kvp_l2_writes_status. mark_text written to a .start file
-    (the r29 N2 offset) and passed as the second argument like `kvp status`."""
-    logf = Path("/tmp") / "kvp-n2-test.log"
+    (the r29 N2 offset) and passed as the second argument like `kvp status`.
+    Q2: both files go to tdir (tmp_path), never to a shared fixed path."""
+    logf = tdir / "kvp-n2-test.log"
     logf.write_text(log_text)
     frm = "0"
     if mark_text is not None:
-        markf = Path("/tmp") / "kvp-n2-test.log.start"
+        markf = tdir / "kvp-n2-test.log.start"
         markf.write_text(mark_text + "\n")
         # exactly how scripts/kvp reads it: only a pure number counts
         frm = (mark_text.strip() or "0")
@@ -221,35 +223,35 @@ def _l2_status(log_text, mark_text=None):
                env_extra={"KVP_SKIP_IPC_TEST": "1"})
 
 
-def test_n2_old_failures_before_mark_are_ok():
+def test_n2_old_failures_before_mark_are_ok(tmp_path):
     """> N2: old failures BEFORE the start offset -> OK (history, not current
     health). MUTATION: calling the function without the offset."""
     old_fail = ("[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
                 "[2026-11-22 08:03:27] LMCache DEBUG L2 store completed: adapter 0, 0 succeeded, 20 failed\n")
     clean = ("[2026-11-22 09:00:01] LMCache DEBUG L2 store completed: adapter 0, 8 succeeded, 0 failed\n"
              "[2026-11-22 09:00:02] LMCache DEBUG L2 store completed: adapter 0, 5 succeeded, 0 failed\n")
-    r = _l2_status(old_fail + clean, mark_text=str(len(old_fail)))
+    r = _l2_status(old_fail + clean, tmp_path, mark_text=str(len(old_fail)))
     out = r.stdout + r.stderr
     assert r.returncode == 0, f"old failures before the mark must be OK:\n{out}"
     assert "L2 writes: OK" in out, out
 
 
-def test_n2_no_mark_file_falls_back_to_zero():
+def test_n2_no_mark_file_falls_back_to_zero(tmp_path):
     """> N2: without a mark file -> offset 0 -> the old failure counts
     (the documented fallback, not a crash)."""
     old_fail = "[2026-11-22 08:03:25] LMCache ERROR Serde task 3 (SERIALIZE) failed\n"
-    r = _l2_status(old_fail, mark_text=None)
+    r = _l2_status(old_fail, tmp_path, mark_text=None)
     out = r.stdout + r.stderr
     assert r.returncode == 1, f"without a mark the old failure counts:\n{out}"
     assert "FAILING" in out, out
 
 
-def test_n2_new_failure_after_mark_is_failing():
+def test_n2_new_failure_after_mark_is_failing(tmp_path):
     """> N2: a NEW failure after the mark -> FAILING (1 failed since this
     server started)."""
     clean = "[2026-11-22 09:00:01] LMCache DEBUG L2 store completed: adapter 0, 8 succeeded, 0 failed\n"
     new_fail = "[2026-11-22 09:05:00] LMCache ERROR Serde task 7 (SERIALIZE) failed\n"
-    r = _l2_status(clean + new_fail, mark_text="0")
+    r = _l2_status(clean + new_fail, tmp_path, mark_text="0")
     out = r.stdout + r.stderr
     assert r.returncode == 1, f"a new failure must be FAILING:\n{out}"
     assert "FAILING (1 failed since this server started)" in out, out
@@ -390,7 +392,7 @@ def test_n4_selectors_have_no_early_exit():
         assert "done=1" in prog, f"[{name}] the done flag must be present:\n{prog}"
 
 
-def test_n4_scanner_keeps_end_on_deep_block():
+def test_n4_scanner_keeps_end_on_deep_block(tmp_path):
     """> N4: the L7 scanner's block (max 40, head 10) on a deep serde error
     also keeps the end of the traceback."""
     deep_err = (
@@ -401,7 +403,7 @@ def test_n4_scanner_keeps_end_on_deep_block():
         + "ValueError: memoryview assignment: lvalue and rvalue have different structures\n"
         + "".join(f"[2026-11-22 08:04:{i // 2:02d}] LMCache DEBUG skipping eviction\n"
                   for i in range(300)))
-    r = _scan_l2(deep_err)
+    r = _scan_l2(deep_err, tmp_path)
     out = r.stdout + r.stderr
     assert r.returncode == 1, f"the scanner must fail:\n{out[-600:]}"
     assert "ValueError: memoryview assignment" in out, (

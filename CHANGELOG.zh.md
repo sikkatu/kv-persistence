@@ -12,6 +12,38 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 30 轮（P1–P5：r29 修复的诚实测试——全新克隆中的 `kvp status`、日志起点标记、无 SIGPIPE 的调用栈）
+**评审（2026 年 11 月 23 日，kv 7f723e5 / recipes d943b4f）：** r29 代码整体
+通过，但验收未达成：全新克隆中一个红测试、两处代码缺陷和测试漏洞。全部
+在此修复，r29 代码除明确指出处外未改动。
+* **P1**：无 `live/engine_container`（全新克隆）时 `kvp status` 静默退出
+  （rc=1）：`head|tr` 替换在 `set -e` 下需要内部的 `|| true`（status 和 logs
+  两行都已修复）。N2 测试现在运行在不含 live/ 的仓库临时副本上——真正与
+  机器无关。
+* **P2**：拒绝启动时日志起点标记会移动（对运行中的服务器再次执行
+  `start-cache.sh` 会把标记推到日志末尾 → 虚假的 `L2 writes: OK`），且首次
+  启动时 `wc -c < missing 2>/dev/null` 在 stderr 打印噪声。`start-cache.sh`
+  现在每次启动只写一次标记，在所有拒绝检查（已在运行、编解码器、persist
+  策略、适配器渲染、argv 构建）之后、启动服务器之前，两种模式都如此；大小
+  通过 `[ -f ]` 获取。测试：拒绝不移动标记（逐字节），无日志时标记为 0，
+  标记 = 日志大小。（r31 的 Q1 将其扩展到晚期拒绝。）
+* **P3**（recipes，仅测试）：fail-fast 块现在在 launcher 真实的
+  `set -Eeuo pipefail` 下、以 40 帧调用栈 + 5 MB DEBUG 噪声运行——杀死存活
+  的 `exit`（rc 141，SIGPIPE）和标记数字突变体；`test_t6a` 再次断言
+  `frame_39`。
+* **P4**：`_kvp_bound_block` 在 line_NNN 输入上的精确算术（无 `strip()`，
+  80/20 的 0/80/81/125 行、40/10 的 100 行）；扫描器在严格模式下挺过
+  9.4 MB 日志（rc 1，不是 141）；测试中的选择器副本已删除——选择器从真实
+  脚本截取。
+* **P5**：selfcheck docstring 写出带签名的行；三个语言版本的 r29
+  CHANGELOG 记录现在如实描述测试所检查的内容；collector 在
+  `State.Running` 与网络检查之间死亡不得改变退出码（N7++）；垃圾标记偏移
+  在真实严格头下正规化。
+
+**测试（所有突变体预先验证为红色）：** 2 个标记不可移动性测试（Q1）；
+13 个 r30 测试（P1–P5）；11 个 P1–P5 突变体 + 2 个 Q1 突变体。完整套件：
+kv 888 passed / 27 skipped，recipes 454 passed / 5 skipped——均在不含
+`live/` 的全新克隆中。
 ### 第 29 轮（N1–N7：收尾 r28——真实的诊断数值、诚实的 `kvp status`、SIGPIPE 安全的调用栈、obs 启动回归）
 **评审（2026 年 11 月 22 日，kv 9992bd6 / recipes 781a5b2 + 硬件运行）：**
 硬件运行通过（L2 写入 366212 KiB，test-recovery VERDICT: PASS，D1 指标
@@ -33,9 +65,7 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   调用栈输出全部改用 `_kvp_bound_block`（保留前 20 行 + `lines skipped`
   标记 + 后 60 行）；（b）选择器 awk 的 `exit` 关闭管道，tail 在 pipefail 下
   死于 SIGPIPE（rc 141，脚本在 `docker stop` / `return 2` 之前静默死亡）
-  ——改为 `done` 标志 + `next`，读完整个输入。T6 固件恢复为 40 帧；
-  `test_t6a` 断言调用栈首行和 `lines skipped` 标记（`frame_39` 仅出现在
-  注释里）。
+  ——改为 `done` 标志 + `next`，读完整个输入。T6 固件恢复为 40 帧。
 * **N3**（r28 存活的五个突变体现在全部被杀死）：M18——真实运行
   `python3 -m kvpersist.launch server --l2-adapter ...` 配假 `lmcache` 包
   （三种情况：kvp-serde 安装 + patched=True / 无 serde 不安装 / 变异源码 →
@@ -110,36 +140,6 @@ objects[0] 分配缓冲区），服务却看似健康；ipc-test 在真正的 CU
   test_r28_l1.py（3）、test_r28_l4.py（8）——全部行为式（stub docker/id、
   IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR/KVP_PROC_ROOT 隔离、随机端口）。
   验证杀死了 19 个突变体（含 r27 存活的 6 个）。
-### 第 27 轮（K1-K8：缓存服务器必须使用引擎的 UID）
-**硬件评审（2026 年 11 月 22 日）：** 硬件运行在 `register_kv_cache` 处以
-`CUDA_ERROR_MAP_FAILED` 失败——引擎以 UID 1000 运行（KVP_SAME_UID=1 默认），
-而 docker 模式下的缓存服务器以 root 运行（无 `--user`）。六行硬件结果证明了
-规则：两个容器之间的 CUDA IPC 只有在双方 UID 相同时才会打开（1000+1000
-PASS，root+1000 FAIL）；不需要 `--pid host`。「root 必需」（第 45 轮）是错的
-——正确的是「UID 必须一致」。
-* **K1**：start-cache.sh 以 `--user $(id -u):$(id -g)` 启动服务器容器
-  （KVP_SAME_UID=1 默认）或 `--user 0:0`（KVP_SAME_UID=0 的 root 备选）+
-  `HOME=/tmp/kvp-server-home`（+XDG/TRITON），适配 passwd 中没有记录的 uid；
-  「文件由 ROOT 写入」的提示已从默认路径移除。
-* **K2**：残留的 root 状态在服务器 docker run 之前拒绝，并给出精确的一次性
-  修复命令（`sudo chown -R …`、`sudo rm -f …/lmcache_fd_<port>.sock`，通过
-  KVP_SHM_DIR）——不会自动以 root 执行任何操作。
-* **K3**：`_kvp_pre_flights`（docker 模式）读取【运行中】服务器的
-  `docker inspect {{.Config.User}}`（空/0/0:0/root = root），在已证实的不匹配
-  时拒绝启动引擎，同时给出双方 UID——在模型加载之前。
-* **K4/K5**（ipc-test.sh）：生产者通过 `sh -c '…; true'` 启动（PID != 1，
-  不加 --pid host），容器消费者带上 `--user $CONSUMER_USER`（预期的服务器
-  UID），双方打印 `os.getpid()` -> `PIDs: producer=… consumer=…`，PID 相同则
-  给出「测试无效（构造上）」的判定；失败的消费者不再让脚本无判定地中断
-  （trap EXIT 清理，任何退出码都打印 `case $rc`）。
-* **K6**（recipes 启动器 + test-recovery.sh）：fail-fast 打印【完整】调用栈
-  （所有帧 + 「The CUDA driver logged these messages」块——硬件日志中异常的
-  最后一行被 `grep -A20 | head -25` 截掉了），仅对 CUDA IPC 错误给出单一 UID
-  的建议，并在 `exit 1` 之前 `docker stop "$CONTAINER"`（引擎不能占着 GPU）。
-* **K7/K8**：文本 + 文档（deployment ×3：模式 A——双方以操作员用户运行（默认），
-  模式 B——双方以 root 运行，混合搭配不可行）；行为测试 T1-T6
-  （test_r27_uid.py、test_r27_ipc.py、recipes tests/test_r27_launcher_failfast.py），
-  采用 docker/id 测试桩，IPC_TEST_DIR/IPC_CONTAINER/KVP_SHM_DIR 隔离路径。
 ### 第 25 轮（G1-G10：就绪竞态已修复，live/ 保护加固，recipes 已隔离）
 **评审（2026 年 11 月 22 日，HEAD 931a9d0）：** r24 就绪门在第 0 秒拒绝（容器异步创建），
 就绪时限超出配置秒数 3-4 倍，F2 测试桩占用固定端口（重复运行变红），单个违规
