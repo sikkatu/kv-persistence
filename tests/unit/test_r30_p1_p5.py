@@ -240,6 +240,50 @@ def test_q1_bad_eviction_policy_refusal_does_not_move_the_mark(tmp_path):
     assert after == before, (
         "an ARGV-BUILD refusal must not move the log-start mark: "
         f"before={before!r} after={after!r}")
+
+# ---------------------------------------------------------------------------
+# Q1c (r32 R10): the SAME two refusals in HOST launch mode -- in docker mode
+# the argv build dies at the first of the two shared argv builders; in host
+# mode the second one runs. Both marks must stay put there too (mutation
+# 'mark written before the argv build in host mode' must be red here).
+# The stub `lmcache` CLI goes into tmp_path/bin BEFORE _start_cache runs
+# (it builds the same bin dir and prepends it to PATH).
+# ---------------------------------------------------------------------------
+def _host_lmcache_stub(tmp_path: Path):
+    b = tmp_path / "bin"
+    b.mkdir(parents=True, exist_ok=True)
+    p = b / "lmcache"
+    p.write_text("#!/usr/bin/env bash\necho lmcache-stub 0.5.8\nexit 0\n")
+    p.chmod(p.stat().st_mode | stat.S_IEXEC)
+
+def test_q1_host_persist_disabled_refusal_keeps_the_mark(tmp_path):
+    """> Q1c: KVP_LAUNCH_MODE=host + KVP_PERSIST_ENABLED=false -> refused
+    ('is not supported'), mark byte-identical. MUTATION: mark written before
+    the persist policy check in host mode."""
+    _host_lmcache_stub(tmp_path)
+    r, before, after = _late_refusal_mark(
+        tmp_path, {"LMCACHE_L2_SERDE": "none", "KVP_SAME_UID": "1",
+                   "KVP_PERSIST_ENABLED": "false", "KVP_LAUNCH_MODE": "host"})
+    out = r.stdout + r.stderr
+    assert "is not supported" in out, out[-800:]
+    assert r.returncode != 0
+    assert after == before, (
+        f"host-mode late refusal must not move the mark: {before!r} -> {after!r}")
+
+def test_q1_host_bad_eviction_policy_keeps_the_mark(tmp_path):
+    """> Q1c: KVP_LAUNCH_MODE=host + invalid LMCACHE_EVICTION_POLICY ->
+    refused at the argv build (the LAST refusal before the mark), mark
+    byte-identical. MUTATION: mark written before the argv build."""
+    _host_lmcache_stub(tmp_path)
+    r, before, after = _late_refusal_mark(
+        tmp_path, {"LMCACHE_L2_SERDE": "none", "KVP_SAME_UID": "1",
+                   "LMCACHE_EVICTION_POLICY": "NoSuchPolicy",
+                   "KVP_LAUNCH_MODE": "host"})
+    out = r.stdout + r.stderr
+    assert "server argv build failed" in out, out[-800:]
+    assert r.returncode != 0
+    assert after == before, (
+        f"host-mode ARGV refusal must not move the mark: {before!r} -> {after!r}")
 # ---------------------------------------------------------------------------
 # P4: _kvp_bound_block exact arithmetic (inputs line_NNN, NO strip)
 # ---------------------------------------------------------------------------

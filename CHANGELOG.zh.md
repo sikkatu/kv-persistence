@@ -12,6 +12,50 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
+### 第 32 轮（R1–R10：test-pr-checks.sh 重写——诚实判定、共享重启、密钥安全）
+**评审（2026 年 11 月 24 日，kv 9717cd1）：** r31 的 PR 检查脚本被拒（缺陷
+R1–R10）。本轮按全部意见重写该脚本。
+
+* **R1**：单一共享重启（`scripts/restart-lib.sh`），复刻 46 轮顺序（先停引擎，
+  `-t 120` 带重试；守护进程故障 → INCONCLUSIVE，exit 5）。`stop-cache.sh`/
+  `start-cache.sh` 失败时打印其最后 20 行输出。
+* **R2**：场景 C 真正从磁盘检索——预热：长且唯一的前缀 + D 提示词，一次完整
+  重启，第 k 轮使用前缀 k。C 期间零 `L2 prefetch load completed` 事件 →
+  INCONCLUSIVE，而非 PASS。
+* **R3**：`abort_stream` 使用裸 `http.client`（无缓冲噪声），每个 abort 记录
+  `before_first_byte=0|1 ms=<实际> body_bytes=<n>`。C 判定要求 ≥
+  `PR_CHECKS_MIN_EARLY_ABORT_PCT`%（默认 50）早期 abort 且打印
+  `rounds × 4` 行；否则 INCONCLUSIVE。丢失的 abort 计入总数。
+  （测试经由 stub 的首字节延迟确定性执行。）
+* **R4**：ERROR 允许列表改为定长字符串文件（`grep -Fv -f`），而非带星号的 BRE
+  ——允许的行现在真正通过。
+* **R5**：API 密钥只经由 `KVP_KEY` 环境变量传递（导出的子进程 python），绝不
+  进入 argv（python3-shim 测试证明）。提示词经文件传递而非 argv（R6a：
+  参数长度上限）。
+* **R6**：D 提示词长度按 `usage.prompt_tokens` 校准（目标 ≥ `2 ×
+  sliding_window`，无该字段则 `4 × lmc_chunk`）。逐 token 比较（`logprobs.content`，
+  词级回退阈值 24）；长度不等时报告较短答案的长度（绝不 -1）。重启后零 L2
+  读取 → INCONCLUSIVE。表格行单元格数一致。
+* **R7**：任何测试旋钮先在 stdout 和报告首行打印
+  `TEST MODE: <变量> set — 本运行并非硬件证明`；`PR_CHECKS_SKIP_RESTART`
+  使 D 判定为 `SKIPPED`，绝不 PASS；报告写入实际数字。
+* **R8**：wheel = 运行中容器内 `lmcache` 版本（`docker exec`）；硬件 =
+  `nvidia-smi` GPU 名称；PR 头 SHA = `SOURCES.md` 的 `PR head` 行；报告按
+  UTC 时间戳命名 + `pr-checks-report.md` 最新副本（旧报告保留）；控制节
+  诚实地写明无对照运行。
+* **R9**：`test-pr-checks.sh` 在三种语言的 CHANGELOG 中说明（见下）。
+* **R10**：逐项 FAIL 检查点（引擎死亡、挂起请求、答案变化、L2 写入失败）
+  带精确说明与 exit 1。
+
+**测试：** 20 个无硬件测试（stub docker + stub API + python3 argv shim）
+覆盖 R1–R10。PR 头 SHA 取自 `SOURCES.md` 的 `PR head` 行。完整套件计数因
+机器而异；以评审运行为准。
+
+### 第 31 轮（仅 Q1–Q3：晚期拒绝不移动标记、tmp_path 测试、CHANGELOG）
+**评审（2026 年 11 月 23 日，kv 0dd4522）：** Q1（晚期拒绝时标记不可移动性）、
+Q2（测试不写共享 /tmp）、Q3（Round 30 的 CHANGELOG）通过。Q4 的 PR 检查脚本
+（r31）被拒（缺陷 R1–R10）；r32 在上方重写。
+
 ### 第 30 轮（P1–P5：r29 修复的诚实测试——全新克隆中的 `kvp status`、日志起点标记、无 SIGPIPE 的调用栈）
 **评审（2026 年 11 月 23 日，kv 7f723e5 / recipes d943b4f）：** r29 代码整体
 通过，但验收未达成：全新克隆中一个红测试、两处代码缺陷和测试漏洞。全部
@@ -40,10 +84,9 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
   `State.Running` 与网络检查之间死亡不得改变退出码（N7++）；垃圾标记偏移
   在真实严格头下正规化。
 
-**测试（所有突变体预先验证为红色）：** 2 个标记不可移动性测试（Q1）；
-13 个 r30 测试（P1–P5）；11 个 P1–P5 突变体 + 2 个 Q1 突变体。完整套件：
-kv 888 passed / 27 skipped，recipes 454 passed / 5 skipped——均在不含
-`live/` 的全新克隆中。
+**所有突变体预先验证为红色：** 2 个标记不可移动性测试（Q1）；
+13 个 r30 测试（P1–P5）；11 个 P1–P5 突变体 + 2 个 Q1 突变体。完整套件的
+计数因机器而异（跳过数不同）；以评审运行为准。
 ### 第 29 轮（N1–N7：收尾 r28——真实的诊断数值、诚实的 `kvp status`、SIGPIPE 安全的调用栈、obs 启动回归）
 **评审（2026 年 11 月 22 日，kv 9992bd6 / recipes 781a5b2 + 硬件运行）：**
 硬件运行通过（L2 写入 366212 KiB，test-recovery VERDICT: PASS，D1 指标

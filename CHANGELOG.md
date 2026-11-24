@@ -13,6 +13,53 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
+### Round 32 (R1-R10: rewrite of test-pr-checks.sh -- honest verdicts, shared restart, key security)
+**Review (Nov 24, 2026, kv 9717cd1):** the r31 PR-checks script was rejected
+(R1-R10 defects). This round rewrites it against the same findings.
+
+* **R1**: ONE shared restart (`scripts/restart-lib.sh`) with the round-46
+  order (engine stopped first, `-t 120` with retries, INCONCLUSIVE exit 5 on
+  daemon failure). A tested `stop-cache.sh`/`start-cache.sh` refusal prints
+  their last 20 output lines.
+* **R2**: scenario C now PROVES a disk retrieve -- warmup stores long unique
+  prefixes + the D prompts, one full restart, then aborts per round k use
+  prefix k. Zero `L2 prefetch load completed` events during C → INCONCLUSIVE,
+  not PASS.
+* **R3**: `abort_stream` runs on raw `http.client` (no file-buffer noise) and
+  records `before_first_byte=0|1 ms=<real> body_bytes=<n>` per abort. The
+  C verdict requires ≥ `PR_CHECKS_MIN_EARLY_ABORT_PCT`% (default 50) early
+  aborts AND `rounds × 4` printed lines; otherwise INCONCLUSIVE. Lost aborts
+  count against the total. (Tests are deterministic via stub first-byte delay.)
+* **R4**: the ERROR allow-list is a file of fixed strings (`grep -Fv -f`), not
+  BRE asterisks -- an allowed line now really passes.
+* **R5**: the API key travels only via `KVP_KEY` env (exported child python),
+  never in argv (a python3 shim test proves it). Prompts travel via files, not
+  argv (R6a: arg-length cap).
+* **R6**: D prompt length is calibrated by `usage.prompt_tokens` (target ≥
+  `2 × sliding_window`, or `4 × lmc_chunk` without that field). Comparison is
+  token-level via `logprobs.content` (word fallback, 24-unit threshold);
+  unequal lengths report the SHORTER answer's length (never -1). Zero L2 reads
+  after the restart → INCONCLUSIVE. Table rows have identical cell counts.
+* **R7**: any test knob prints `TEST MODE: <var> set -- this run is NOT a
+  hardware proof` first in stdout and in the report; `PR_CHECKS_SKIP_RESTART`
+  gives D verdict `SKIPPED`, never PASS; the report prints real numbers.
+* **R8**: wheel = `lmcache` version inside the running container (`docker
+  exec`); hardware = `nvidia-smi` GPU names; PR heads = the SHA `PR head`
+  lines of `SOURCES.md`; timestamped report + `pr-checks-report.md` latest
+  copy (old reports kept); the control section honestly says no control run.
+* **R9**: `test-pr-checks.sh` described in all three CHANGELOG locales below.
+* **R10**: per-check FAIL checkpoints (engine dead, stuck requests, answer
+  changed, L2 store failures) with exact notes and exit 1; `nr=max/marker`
+  mutants are red in the r33 verification run.
+
+**Tests:** 20 machine-free tests (stub docker + stub API + python3 argv shim)
+cover R1-R10. The D SHA extraction uses the `PR head` row of `SOURCES.md`.
+Full-suite counts are machine-dependent; the review run is the reference.
+
+### Round 31 (Q1-Q3 only: late-refusal mark immobility, tmp_path tests, CHANGELOG)
+**Review (Nov 23, 2026, kv 0dd4522):** Q1 (label immobility on late refusals),
+Q2 (no shared /tmp paths), Q3 (CHANGELOG Round 30) were accepted. The Q4
+PR-checks script (r31) was rejected (R1-R10); r32 rewrites it above.
 ### Round 30 (P1-P5: honest tests for the r29 fixes -- fresh-clone kvp status, the log-start mark, SIGPIPE-proof tracebacks)
 **Review (23 Nov 2026, kv 7f723e5 / recipes d943b4f):** the r29 code was
 accepted, but the acceptance was not met: one red test in a clean clone,
@@ -45,10 +92,10 @@ where named below.
   code (N7++); garbage mark offsets are normalized under the real strict
   header.
 
-**Tests (verified red beforehand):** 2 Q1 mark-immobility tests; 13 r30 tests
-(P1-P5); 11 mutations P1-P5 + 2 Q1 mutations. Full suites: kv 888 passed /
-27 skipped, recipes 454 passed / 5 skipped, both in clean clones without
-`live/`.
+**Tests:** r30 added 15 behavioural tests (P1-P5 + Q1 mark-immobility);
+verified-red mutations: 11 (P1-P5 material + Q1 mark-before-render and
+mark-before-argv). Full suite numbers are machine-dependent (the skip count
+varies); the review run is the reference.
 ### Round 29 (N1-N7: finishing r28 -- real diagnostics values, honest `kvp status`, SIGPIPE-safe tracebacks, obs start regression)
 **Review (22 Nov 2026, kv 9992bd6 / recipes 781a5b2 + hardware run):** the
 hardware run PASSED (L2 writes 366212 KiB, test-recovery VERDICT: PASS,
