@@ -56,10 +56,24 @@ custom build. `requirements-lmcache.txt` now points at the derived image.
 cover R1-R10. The D SHA extraction uses the `PR head` row of `SOURCES.md`.
 Full-suite counts are machine-dependent; the review run is the reference.
 
-### Round 31 (Q1-Q3 only: late-refusal mark immobility, tmp_path tests, CHANGELOG)
+### Round 31 (Q1-Q3 accepted; Q4 test-pr-checks.sh rewritten by r32)
 **Review (Nov 23, 2026, kv 0dd4522):** Q1 (label immobility on late refusals),
-Q2 (no shared /tmp paths), Q3 (CHANGELOG Round 30) were accepted. The Q4
-PR-checks script (r31) was rejected (R1-R10); r32 rewrites it above.
+Q2 (no shared /tmp paths), Q3 (CHANGELOG Round 30) were accepted. Q4 -- the
+PR-checks script (r31) -- was rejected (defects R1-R10) and rewritten by r32.
+The r31 Q4 script already contained the user-visible skeleton (scenarios C
+abort/ D recovery over prefixes, restart between warm-up and the probe, a
+markdown report per run) but its first version hung: a stub-only early-abort
+metric counted "aborts that had already read response bytes" instead of
+"aborts closed before the first byte", the ERROR allow-list was fed to grep
+as `*text*` BREs and never matched, an unused key file existed while the key
+was passed as argv, prompt lengths were counted in characters not tokens, and
+scenario C never actually proved a disk retrieve (the prefix was warm in
+memory). r32 fixes all of these -- see the Round 32 section above. What the
+script proves and what it does NOT: it asserts no failure with the patches
+present; it has no control branch (unpatched images are refused by the
+identity gate) and therefore cannot prove the two PRs fix anything either.
+Machine test counts are unreliable across machines; the review run is the
+reference.
 ### Round 30 (P1-P5: honest tests for the r29 fixes -- fresh-clone kvp status, the log-start mark, SIGPIPE-proof tracebacks)
 **Review (23 Nov 2026, kv 7f723e5 / recipes d943b4f):** the r29 code was
 accepted, but the acceptance was not met: one red test in a clean clone,

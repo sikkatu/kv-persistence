@@ -16,12 +16,18 @@ import stat
 import subprocess
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PRC = ROOT / "scripts" / "test-pr-checks.sh"
 
 class _Stub(BaseHTTPRequestHandler):
+    # r32 fix: the stub runs ThreadingHTTPServer (4 parallel C aborts must NOT
+    # queue on the server -- a queued 4th abort waits past its abort window and
+    # is misread as "early", the flake in test_r3_instant_first_byte...).
+    # The shared counters/log writes go under a lock; the first-byte delay and
+    # the response send stay OUTSIDE it (the abort timing must be real).
+    _lock = threading.Lock()
     drift = None            # int|None: the 3rd sighting of a prompt diverges here
     delay_first_byte = 0.0  # seconds before ANY response byte
     llprobs = True          # serve logprobs tokens (else words, threshold 24)
@@ -57,7 +63,6 @@ class _Stub(BaseHTTPRequestHandler):
         else:
             self._send("{}")
     def do_POST(self):
-        _Stub.n += 1
         n = int(self.headers.get("Content-Length", "0"))
         try:
             body = json.loads(self.rfile.read(n))
@@ -65,43 +70,47 @@ class _Stub(BaseHTTPRequestHandler):
             phase = (body.get("metadata") or {}).get("phase", "")
         except Exception:
             prompt, phase = "", ""
-        if self.delay_first_byte > 0:
-            time.sleep(self.delay_first_byte)
-        key = prompt[:32]
-        _Stub.seen[key] = _Stub.seen.get(key, 0) + 1
-        words = (_Stub.base_answer or " ".join(f"word{i}" for i in range(24))).split()
-        if self.turn_changed and phase == "cafter":
-            words = ["DIFFERENT", "answer", "now"]*3   # the post-series answer changed
-        toks = [f"t{i}" for i in range(64)] if self.llprobs else []
-        if self.drift is not None and _Stub.seen[key] == 3:
-            i = self.drift
-            if self.llprobs and i < len(toks):
-                toks = toks[:i] + ["KWON"] + toks[i + 1:]
-            else:
-                words = words[:i] + ["KWON"] + words[i + 1:]
-        # server-log evidence: store events everywhere, read events only after
-        # the restart (post_restart marker made by the docker start stub)
-        with open(_Stub.root / "lmcache-server.log", "a") as fh:
-            fh.write(f"[stub] L2 store completed: adapter 0, 1 succeeded, 0 failed #{_Stub.n}\n")
-            if (_Stub.root / "post_restart").exists() and _Stub.read_events:
-                fh.write(f"[stub] L2 prefetch load completed: request {_Stub.n}, 1 loaded, 0 failed\n")
-            if (_Stub.root / "post_restart").exists() and _Stub.fail_store_once and not _Stub.fail_done:
-                _Stub.fail_done = True
-                fh.write("[stub] LMCache ERROR Serde task 1 (SERIALIZE) failed after restart\n")
-        if (_Stub.root / "post_restart").exists():
-            _Stub.post_n += 1
-            if _Stub.fail_store_at and _Stub.post_n == _Stub.fail_store_at and not _Stub.fail_done:
-                _Stub.fail_done = True
-                with open(_Stub.root / "lmcache-server.log", "a") as fh:
+        delay = self.delay_first_byte
+        toks = []
+        with _Stub._lock:
+            _Stub.n += 1
+            key = prompt[:32]
+            _Stub.seen[key] = _Stub.seen.get(key, 0) + 1
+            words = (_Stub.base_answer or " ".join(f"word{i}" for i in range(24))).split()
+            if self.turn_changed and phase == "cafter":
+                words = ["DIFFERENT", "answer", "now"]*3   # the post-series answer changed
+            toks = [f"t{i}" for i in range(64)] if self.llprobs else []
+            if self.drift is not None and _Stub.seen[key] == 3:
+                i = self.drift
+                if self.llprobs and i < len(toks):
+                    toks = toks[:i] + ["KWON"] + toks[i + 1:]
+                else:
+                    words = words[:i] + ["KWON"] + words[i + 1:]
+            # server-log evidence: store events everywhere, read events only after
+            # the restart (post_restart marker made by the docker start stub)
+            with open(_Stub.root / "lmcache-server.log", "a") as fh:
+                fh.write(f"[stub] L2 store completed: adapter 0, 1 succeeded, 0 failed #{_Stub.n}\n")
+                if (_Stub.root / "post_restart").exists() and self.read_events:
+                    fh.write(f"[stub] L2 prefetch load completed: request {_Stub.n}, 1 loaded, 0 failed\n")
+                if (_Stub.root / "post_restart").exists() and self.fail_store_once and not _Stub.fail_done:
+                    _Stub.fail_done = True
                     fh.write("[stub] LMCache ERROR Serde task 1 (SERIALIZE) failed after restart\n")
-            if _Stub.fail_store_phase and phase == _Stub.fail_store_phase and not _Stub.fail_done:
-                _Stub.fail_done = True
-                with open(_Stub.root / "lmcache-server.log", "a") as fh:
-                    fh.write("[stub] LMCache ERROR Serde task 1 (SERIALIZE) failed after restart\n")
-        # the engine "dies" between the aborts and the C checks
-        if (_Stub.root / "post_restart").exists() and _Stub.fail_dead_after and \
-                _Stub.n >= _Stub.fail_dead_after:
-            (_Stub.root / "dead").write_text("1")
+            if (_Stub.root / "post_restart").exists():
+                _Stub.post_n += 1
+                if self.fail_store_at and _Stub.post_n == self.fail_store_at and not _Stub.fail_done:
+                    _Stub.fail_done = True
+                    with open(_Stub.root / "lmcache-server.log", "a") as fh:
+                        fh.write("[stub] LMCache ERROR Serde task 1 (SERIALIZE) failed after restart\n")
+                if self.fail_store_phase and phase == self.fail_store_phase and not _Stub.fail_done:
+                    _Stub.fail_done = True
+                    with open(_Stub.root / "lmcache-server.log", "a") as fh:
+                        fh.write("[stub] LMCache ERROR Serde task 1 (SERIALIZE) failed after restart\n")
+            # the engine "dies" between the aborts and the C checks
+            if (_Stub.root / "post_restart").exists() and self.fail_dead_after and \
+                    _Stub.n >= self.fail_dead_after:
+                (_Stub.root / "dead").write_text("1")
+        if delay > 0:
+            time.sleep(delay)
         self._send({
             "choices": [{"message": {"content": " ".join(words)},
                          "logprobs": {"content": [{"token": t} for t in toks]}
@@ -152,7 +161,7 @@ def _start_api(tmp_path: Path):
     srv = None; port = 0
     for port in range(18100, 18400):
         try:
-            srv = HTTPServer(("127.0.0.1", port), _Stub)
+            srv = ThreadingHTTPServer(("127.0.0.1", port), _Stub)
             break
         except OSError:
             continue
@@ -293,8 +302,10 @@ def test_r2_disk_reads_present_allows_c(tmp_path):
 # ===========================================================================
 def test_r3_late_first_byte_all_aborts_early(tmp_path):
     """> R3: 1s first-byte delay, 0..100ms abort window -> every abort is
-    before_first_byte=1 and every abort printed its line. S2 (delay 0) is
-    red here 20/20 (its window can never read a byte before closing)."""
+    before_first_byte=1 and every abort printed its line. NOTE: this test
+    does NOT kill S2 (window 0) -- its assertions still hold at window 0.
+    S2 is killed by test_r3_instant_first_byte_no_early_gives_inconclusive
+    (window 0 makes every abort look EARLY there -> C is not INCONCLUSIVE)."""
     srv, port = _start_api(tmp_path)
     _Stub.delay_first_byte = 1.0
     _Stub.read_events = True
@@ -311,12 +322,15 @@ def test_r3_late_first_byte_all_aborts_early(tmp_path):
 
 def test_r3_instant_first_byte_no_early_gives_inconclusive(tmp_path):
     """> R3: instant first byte -> 0 early aborts -> the early gate is not met
-    -> C is INCONCLUSIVE (the retrieve window was not engaged)."""
+    -> C is INCONCLUSIVE (the retrieve window was not engaged). The abort
+    window is deliberately WIDE (5000 ms): with 'instant' answers any real
+    RTT must fall inside it, so a busy host can never fake an EARLY abort
+    (that was the flake: a >100 ms RTT made early=2/4 at delay 0)."""
     srv, port = _start_api(tmp_path)
     _Stub.delay_first_byte = 0.0
     _Stub.read_events = True
     try:
-        p, _ = _run_pr(tmp_path, port, abort_ms=100)
+        p, _ = _run_pr(tmp_path, port, abort_ms=5000)
     finally:
         srv.shutdown()
     out = p.stdout + p.stderr
