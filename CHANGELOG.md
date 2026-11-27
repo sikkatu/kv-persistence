@@ -13,7 +13,37 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
-### Round 32.1 (follow-up review: the R3 client is a REAL deadline abort now; R1/R2/R6/R7/R8 hardening)
+### Round 32.2 (final follow-up: the abort deadline is enforced in EVERY phase; atomic report names)
+**Final follow-up review (Nov 27, 2026):** r32.1's fixes were accepted; two
+narrow issues closed here without touching R1/R2/R6/R7.
+* **R3 (deadline enforcement)**: `abort_stream` now uses `time.monotonic()`
+  (never wall clock) and ONE absolute deadline covering connection
+  establishment, request transmission AND response reading -- connect and
+  send run non-blocking (`select`-bounded, no `create_connection(timeout=30)`
+  / `sendall()` blocking), so a stalled connect or a backed-up TCP window can
+  no longer blow past the abort window and masquerade as an early abort.
+  The recorded `ms` is the REAL close time and each abort line now carries
+  `late=1/0`: any close past window + tolerance (`KVP_ABORT_TOL_MS`, default
+  250 ms) is `late=1` and is WAIVED from the early-abort count. Scenario C
+  reports early/late/after-body separately and any `late` abort makes the
+  timing proof invalid -> INCONCLUSIVE (never a false PASS from late aborts).
+  Tolerances tightened: deadline-accuracy tests now allow window + 250 ms
+  (300 ms window -> 550 ms cap), not 1500 ms.
+  New deterministic tests (5): delayed connection (unroutable black-hole
+  address), send backpressure (accepting server that never reads), normal
+  deadline-respecting operation with the tightened bound, late aborts tagged
+  `late=1` and never counted as early (zero-tolerance run makes this exact),
+  plus the R8 concurrency test.
+* **R8 (atomic report names)**: the timestamped report name is reserved with
+  an ATOMIC `O_EXCL` create (`set -C; : > file` -- kernel-unique) instead of
+  a check-then-create loop, so two concurrent runs in the same UTC second
+  can never write the same file.
+* Tests: `tests/unit/test_r322_regression.py` (5 tests) + the r32.1 suite's
+  R3 tolerances tightened. Mutants (4): blocking-create_connection+sendall
+  client, wall-clock deadline, late-counted-as-early, non-atomic filename
+  loop -- all RED on their matching tests.
+* Hardware run NOT performed (per the review: until R3 passes the new
+  deadline-enforcement tests -- it does, on the machine-free suite).
 **Follow-up review (Nov 25, 2026):** r32 accepted R1-R10's shape but its tests
 were still not proofs. This round keeps the working implementation and fixes
 only what the review listed.

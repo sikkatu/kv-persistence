@@ -113,7 +113,7 @@ def test_r3_aborts_before_headers_close_at_the_deadline(tmp_path):
         srv.shutdown()
     assert d.get("before_first_byte") == "1", d
     ms = float(d["ms"])
-    assert 200 <= ms <= 1500, \
+    assert 200 <= ms <= 550, \
         f"close must land near the 300 ms deadline, got {ms:.0f} ms (d={d})"
 
 
@@ -131,7 +131,7 @@ def test_r3_aborts_mid_body_at_the_deadline(tmp_path):
         srv.shutdown()
     assert d.get("before_first_byte") == "0", d
     ms = float(d["ms"])
-    assert 250 <= ms <= 1500, \
+    assert 250 <= ms <= 650, \
         f"close must land near the 400 ms deadline, got {ms:.0f} ms (d={d})"
     assert int(d["body_bytes"]) > 0, f"the first chunk must be read: {d}"
 
@@ -151,7 +151,7 @@ def test_r3_hung_server_still_closes_at_deadline(tmp_path):
     assert d.get("before_first_byte") == "1", d
     assert elapsed < 5.0, f"client must not hang on a silent server: {elapsed:.1f}s"
     ms = float(d["ms"])
-    assert 200 <= ms <= 1500, f"close near 250 ms deadline, got {ms:.0f} ms"
+    assert 200 <= ms <= 500, f"close near 250 ms deadline, got {ms:.0f} ms"
 
 
 # ===========================================================================

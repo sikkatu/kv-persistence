@@ -103,7 +103,13 @@ LIVE_DIR="${KVP_LIVE_DIR:-$ROOT/live}"
 REPORT_TS_BASE="$LIVE_DIR/pr-checks-report-$(date -u +%Y%m%dT%H%M%SZ)"
 REPORT_TS="$REPORT_TS_BASE.md"
 _r321_n=1
-while [ -e "$REPORT_TS" ]; do
+# r32.2 R8: atomic filename reservation -- O_EXCL create (via noclobber)
+# proves uniqueness in the kernel, so two concurrent runs in the same UTC
+# second can NEVER pick the same timestamped report name.
+while :; do
+  if ( set -C; : > "$REPORT_TS" ) 2>/dev/null; then
+    break                     # reserved (file created empty, will be filled later)
+  fi
   REPORT_TS="${REPORT_TS_BASE}-${_r321_n}.md"
   _r321_n=$((_r321_n + 1))
 done
@@ -201,41 +207,82 @@ hdr=(f"POST /v1/chat/completions HTTP/1.1\r\nHost: {u.hostname}\r\n"
      "Content-Type: application/json\r\nConnection: close\r\n"
      f"Content-Length: {len(body)}\r\n\r\n").encode()
 win=int(os.environ["KVP_MS"])/1000.0
-t0=time.time()
-sock=socket.create_connection((u.hostname,u.port),timeout=30)
-sock.sendall(hdr+body)
-deadline=t0+win
-got=0; buf=b""; hdr_end=-1
-while True:
-    left=deadline-time.time()
-    if left<=0:
-        break
-    readable,_,_=select.select([sock],[],[],left)
-    if not readable:
-        break
+tol=float(os.environ.get("KVP_ABORT_TOL_MS","250"))/1000.0
+t0=time.monotonic()                      # r32.2 R3: monotic, never wall clock
+deadline=t0+win                          # ONE absolute deadline for everything
+sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+sock.setblocking(False)                  # r32.2: neither connect nor send may
+                                         # exceed the deadline by blocking
+phase="connect"
+got=0; buf=b""; hdr_end=-1       # r32.2: defined up front -- any phase may exit early
+try:
     try:
-        chunk=sock.recv(4096)
-    except Exception:
-        break
-    if not chunk:
-        break
-    buf+=chunk
-    if hdr_end<0:
-        k=buf.find(b"\r\n\r\n")
-        if k>=0:
-            hdr_end=k+4
-    if hdr_end>=0:
-        got=len(buf)-hdr_end
-closed=time.time()
+        sock.connect((u.hostname,u.port))
+    except BlockingIOError:
+        pass
+    while True:                          # connect completion, deadline-bounded
+        left=deadline-time.monotonic()
+        if left<=0:
+            raise TimeoutError("connect")
+        _,w,_=select.select([], [sock], [], left)
+        if w:
+            err=sock.getsockopt(socket.SOL_SOCKET,socket.SO_ERROR)
+            if err!=0:
+                raise OSError(err,"connect")
+            break
+    phase="send"
+    out=hdr+body                          # request transmission, also bounded
+    while out:
+        left=deadline-time.monotonic()
+        if left<=0:
+            raise TimeoutError("send")
+        _,w,_=select.select([], [sock], [], left)
+        if w:
+            n=sock.send(out[:65536])
+            out=out[n:]
+    phase="read"
+    while True:
+        left=deadline-time.monotonic()
+        if left<=0:
+            break
+        readable,_,_=select.select([sock],[],[],left)
+        if not readable:
+            break
+        try:
+            chunk=sock.recv(4096)
+        except Exception:
+            break
+        if not chunk:
+            break
+        buf+=chunk
+        if hdr_end<0:
+            k=buf.find(b"\r\n\r\n")
+            if k>=0:
+                hdr_end=k+4
+        if hdr_end>=0:
+            got=len(buf)-hdr_end
+except TimeoutError:
+    pass            # the deadline said stop -- whatever phase we were in
+except OSError:
+    pass            # connection reset / refused while we were timing it
+closed=time.monotonic()
 try:
     sock.close()
 except Exception:
     pass
 early=1 if hdr_end<0 else 0
+ms_close=(closed-t0)*1000.0
+over=ms_close-win*1000.0
+# r32.2 R3: an abort that closed LATER than its window plus tolerance is
+# recorded "late=1" and NEVER counts as a successful early abort -- a false
+# timing proof (delayed connect or stalled send) must not produce before_first_byte=1
+late=1 if over > tol*1000.0 else 0
+if late:
+    early=0
 with open(os.environ["KVP_AF"],"a") as fh:
-    fh.write("ABRT before_first_byte=%d ms=%.0f body_bytes=%d\n"
-             % (early,(closed-t0)*1000,got))
-print("ABRT early=%d" % early)
+    fh.write("ABRT before_first_byte=%d ms=%.0f body_bytes=%d late=%d\n"
+             % (early,ms_close,got,late))
+print("ABRT early=%d late=%d" % (early,late))
 PYEOF
 }
 # ---------------------------------------------------------------------------
@@ -480,11 +527,15 @@ for round in $(seq 1 "$C_ROUNDS"); do
 done
 C_TOTAL=$(( C_ROUNDS * 4 ))
 C_LINES="$(wc -l < "$AF" 2>/dev/null | tr -d ' ')"
-C_EARLY="$(grep -c '^ABRT before_first_byte=1 ' "$AF" 2>/dev/null || true)"
+# r32.2 R3: an abort is EARLY only when it closed BEFORE the first byte AND
+# within its deadline tolerance -- `late=1` lines are stripped from the count.
+C_EARLY="$(grep '^ABRT before_first_byte=1 ' "$AF" 2>/dev/null | grep -c ' late=0$' || true)"
 C_EARLY="${C_EARLY:-0}"
+C_LATE="$(grep -c ' late=1$' "$AF" 2>/dev/null || true)"
+C_LATE="${C_LATE:-0}"
 C_DIST=0
 [ "$C_TOTAL" -gt 0 ] && C_DIST=$(( C_EARLY * 100 / C_TOTAL ))
-echo "  abort lines: $C_LINES/$C_TOTAL, early (before first byte): $C_EARLY ($C_DIST%)"
+echo "  abort lines: $C_LINES/$C_TOTAL, early (before first byte): $C_EARLY ($C_DIST%), late (missed deadline): $C_LATE"
 C_READS="$(l2_reads "$C_MARK")"
 echo "  L2 disk-read events during C: $C_READS"
 echo "  waiting ${C_SETTLE}s for any stuck request to settle..."
@@ -498,6 +549,13 @@ fi
 if [ "$C_DIST" -lt "$MIN_EARLY_PCT" ]; then
   C_VERDICT="INCONCLUSIVE"; C_NOTES="$C_NOTES
 - only $C_DIST% of the aborts landed before the first response byte (threshold $MIN_EARLY_PCT%) -- the retrieve window was not engaged"
+fi
+# (r32.2 R3) a late abort is INVALID timing evidence: a stream that connected
+# or transmitted past its window proves nothing about the retrieve, so any
+# late abort invalidates the whole early-abort proof -> INCONCLUSIVE.
+if [ "${C_LATE:-0}" -gt 0 ]; then
+  C_VERDICT="INCONCLUSIVE"; C_NOTES="$C_NOTES
+- $C_LATE of $C_TOTAL aborts closed AFTER their deadline tolerance (delayed connect or stalled transmission) -- their timing is invalid, the early-abort proof cannot stand"
 fi
 # (R2) disk proof
 if [ "${C_READS:-0}" -le 0 ]; then
@@ -632,7 +690,7 @@ SHA_5972="$(grep -A 10 '## PR #5972' "$ROOT/vendor/patches/lmcache/SOURCES.md" 2
   echo "## Scenario C (#4136, abort during a disk-backed retrieve)"
   echo
   echo "- result: **$C_VERDICT** (exit code: $([ "$C_VERDICT" = FAIL ] && echo 1 || { [ "$C_VERDICT" = INCONCLUSIVE ] && echo 5 || echo 0; }))"
-  echo "- aborts: $C_LINES lines / $C_TOTAL sent, early (before first byte): $C_EARLY ($C_DIST%), after/into the body: $((C_TOTAL - C_EARLY))"
+  echo "- aborts: $C_LINES lines / $C_TOTAL sent, early (before first byte, on time): $C_EARLY ($C_DIST%), late (missed deadline): $C_LATE, after/into the body: $((C_TOTAL - C_EARLY - C_LATE))"
   echo "- L2 disk-read events during C: $C_READS"
   [ -n "$C_NOTES" ] && printf '%s\n' "$C_NOTES"
   echo
