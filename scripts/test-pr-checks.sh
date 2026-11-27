@@ -31,6 +31,27 @@ ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/env.sh"
 _kvp_load_env "$ROOT"
 . "$HERE/restart-lib.sh"          # r32 R1: the ONE shared restart routine
+# ---- r32.1 R7/R1: TEST MODE flags are computed and PRINTED FIRST (before the
+# API key check and any docker call) -- the banner is literally the first line
+# of the run and of the report whenever any test mode applies. A missing or
+# skipped IPC pre-flight is TEST MODE too (a bypassed CUDA-IPC boundary is
+# not a hardware proof; see the same rule in restart-lib.sh).
+TEST_MODE_VARS=""
+for _v in PR_CHECKS_SKIP_RESTART PR_CHECKS_ROUNDS PR_CHECKS_SETTLE \
+          PR_CHECKS_ABORT_MAX_MS PR_CHECKS_MIN_EARLY_ABORT_PCT; do
+  if [ -n "${!_v:-}" ]; then
+    TEST_MODE_VARS="$TEST_MODE_VARS $_v"
+  fi
+done
+if [ "${KVP_SKIP_IPC_TEST:-0}" = "1" ]; then
+  TEST_MODE_VARS="$TEST_MODE_VARS IPC_PRE_FLIGHT_SKIPPED(KVP_SKIP_IPC_TEST=1)"
+fi
+if [ ! -x "${KVP_SCRIPTS_DIR:-$HERE}/ipc-test.sh" ]; then
+  TEST_MODE_VARS="$TEST_MODE_VARS IPC_PRE_FLIGHT_MISSING(no ipc-test.sh)"
+fi
+if [ -n "$TEST_MODE_VARS" ]; then
+  echo "TEST MODE:$(for _v in $TEST_MODE_VARS; do printf ' %s' "$_v"; done) set -- this run is NOT a hardware proof"
+fi
 # ---- API key: env wins, then ~/.., then live mirror; key in env file only --
 KEY="${API_KEY:-}"
 if [ -z "$KEY" ] && [ -f "$HOME/.config/kvp/api_key" ]; then
@@ -65,19 +86,10 @@ API="${API_BASE:-http://127.0.0.1:30007}"
 # both API and KVP_KEY are read inside the exported api_ok() probe (the
 # shared restart routine waits for the engine in a `bash -c`) -- export both
 export API
-# ---- r32 R7: test-only knobs. ANY of them prints TEST MODE first thing and
-# marks the report; SKIP_RESTART additionally makes the D scenario SKIPPED
-# (mem-hit T2 would be a fake proof), never PASS.
-TEST_MODE_VARS=""
-for _v in PR_CHECKS_SKIP_RESTART PR_CHECKS_ROUNDS PR_CHECKS_SETTLE \
-          PR_CHECKS_ABORT_MAX_MS PR_CHECKS_MIN_EARLY_ABORT_PCT; do
-  if [ -n "${!_v:-}" ]; then
-    TEST_MODE_VARS="$TEST_MODE_VARS $_v"
-  fi
-done
-if [ -n "$TEST_MODE_VARS" ]; then
-  echo "TEST MODE:$(for _v in $TEST_MODE_VARS; do printf ' %s' "$_v"; done) set -- this run is NOT a hardware proof"
-fi
+# ---- r32 R7: TEST MODE flags are computed and printed at the TOP of this
+# script (literally the first lines of the run and of the report). SKIP_RESTART
+# additionally makes the D scenario SKIPPED (mem-hit T2 would be a fake
+# proof), never PASS.
 C_ROUNDS="${PR_CHECKS_ROUNDS:-30}"
 C_SETTLE="${PR_CHECKS_SETTLE:-60}"
 C_ABORT_MAX_MS="${PR_CHECKS_ABORT_MAX_MS:-400}"
@@ -86,7 +98,15 @@ MIN_EARLY_PCT="${PR_CHECKS_MIN_EARLY_ABORT_PCT:-50}"
 OUTDIR="${PR_CHECKS_OUTDIR:-${KVP_LIVE_DIR:-$ROOT/live}/pr-checks-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUTDIR"
 LIVE_DIR="${KVP_LIVE_DIR:-$ROOT/live}"
-REPORT_TS="$LIVE_DIR/pr-checks-report-$(date -u +%Y%m%dT%H%M%SZ).md"
+# r32.1 R8: collision-safe report name -- two runs inside the same UTC second
+# must NOT overwrite each other (the old fixed <ts>.md could be clobbered).
+REPORT_TS_BASE="$LIVE_DIR/pr-checks-report-$(date -u +%Y%m%dT%H%M%SZ)"
+REPORT_TS="$REPORT_TS_BASE.md"
+_r321_n=1
+while [ -e "$REPORT_TS" ]; do
+  REPORT_TS="${REPORT_TS_BASE}-${_r321_n}.md"
+  _r321_n=$((_r321_n + 1))
+done
 REPORT_LATEST="$LIVE_DIR/pr-checks-report.md"
 REPORT="$REPORT_TS"     # everything writes here; at the end cp -> latest
 # ---- evidence marks -------------------------------------------------------
@@ -158,51 +178,63 @@ except Exception as e:
     sys.exit(1)
 PYEOF
 }
-# abort_stream(): ONE streaming request, CLIENT aborts after <ms>; one line:
-#   ABRT before_first_byte=0|1 ms=<real> body_bytes=<n>
-# Read via raw http.client (no file buffering -- the old r.fp.sock.recv read
-# an already-buffered body and the metric depended on TCP packing). A python
-# crash prints NOTHING and the abort counts as lost (R3).
+# abort_stream(): ONE streaming request, CLIENT aborts at a real DEADLINE
+# (r32.1 R3): the abort is deadline-driven and independent of the response
+# -- it fires even if the server has sent NO headers yet (the old
+# `conn.getresponse()` blocked until the headers and the "abort" happened
+# after them). Everything is read from ONE raw socket (no http.client /
+# file-object buffering anywhere, so no buffered bytes are ever bypassed).
+# One line per abort:
+#   ABRT before_first_byte=0|1 ms=<real time-to-close> body_bytes=<bytes after headers>
+# A python crash prints NOTHING and the abort counts as lost (R3).
 abort_stream(){ # abort_stream <prompt-file> <ms> <abort-log>
   local pfile="$1" ms="$2" af="$3"
   KVP_URL="$API" KVP_PFILE="$pfile" KVP_MS="$ms" KVP_AF="$af" python3 - <<'PYEOF'
-import http.client,json,os,sys,time,urllib.parse
+import json,os,select,socket,sys,time,urllib.parse
 api=os.environ["KVP_URL"]; u=urllib.parse.urlparse(api)
 prompt=open(os.environ["KVP_PFILE"]).read()
 body=json.dumps({"model":os.environ.get("SERVED_MODEL_NAME","mimo-pro"),
   "messages":[{"role":"user","content":prompt}],
   "max_tokens":256,"temperature":0,"seed":0,"stream":True}).encode()
-conn=http.client.HTTPConnection(u.hostname,u.port,timeout=3600)
+hdr=(f"POST /v1/chat/completions HTTP/1.1\r\nHost: {u.hostname}\r\n"
+     f"Authorization: Bearer {os.environ['KVP_KEY']}\r\n"
+     "Content-Type: application/json\r\nConnection: close\r\n"
+     f"Content-Length: {len(body)}\r\n\r\n").encode()
+win=int(os.environ["KVP_MS"])/1000.0
 t0=time.time()
-conn.request("POST","/v1/chat/completions",body=body,
-  headers={"Authorization":"Bearer "+os.environ["KVP_KEY"],
-           "Content-Type":"application/json"})
-resp=conn.getresponse()
-got=0; early=0
-resptime=time.time()
-if resptime-t0 >= int(os.environ["KVP_MS"])/1000.0:
-    # the first byte came LATER than the abort moment -> the abort was EARLY
-    early=1
-else:
-    # read raw bytes directly from the socket (no buffered reader)
-    sock=resp.fp.raw._sock if hasattr(resp.fp,"raw") else resp.fp._sock
-    sock.settimeout(0.05)
-    deadline=t0+int(os.environ["KVP_MS"])/1000.0
-    while time.time() < deadline:
-        try:
-            chunk=sock.recv(4096)
-            if not chunk:
-                break
-            got+=len(chunk)
-        except Exception:
-            pass        # timeout or no data yet -- still inside the window
+sock=socket.create_connection((u.hostname,u.port),timeout=30)
+sock.sendall(hdr+body)
+deadline=t0+win
+got=0; buf=b""; hdr_end=-1
+while True:
+    left=deadline-time.time()
+    if left<=0:
+        break
+    readable,_,_=select.select([sock],[],[],left)
+    if not readable:
+        break
+    try:
+        chunk=sock.recv(4096)
+    except Exception:
+        break
+    if not chunk:
+        break
+    buf+=chunk
+    if hdr_end<0:
+        k=buf.find(b"\r\n\r\n")
+        if k>=0:
+            hdr_end=k+4
+    if hdr_end>=0:
+        got=len(buf)-hdr_end
+closed=time.time()
 try:
-    conn.close()
+    sock.close()
 except Exception:
     pass
+early=1 if hdr_end<0 else 0
 with open(os.environ["KVP_AF"],"a") as fh:
     fh.write("ABRT before_first_byte=%d ms=%.0f body_bytes=%d\n"
-             % (early,(time.time()-t0)*1000,got))
+             % (early,(closed-t0)*1000,got))
 print("ABRT early=%d" % early)
 PYEOF
 }
@@ -272,7 +304,16 @@ def units(x):
     if x.get("tokens"):
         return x["tokens"], "token"
     return (x.get("text") or "").split(), "word"
-a,kind=units(t0); b,_=units(t1); c,_=units(t2)
+# r32.1 R6: use token comparison ONLY when ALL THREE answers carry logprobs;
+# if any of T0/T1/T2 lacks them, fall back to WORDS for all three (mixing
+# token-level for some and word-level for others gives non-comparable indices).
+_have=[bool(t.get("tokens")) for t in (t0,t1,t2)]
+use_tokens=all(_have)
+def maybe(x):
+    if use_tokens:
+        return x.get("tokens") or [], "token"
+    return (x.get("text") or "").split(), "word"
+a,kind=maybe(t0); b,_=maybe(t1); c,_=maybe(t2)
 THR=32 if kind=="token" else 24
 def firstdiff(x,y):
     n=min(len(x),len(y))
@@ -316,9 +357,13 @@ if [ -n "$D_SW" ] && [ "$D_SW" != "None" ] && [ "$D_SW" -gt 0 ] 2>/dev/null; the
 else
   D_CHUNK="${LMCACHE_CHUNK_SIZE:-}"
   [ -z "$D_CHUNK" ] && D_CHUNK="$(grep -h 'LMCACHE_CHUNK_SIZE=' "$ROOT/live"/*.env "$ROOT/configs"/*/*.env 2>/dev/null | head -1 | sed 's/.*=//' | tr -d '[:space:]')"
-  [ -z "$D_CHUNK" ] && D_CHUNK=384
+  # r32.1 R6: NO hardcoded fallback -- if the chunk size cannot be obtained
+  # from configuration, the token target is unknown and D is INCONCLUSIVE.
+  if [ -z "$D_CHUNK" ] || ! [ "$D_CHUNK" -gt 0 ] 2>/dev/null; then
+    INCONC "cannot determine the LMCache chunk size (LMCACHE_CHUNK_SIZE not set, not found in live/*.env or configs/*/*.env, no sliding_window in the model config) -- the D token target is unknown, recovery cannot be validated"
+  fi
   D_TOKEN_TARGET=$(( D_CHUNK * 4 ))
-  D_TARGET_SRC="4 x lmc_chunk"
+  D_TARGET_SRC="4 x lmc_chunk ($D_CHUNK)"
 fi
 echo "  D token target: $D_TOKEN_TARGET tokens ($D_TARGET_SRC, from prompt_tokens)"
 # ---------------------------------------------------------------------------
@@ -357,15 +402,14 @@ C_NWORDS=$(( (D_TOKEN_TARGET * 2 * PER_TOK) / 6 + 240 ))
 for k in $(seq 1 "$C_ROUNDS"); do
   mk_prefix "$k" "$C_NWORDS" "$OUTDIR/c-prefix-$k.txt"
 done
-# WARMUP-C: the quiet probe uses prefix 1 (the aborts of round 1 reply to the
-# SAME prefix), then every prefix once
-chat "$OUTDIR/c-before.json" "$OUTDIR/c-prefix-1.txt" warmup 16 >/dev/null \
-  || INCONC "warm-up request (prefix 1) failed"
-C_BEFORE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["text"])' "$OUTDIR/c-before.json")"
+# WARMUP-C: each prefix is warmed exactly ONCE (r32.1 R2: prefix 1 used to be
+# sent twice -- once as the quiet probe and once as round 1). The before-answer
+# for the post-C comparison comes from the SAME single round-1 warm-up reply.
 for k in $(seq 1 "$C_ROUNDS"); do
   chat "$OUTDIR/w-c-$k.json" "$OUTDIR/c-prefix-$k.txt" warmup 64 >/dev/null \
     || INCONC "warm-up request (prefix $k) failed"
 done
+C_BEFORE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["text"])' "$OUTDIR/w-c-1.json")"
 # WARMUP-D: D prompts T0+T1 (unique marker at the START -> T0 is cold here)
 D_PTS=""
 for i in 1 2 3; do
@@ -378,14 +422,18 @@ for i in 1 2 3; do
   D_PTS="$D_PTS $_pt"
 done
 echo "  warm-up done; waiting for L2 store events (up to 120s)..."
+# r32.1 R2: the FULL expected number of successful stores must be seen, not
+# merely "> 0" -- every warm-up request (1 probe + C_ROUNDS prefixes + 3 D T0
+# + 3 D T1) is unique and must land one successful L2 store.
+WARMUP_EXPECT=$(( C_ROUNDS + 7 ))
 STORES=0
 for w in $(seq 1 24); do
   STORES="$(l2_stores_ok "$W_MARK")"
-  [ "${STORES:-0}" -ge $(( C_ROUNDS + 3 )) ] && break
+  [ "${STORES:-0}" -ge "$WARMUP_EXPECT" ] && break
   sleep 5
 done
 echo "  L2 store success events after warm-up: $STORES"
-[ "${STORES:-0}" -gt 0 ] || INCONC "no L2 store events after the warm-up (nothing reached NVMe) -- cannot prove disk retrieve later"
+[ "${STORES:-0}" -ge "$WARMUP_EXPECT" ] || INCONC "only $STORES of $WARMUP_EXPECT expected L2 store events after the warm-up -- the warmup is INCOMPLETE, disk retrieve cannot be proven later"
 # ---- ONE full restart (R1) -- after it the prefixes live on DISK only -----
 echo "== FULL RESTART (engine first, then cache -- round 46 order) =="
 if [ "${PR_CHECKS_SKIP_RESTART:-0}" = "1" ]; then
@@ -415,12 +463,14 @@ eng_since_now
 C_MARK="$M0"
 AF="$OUTDIR/c-aborts.txt"
 : > "$AF"
+C_LAUNCHED=0            # r32.1 R7: REAL abort launches, counted per spawn
 for round in $(seq 1 "$C_ROUNDS"); do
   pids=()
   for k in 1 2 3 4; do
     ms=$(( $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % (C_ABORT_MAX_MS + 1) ))
     abort_stream "$OUTDIR/c-prefix-$round.txt" "$ms" "$AF" >/dev/null 2>/dev/null &
     pids+=("$!")
+    C_LAUNCHED=$((C_LAUNCHED + 1))   # r32.1 R7: count REAL launches, not just the plan
   done
   wait "${pids[@]}" 2>/dev/null || true
   if [ $(( round % 5 )) -eq 0 ] || [ "$round" = 1 ]; then
@@ -555,18 +605,20 @@ echo "  D result: $D_VERDICT (L2 disk reads: $D_READS)"
 # ---------------------------------------------------------------------------
 WHEEL="$(docker exec "$CONTAINER" python3 -c 'import importlib.metadata as m; print(m.version("lmcache"))' 2>/dev/null | head -1 || true)"
 [ -n "$WHEEL" ] || WHEEL="unknown"
-GPU_INFO="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | sort | uniq -c | awk '{printf "%sx %s; ",$1,$2}' | sed 's/; $//' || true)"
+GPU_INFO="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | sort | uniq -c | awk '{cnt=$1; $1=""; sub(/^ /,""); printf "%sx %s; ", cnt, $0}' | sed 's/; $//' || true)"
 [ -n "$GPU_INFO" ] || GPU_INFO="unknown"
 SHA_4136="$(grep -A 10 '## PR #4136' "$ROOT/vendor/patches/lmcache/SOURCES.md" 2>/dev/null | grep 'PR head' | grep -oE '\b[0-9a-f]{40}\b' | head -1 || true)"
 SHA_5972="$(grep -A 10 '## PR #5972' "$ROOT/vendor/patches/lmcache/SOURCES.md" 2>/dev/null | grep 'PR head' | grep -oE '\b[0-9a-f]{40}\b' | head -1 || true)"
 [ -n "$SHA_4136" ] || SHA_4136="unknown"
 [ -n "$SHA_5972" ] || SHA_5972="unknown"
 {
-  echo "# PR #4136 / #5972 hardware checks"
-  echo
+  # r32.1 R7: TEST MODE is the ACTUAL first line of the report (before the
+  # title), so nobody can mistake a test run for a hardware proof at a glance.
   if [ -n "$TEST_MODE_VARS" ]; then
     echo "TEST MODE:$(for _v in $TEST_MODE_VARS; do printf ' %s' "$_v"; done) set -- this run is NOT a hardware proof"
   fi
+  echo "# PR #4136 / #5972 hardware checks"
+  echo
   echo "- date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "- wheel (lmcache version in $CONTAINER): $WHEEL"
   echo "- hardware: $GPU_INFO"
@@ -575,7 +627,7 @@ SHA_5972="$(grep -A 10 '## PR #5972' "$ROOT/vendor/patches/lmcache/SOURCES.md" 2
   echo "- image label org.kvp.lmc-patch-4136: $(docker inspect -f '{{index .Config.Labels "org.kvp.lmc-patch-4136"}}' "$CONTAINER" 2>/dev/null || echo '<absent>')"
   echo "- image label org.kvp.lmc-patch-5972: $(docker inspect -f '{{index .Config.Labels "org.kvp.lmc-patch-5972"}}' "$CONTAINER" 2>/dev/null || echo '<absent>')"
   echo "- engine container: $CONTAINER"
-  echo "- requests: warm-up $((C_ROUNDS + 1 + 2 * C_ROUNDS)) + D T0/T1 x3 + D T2 x3 + C $((C_ROUNDS * 4)) abort streams + C before/after"
+  echo "- requests: warm-up $((1 + C_ROUNDS)) + D T0/T1 x6 + D T2 x3 + C abort streams expected $((C_ROUNDS * 4)) / launched $C_LAUNCHED / metric lines $C_LINES + C before/after"
   echo
   echo "## Scenario C (#4136, abort during a disk-backed retrieve)"
   echo

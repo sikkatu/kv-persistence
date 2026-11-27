@@ -30,6 +30,13 @@ class _Stub(BaseHTTPRequestHandler):
     _lock = threading.Lock()
     drift = None            # int|None: the 3rd sighting of a prompt diverges here
     delay_first_byte = 0.0  # seconds before ANY response byte
+    stores_limit = 0        # r32.1 R2: >0 -> stop logging L2 store events after
+                            # this many (simulates an INCOMPLETE warmup)
+    pause_on_first = 0.0    # r32.1 R1/R3: sleep this long BEFORE the first
+                            # response ever (holds first-byte for hung clients)
+    stream_chunk_delay = 0.0  # r32.1 R3: for phase "stream", send the body in
+                              # parts with this delay between them
+    stream_body_tokens = 0    # r32.1 R3: token count for phase "stream" bodies
     llprobs = True          # serve logprobs tokens (else words, threshold 24)
     prompt_tokens = 0       # 0 -> derived from the prompt length
     stuck = "0 0"           # vllm:num_requests_{running,waiting}
@@ -41,6 +48,7 @@ class _Stub(BaseHTTPRequestHandler):
     fail_store_phase = ""  # when set: the failure lands on the FIRST such
                            # request phase (e.g. "d2" = inside the D window)
     post_n = 0
+    _first_seen = False   # r32.1: tracks the very first request (pause_on_first)
     fail_dead_after = 0  # >0: create the 'dead' marker after N post-restart
                          # requests (the engine dies BETWEEN aborts and the C checks)
     turn_changed = False  # on the c-after phase return a DIFFERENT answer (S6)
@@ -73,6 +81,8 @@ class _Stub(BaseHTTPRequestHandler):
         delay = self.delay_first_byte
         toks = []
         with _Stub._lock:
+            first = not _Stub._first_seen
+            _Stub._first_seen = True
             _Stub.n += 1
             key = prompt[:32]
             _Stub.seen[key] = _Stub.seen.get(key, 0) + 1
@@ -89,7 +99,8 @@ class _Stub(BaseHTTPRequestHandler):
             # server-log evidence: store events everywhere, read events only after
             # the restart (post_restart marker made by the docker start stub)
             with open(_Stub.root / "lmcache-server.log", "a") as fh:
-                fh.write(f"[stub] L2 store completed: adapter 0, 1 succeeded, 0 failed #{_Stub.n}\n")
+                if not self.stores_limit or _Stub.n <= self.stores_limit:
+                    fh.write(f"[stub] L2 store completed: adapter 0, 1 succeeded, 0 failed #{_Stub.n}\n")
                 if (_Stub.root / "post_restart").exists() and self.read_events:
                     fh.write(f"[stub] L2 prefetch load completed: request {_Stub.n}, 1 loaded, 0 failed\n")
                 if (_Stub.root / "post_restart").exists() and self.fail_store_once and not _Stub.fail_done:
@@ -111,6 +122,30 @@ class _Stub(BaseHTTPRequestHandler):
                 (_Stub.root / "dead").write_text("1")
         if delay > 0:
             time.sleep(delay)
+        if first and self.pause_on_first > 0:
+            time.sleep(self.pause_on_first)
+        if phase == "stream":
+            # r32.1 R3: a real streaming body, sent in CHUNKS with a pause
+            # between parts -- used by the direct abort_stream tests to prove
+            # the client close is deadline-driven and mid-headers/mid-body.
+            body_resp = json.dumps({
+                "choices": [{"message": {"content": " ".join(words)},
+                             "logprobs": {"content": [{"token": t} for t in toks]}
+                             if (self.llprobs and toks) else None}],
+                "usage": {"prompt_tokens": self.prompt_tokens or len(prompt.split()),
+                          "completion_tokens": len(toks) or len(words),
+                          "prompt_tokens_details": {"cached_tokens": 0}},
+            }).encode()
+            count = max(3, int(self.stream_body_tokens) or 3)
+            part1 = body_resp[: max(1, len(body_resp) // count)]
+            part2 = body_resp[len(part1):]
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body_resp))); self.end_headers()
+            self.wfile.write(part1); self.wfile.flush()
+            if self.stream_chunk_delay > 0:
+                time.sleep(self.stream_chunk_delay)
+            self.wfile.write(part2); self.wfile.flush()
+            return
         self._send({
             "choices": [{"message": {"content": " ".join(words)},
                          "logprobs": {"content": [{"token": t} for t in toks]}
@@ -122,8 +157,10 @@ class _Stub(BaseHTTPRequestHandler):
 
 DOCKER_STUB = """#!/usr/bin/env bash
 P="${STUB_ROOT:-/tmp/pcs}"
+STATE="$P/engine_state"
+[ -f "$STATE" ] || echo running > "$STATE"
 case "$*" in
-  *inspect*State.Status*) echo running ;;
+  *inspect*State.Status*) cat "$STATE" ;;
   *inspect*State.Running*) [ -f "$P/dead" ] && echo false || echo true ;;
   *inspect*State.Pid*) cat "$P/serverpid" 2>/dev/null || echo 1 ;;
   *inspect*Config.User*) echo "1000:1000" ;;
@@ -131,8 +168,10 @@ case "$*" in
   *logs*) [ -f "$P/engine.log" ] && cat "$P/engine.log" ;;
   stop\\ *)
       [ -f "$P/stop_fails" ] && { echo "stub: docker stop daemon failure" >&2; exit 1; }
+      echo exited > "$STATE"
       echo ENGINE_STOP >> "$P/order.log" ;;
   start\\ *)
+      echo running > "$STATE"
       echo ENGINE_START >> "$P/order.log"; touch "$P/post_restart"
       [ -f "$P/on-start.sh" ] && bash "$P/on-start.sh" ;;
   *exec*) echo "0.5.8" ;;
@@ -148,6 +187,9 @@ def _start_api(tmp_path: Path):
     free port. Returns (server, port)."""
     _Stub.seen = {}; _Stub.n = 0
     _Stub.drift = None; _Stub.delay_first_byte = 0.0
+    _Stub.stores_limit = 0; _Stub.pause_on_first = 0.0
+    _Stub.stream_chunk_delay = 0.0; _Stub.stream_body_tokens = 0
+    _Stub._first_seen = False
     _Stub.llprobs = True; _Stub.prompt_tokens = 0
     _Stub.stuck = "0 0"; _Stub.read_events = True
     _Stub.fail_store_once = False; _Stub.fail_done = False

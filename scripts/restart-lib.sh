@@ -34,10 +34,20 @@ kvp_restart_stop_engine(){ # <container> -> 0 ok, 5 inconclusive
     exited|created) _kvp_rnote "[info] engine container already stopped ($state) -- skipping stop" ;;
     *)
       for try in $(seq 1 "$T_RETRIES"); do
-        if stop_out="$(docker stop -t 120 "$c" 2>&1)"; then stopped=1; break; fi
-        _kvp_rnote "docker stop attempt $try/$T_RETRIES output: $stop_out" >&2
-        cur="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
-        case "$cur" in exited|dead|missing) stopped=1; break ;; esac
+        stop_out=""; stop_rc=0
+        stop_out="$(docker stop -t 120 "$c" 2>&1)" || stop_rc=$?
+        if [ "$stop_rc" -eq 0 ]; then
+          # r32.1 R1: a zero exit of `docker stop` is NOT proof of a stop -- the
+          # container must reach exited/dead (or be gone) before we believe it.
+          cur="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
+          case "$cur" in exited|dead|missing) stopped=1; break ;;
+            *) _kvp_rnote "docker stop returned 0 but the container state is '$cur' -- still waiting";;
+          esac
+        else
+          _kvp_rnote "docker stop attempt $try/$T_RETRIES output: $stop_out" >&2
+          cur="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
+          case "$cur" in exited|dead|missing) stopped=1; break ;; esac
+        fi
         sleep "$T_INT"
       done
       if [ "$stopped" = "0" ]; then
@@ -59,16 +69,17 @@ kvp_restart_stop_engine(){ # <container> -> 0 ok, 5 inconclusive
 
 # (2)+(3) cache service restart; a refusal prints the last 20 output lines
 kvp_restart_cache(){ # <scripts-dir> -> 0 ok, 5 inconclusive
-  local sd="$1" out rc
-  if ! out="$(bash "$sd/stop-cache.sh" 2>&1)"; then
-    rc=$?
+  local sd="$1" out rc=0
+  out="$(bash "$sd/stop-cache.sh" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
     _kvp_rtail "stop-cache.sh" <(printf '%s\n' "$out")
     echo "INCONCLUSIVE: stop-cache.sh failed (rc=$rc) -- see its output above." >&2
     return 5
   fi
   _kvp_rlog CACHE_STOPPED
-  if ! out="$(bash "$sd/start-cache.sh" 2>&1)"; then
-    rc=$?
+  rc=0
+  out="$(bash "$sd/start-cache.sh" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
     _kvp_rtail "start-cache.sh" <(printf '%s\n' "$out")
     echo "INCONCLUSIVE: start-cache.sh failed (rc=$rc) -- see its output above." >&2
     return 5

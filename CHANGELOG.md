@@ -13,7 +13,46 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
-### Round 32 (R1-R10: rewrite of test-pr-checks.sh -- honest verdicts, shared restart, key security)
+### Round 32.1 (follow-up review: the R3 client is a REAL deadline abort now; R1/R2/R6/R7/R8 hardening)
+**Follow-up review (Nov 25, 2026):** r32 accepted R1-R10's shape but its tests
+were still not proofs. This round keeps the working implementation and fixes
+only what the review listed.
+* **R3 (the core fix)**: `abort_stream` now runs a raw deadline-driven
+  client (no `http.client`): the request is sent over a plain socket and the
+  client SELECTs until the abort deadline and closes exactly then, even if
+  the server has not sent any response headers yet. The first byte is
+  detected from the full received buffer (nothing buffered is bypassed),
+  and `before_first_byte` is `1` only when the response never started.
+  New tests prove the close LANDS at the deadline (thumbnails: before-headers
+  at 300 ms, mid-body at 400 ms, silent server at 250 ms) -- the old version
+  blocked in `getresponse()` and would close ~3 s late.
+* **R1**: fixed `rc=$?` capture after `if ! cmd` (it always reported 0);
+  a successful `docker stop` is now verified by inspecting for `exited`/
+  `dead`/gone (a running container after a `stop`-rc-0 is INCONCLUSIVE,
+  not a pass); a SKIPPED or MISSING IPC pre-flight is named in the very
+  first TEST MODE line (a bypassed CUDA-IPC boundary is not a hardware proof).
+* **R2**: the warm-up requires the FULL expected L2 store count
+  (`C_ROUNDS + 7` for probe + prefixes + D prompts), not just `> 0`, and
+  each prefix is warmed exactly once (the old quiet probe warmed prefix 1
+  a second time).
+* **R6**: the hardcoded `D_CHUNK=384` fallback is removed (no chunk size ->
+  INCONCLUSIVE, never a guessed target); token comparison only when ALL
+  T0/T1/T2 carry logprobs, words for all three otherwise.
+* **R7**: TEST MODE is literally the first line of the report (even before
+  the title, computed before any key/docker check); real abort LAUNCHES are
+  counted separately from the expected plan.
+* **R8**: the GPU name line keeps full multi-word names (`2x NVIDIA RTX
+  PRO 6000`, not `2x NVIDIA RTX`), report names are collision-safe (same-UTC-
+  second runs get a suffix instead of clobbering).
+* Tests: 16 new deterministic regression tests
+  (`tests/unit/test_r321_regression.py`), the old suite re-verified green.
+  Machine test counts vary per host (the verified runs are `37 passed`
+  for the combined r32+r32.1 stub suites).
+* Mutants (r32.1): the getresponse-style blocking client (R3), `rc=$?`
+  (R1), no-exited (R1), IPC bypass (R1), warmup `> 0` (R2), double prefix-1
+  (R2), chunk fallback (R6), partial-logprobs tokens (R6), TEST MODE inside
+  the report (R7), launch counter off (R7), truncated GPU names (R8), and
+  collision-unsafe report name (R8) -- all red on their matching tests.
 **Review (Nov 24, 2026, kv 9717cd1):** the r31 PR-checks script was rejected
 (R1-R10 defects). This round rewrites it against the same findings.
 
