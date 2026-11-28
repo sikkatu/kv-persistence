@@ -13,7 +13,48 @@ Runtime: pinned vLLM image (`@sha256:167ccd86…`) + **custom LMCache build**
 downstream patches for upstream PRs #4136 and #5972, see
 `docs/lmcache-build.md`); the old raw **LMCache 0.5.6** pin is replaced by this
 custom build. `requirements-lmcache.txt` now points at the derived image.
-### Round 32.2 (final follow-up: the abort deadline is enforced in EVERY phase; atomic report names)
+### Round 33 (D prompt calibration, "first byte" = first BODY byte, warmup gate, chunk-size grep, empty-report trap, local stalled connect)
+**Review (Nov 27, 2026, kv 4ef6a8d / recipes 273506d):** two blockers from r32
+(D-prompt undersized; early = before headers, not before the first body byte)
+plus R3-R6 housekeeping items. Only `test-pr-checks.sh` and tests touched.
+* **R1 (blocker -- D prompts calibrated)**: D prompts now use the SAME
+  `PER_TOK` calibration as the C prefixes. Each D prompt is verified against
+  the real `usage.prompt_tokens`; if the first attempt is below the target
+  (>= 1.1 x), the prompt is rebuilt ONCE, a second miss is INCONCLUSIVE with
+  both numbers. Clean-clone runs no longer end D early. The stale "2x" comment
+  for the C sizing is corrected.
+* **R2 (blocker -- before the first BODY byte)**: `early = 1` only when ZERO
+  body bytes arrived before the close (not when the response headers are
+  still missing -- Starlette sends `http.response.start` before the first SSE
+  chunk, so headers alone say nothing about the retrieve window). The ABRT
+  line carries `headers_seen=0|1`; the C report shows both shares and any
+  late abort (r32.2) still waives its early mark.
+* **R3 (warmup gate)**: the expected-store count is now
+  `C_ROUNDS + 4` (probe + C prefixes + 3 D T0); T1 re-sends T0's prefix and
+  may NOT produce a new store event in real LMCache -- T1 no longer counted.
+  (Fragment of a real `lmcache-server.log` showing whether T1 emits a new
+  `L2 store completed` line is left to the hardware run; if it does, this
+  gate loosens safely.)
+* **R4 (chunk-size grep)**: added `|| true` inside the `grep` substitution so
+  a `-Eeuo pipefail` run without any `*.env` falls through to the ordinary
+  INCONCLUSIVE text (exit code 5) instead of dying bare with code 2.
+* **R5 (empty reserved report)**: `trap ... EXIT` removes a still-empty
+  reserved `pr-checks-report-*.md` when the script exits early (the r32.2
+  atomic reservation created the placeholder before the run reached the
+  report block).
+* **R6 (local stalled connect)**: the delayed-connect test no longer dials
+  `10.255.255.1` (that ENETUNREACH-fails on route-less hosts); it saturates a
+  local listener's accept queue instead and SKIPs with a reason when the
+  kernel cannot stall a local connect -- identical behaviour with/without a
+  default route.
+* Trivia: `-- -> ---` in the TEST MODE banner, `stop_rc` declared `local`, the
+  zero-store warmup text now mentions `LMCACHE_LOG_LEVEL` DEBUG.
+* Tests: new `tests/unit/test_r33_regression.py` (7 tests) covering R1-R5;
+  r32.2's R3 tests tightened (550 ms cap on a 300 ms window) and the R3
+  tolerance note documented. Mutants M1-M5 (no PER_TOK in D, early=by
+  headers, gate counts T1, no `|| true`, no EXIT trap) all RED.
+* Hardware run NOT yet performed -- "verified on hardware" is intentionally
+  absent from this entry until the run lands.
 **Final follow-up review (Nov 27, 2026):** r32.1's fixes were accepted; two
 narrow issues closed here without touching R1/R2/R6/R7.
 * **R3 (deadline enforcement)**: `abort_stream` now uses `time.monotonic()`

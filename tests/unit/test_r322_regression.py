@@ -12,6 +12,7 @@ reservations in the same UTC second get distinct files.
 from __future__ import annotations
 import os
 import re
+import select
 import socket
 import subprocess
 import threading
@@ -96,17 +97,61 @@ def _api(delay: float = 0.0):
 # ===========================================================================
 # R3: the deadline is enforced in EVERY phase (connect, send, read)
 # ===========================================================================
+def _fill_accept_queue(listen_sock):
+    """Keep connecting (and holding) sockets until the accept queue is
+    saturated so a NEW connect stalls -- fully local, no routing involved
+    (this is what r33 R6 wants instead of 10.255.255.1)."""
+    held = []
+    for _ in range(64):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        try:
+            s.connect(listen_sock.getsockname())
+        except Exception:
+            s.close()
+            break
+        held.append(s)
+    return held
+
+
 def test_r3_connect_delayed_closes_at_the_deadline(tmp_path):
-    """> R3: connect is delayed (an unc routable "black hole" address -- no
-    RST, just silence -- so the TCP handshake itself stalls): with a 300 ms
-    abort window the close must LAND around the deadline (<=700 ms), the
-    report must say late=0 and before_first_byte=1. The old code blocked
-    in `create_connection(timeout=30)` and would take forever."""
-    srv, port = _api(0.0)
-    # an untouteable address: `connect` hangs (no listener to RST/refuse)
-    t0 = time.monotonic()
-    d = _abort_once(tmp_path, "10.255.255.1", 81, 300)
-    elapsed = (time.monotonic() - t0) * 1000.0
+    """> R3/R6: a STALLED connect (local listener with a saturated accept queue
+    -- no route lookup failure or network dependency): with a 300 ms abort
+    window the close must LAND at the deadline, `late=0`, `before_first_byte=1`.
+    The old code blocked in `create_connection(timeout=30)`. If the local
+    kernel cannot stall a connect this exact way, the test SKIPS with the
+    reason (never red/green by network luck -- r33 R6)."""
+    srv_listen = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv_listen.bind(("127.0.0.1", 0))
+    srv_listen.listen(1)              # tiny backlog -> saturate it quickly
+    host, port = srv_listen.getsockname()
+    held = _fill_accept_queue(srv_listen)
+    # confirm the queue is actually saturated: a probe must NOT complete
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setblocking(False)
+    try:
+        probe.connect((host, port))
+    except BlockingIOError:
+        pass
+    _, w, _ = select.select([], [probe], [], 0.2)
+    probe.close()
+    if w and not held:
+        srv_listen.close()
+        import pytest
+        pytest.skip("cannot saturate the accept queue on this kernel (connect "
+                    "does not stall) -- delayed-connect test skipped, not faked")
+    try:
+        t0 = time.monotonic()
+        d = _abort_once(tmp_path, host, port, 300)
+        elapsed = (time.monotonic() - t0) * 1000.0
+    finally:
+        for s in held:
+            try:
+                s.close()
+            except Exception:
+                pass
+        srv_listen.close()
     assert d.get("late") == "0", f"close must be on-time (not late): {d}"
     assert d.get("before_first_byte") == "1", d
     ms = float(d["ms"])

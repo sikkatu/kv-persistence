@@ -32,6 +32,9 @@ class _Stub(BaseHTTPRequestHandler):
     delay_first_byte = 0.0  # seconds before ANY response byte
     stores_limit = 0        # r32.1 R2: >0 -> stop logging L2 store events after
                             # this many (simulates an INCOMPLETE warmup)
+    no_store_phases = ""    # r33 R3: comma-separated phases that produce NO
+                            # L2 store event (T1 resends T0's prompt and may
+                            # not store again in real LMCache)
     pause_on_first = 0.0    # r32.1 R1/R3: sleep this long BEFORE the first
                             # response ever (holds first-byte for hung clients)
     stream_chunk_delay = 0.0  # r32.1 R3: for phase "stream", send the body in
@@ -39,6 +42,8 @@ class _Stub(BaseHTTPRequestHandler):
     stream_body_tokens = 0    # r32.1 R3: token count for phase "stream" bodies
     llprobs = True          # serve logprobs tokens (else words, threshold 24)
     prompt_tokens = 0       # 0 -> derived from the prompt length
+    len_token_divisor = 0.0 # r33 R1: >0 -> prompt_tokens = ceil(len(prompt)/divisor)
+                            # (modeles a real tokenizer; 2.7 is a common chars-per-token)
     stuck = "0 0"           # vllm:num_requests_{running,waiting}
     read_events = True      # post-restart L2 read events in the server log
     fail_store_once = False  # append ONE store-failure line AFTER the restart
@@ -99,7 +104,10 @@ class _Stub(BaseHTTPRequestHandler):
             # server-log evidence: store events everywhere, read events only after
             # the restart (post_restart marker made by the docker start stub)
             with open(_Stub.root / "lmcache-server.log", "a") as fh:
-                if not self.stores_limit or _Stub.n <= self.stores_limit:
+                _skip = phase and phase in (self.no_store_phases or "")
+                if _skip:
+                    pass                    # r33 R3: this phase stores NOTHING
+                elif not self.stores_limit or _Stub.n <= self.stores_limit:
                     fh.write(f"[stub] L2 store completed: adapter 0, 1 succeeded, 0 failed #{_Stub.n}\n")
                 if (_Stub.root / "post_restart").exists() and self.read_events:
                     fh.write(f"[stub] L2 prefetch load completed: request {_Stub.n}, 1 loaded, 0 failed\n")
@@ -132,7 +140,7 @@ class _Stub(BaseHTTPRequestHandler):
                 "choices": [{"message": {"content": " ".join(words)},
                              "logprobs": {"content": [{"token": t} for t in toks]}
                              if (self.llprobs and toks) else None}],
-                "usage": {"prompt_tokens": self.prompt_tokens or len(prompt.split()),
+                "usage": {"prompt_tokens": (-(-len(prompt) // int(self.len_token_divisor)) if self.len_token_divisor else (self.prompt_tokens or len(prompt.split()))),
                           "completion_tokens": len(toks) or len(words),
                           "prompt_tokens_details": {"cached_tokens": 0}},
             }).encode()
@@ -150,7 +158,7 @@ class _Stub(BaseHTTPRequestHandler):
             "choices": [{"message": {"content": " ".join(words)},
                          "logprobs": {"content": [{"token": t} for t in toks]}
                          if (self.llprobs and toks) else None}],
-            "usage": {"prompt_tokens": self.prompt_tokens or len(prompt.split()),
+            "usage": {"prompt_tokens": (-(-len(prompt) // int(self.len_token_divisor)) if self.len_token_divisor else (self.prompt_tokens or len(prompt.split()))),
                       "completion_tokens": len(toks) or len(words),
                       "prompt_tokens_details": {"cached_tokens": 0}},
         })
@@ -188,6 +196,8 @@ def _start_api(tmp_path: Path):
     _Stub.seen = {}; _Stub.n = 0
     _Stub.drift = None; _Stub.delay_first_byte = 0.0
     _Stub.stores_limit = 0; _Stub.pause_on_first = 0.0
+    _Stub.no_store_phases = ""
+    _Stub.len_token_divisor = 0.0
     _Stub.stream_chunk_delay = 0.0; _Stub.stream_body_tokens = 0
     _Stub._first_seen = False
     _Stub.llprobs = True; _Stub.prompt_tokens = 0
@@ -356,7 +366,7 @@ def test_r3_late_first_byte_all_aborts_early(tmp_path):
     finally:
         srv.shutdown()
     out = p.stdout + p.stderr
-    m = re.search(r"abort lines: (\d+)/(\d+), early \(before first byte\): (\d+)", out)
+    m = re.search(r"abort lines: (\d+)/(\d+), early \((?:before first byte|no body byte yet)\): (\d+)", out)
     assert m, out[-1500:]
     lines, total, early = int(m.group(1)), int(m.group(2)), int(m.group(3))
     assert lines == total, f"lost aborts: {lines}/{total}"

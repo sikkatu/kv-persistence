@@ -24,7 +24,7 @@ _kvp_rtail(){ echo "    ---- last 20 lines of $1 ----" >&2; tail -n 20 "$2" >&2;
 # Timing knobs (machine-free tests only; marked as TEST MODE by the caller):
 #   KVP_STOP_RETRIES=3, KVP_STOP_WAIT_LOOPS=30, KVP_STOP_WAIT_INTERVAL=10
 kvp_restart_stop_engine(){ # <container> -> 0 ok, 5 inconclusive
-  local c="$1" state stopped=0 stop_out cur try w
+  local c="$1" state stopped=0 stop_out stop_rc cur try w
   local T_RETRIES="${KVP_STOP_RETRIES:-3}" T_LOOPS="${KVP_STOP_WAIT_LOOPS:-30}"
   local T_INT="${KVP_STOP_WAIT_INTERVAL:-10}"
   state="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"

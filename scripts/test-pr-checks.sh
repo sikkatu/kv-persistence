@@ -50,7 +50,7 @@ if [ ! -x "${KVP_SCRIPTS_DIR:-$HERE}/ipc-test.sh" ]; then
   TEST_MODE_VARS="$TEST_MODE_VARS IPC_PRE_FLIGHT_MISSING(no ipc-test.sh)"
 fi
 if [ -n "$TEST_MODE_VARS" ]; then
-  echo "TEST MODE:$(for _v in $TEST_MODE_VARS; do printf ' %s' "$_v"; done) set -- this run is NOT a hardware proof"
+  echo "TEST MODE:$(for _v in $TEST_MODE_VARS; do printf ' %s' "$_v"; done) set — this run is NOT a hardware proof"
 fi
 # ---- API key: env wins, then ~/.., then live mirror; key in env file only --
 KEY="${API_KEY:-}"
@@ -115,6 +115,14 @@ while :; do
 done
 REPORT_LATEST="$LIVE_DIR/pr-checks-report.md"
 REPORT="$REPORT_TS"     # everything writes here; at the end cp -> latest
+# r33 R5: an early exit (INCONC before the report block) must NOT leave the
+# empty reserved file behind -- clean it up on EXIT when it is still 0 bytes.
+_kvp_clean_report(){
+  if [ -f "$REPORT_TS" ] && [ ! -s "$REPORT_TS" ]; then
+    rm -f "$REPORT_TS"
+  fi
+}
+trap _kvp_clean_report EXIT
 # ---- evidence marks -------------------------------------------------------
 LOG="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log"
 if [ -f "$LOG" ]; then M0="$(wc -c < "$LOG")"; else M0=0; fi
@@ -270,7 +278,12 @@ try:
     sock.close()
 except Exception:
     pass
-early=1 if hdr_end<0 else 0
+headers_seen=1 if hdr_end>=0 else 0
+# r33 R2: "before the first byte" means the first BODY byte (the first SSE /
+# token chunk) -- Starlette sends `http.response.start` headers before the
+# first chunk, so headers alone prove nothing about the retrieve. An abort is
+# early ONLY when zero body bytes arrived before the close.
+early=1 if got<=0 else 0
 ms_close=(closed-t0)*1000.0
 over=ms_close-win*1000.0
 # r32.2 R3: an abort that closed LATER than its window plus tolerance is
@@ -280,9 +293,9 @@ late=1 if over > tol*1000.0 else 0
 if late:
     early=0
 with open(os.environ["KVP_AF"],"a") as fh:
-    fh.write("ABRT before_first_byte=%d ms=%.0f body_bytes=%d late=%d\n"
-             % (early,ms_close,got,late))
-print("ABRT early=%d late=%d" % (early,late))
+    fh.write("ABRT before_first_byte=%d ms=%.0f body_bytes=%d late=%d headers_seen=%d\n"
+             % (early,ms_close,got,late,headers_seen))
+print("ABRT early=%d late=%d headers_seen=%d" % (early,late,headers_seen))
 PYEOF
 }
 # ---------------------------------------------------------------------------
@@ -403,7 +416,7 @@ if [ -n "$D_SW" ] && [ "$D_SW" != "None" ] && [ "$D_SW" -gt 0 ] 2>/dev/null; the
   D_TARGET_SRC="2 x sliding_window ($D_SW)"
 else
   D_CHUNK="${LMCACHE_CHUNK_SIZE:-}"
-  [ -z "$D_CHUNK" ] && D_CHUNK="$(grep -h 'LMCACHE_CHUNK_SIZE=' "$ROOT/live"/*.env "$ROOT/configs"/*/*.env 2>/dev/null | head -1 | sed 's/.*=//' | tr -d '[:space:]')"
+  [ -z "$D_CHUNK" ] && D_CHUNK="$(grep -h 'LMCACHE_CHUNK_SIZE=' "$ROOT/live"/*.env "$ROOT/configs"/*/*.env 2>/dev/null | head -1 | sed 's/.*=//' | tr -d '[:space:]' || true)"
   # r32.1 R6: NO hardcoded fallback -- if the chunk size cannot be obtained
   # from configuration, the token target is unknown and D is INCONCLUSIVE.
   if [ -z "$D_CHUNK" ] || ! [ "$D_CHUNK" -gt 0 ] 2>/dev/null; then
@@ -444,7 +457,10 @@ BYTES="$(wc -c < "$PROBE")"
 PER_TOK=$(( BYTES / PT ))
 [ "$PER_TOK" -ge 1 ] || PER_TOK=1
 echo "  calibration: $PT prompt_tokens for $BYTES chars -> ~$PER_TOK chars/token"
-# C prefixes: sized 2x the token target (longer than any window)
+# C prefixes: sized 1x the token target (r33: the old "2x" comment was wrong --
+# the formula gives ~(2*D_TOKEN_TARGET*PER_TOK)/6 words = ~2x chars = ~2x tokens,
+# so this IS roughly 2x; the D prompts below used the same formula WITHOUT the
+# PER_TOK factor and came out ~1x -- that was the r33 R1 blocker).
 C_NWORDS=$(( (D_TOKEN_TARGET * 2 * PER_TOK) / 6 + 240 ))
 for k in $(seq 1 "$C_ROUNDS"); do
   mk_prefix "$k" "$C_NWORDS" "$OUTDIR/c-prefix-$k.txt"
@@ -458,21 +474,47 @@ for k in $(seq 1 "$C_ROUNDS"); do
 done
 C_BEFORE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["text"])' "$OUTDIR/w-c-1.json")"
 # WARMUP-D: D prompts T0+T1 (unique marker at the START -> T0 is cold here)
+# r33 R1: the D prompts are sized with the SAME PER_TOK calibration as the C
+# prefixes (the old formula gave ~570-690 tokens for a 1024 target -- almost
+# every run ended D INCONCLUSIVE). Each prompt is verified against the REAL
+# usage.prompt_tokens and rebuilt ONCE if undersized; a second miss is
+# INCONCLUSIVE with the numbers.
 D_PTS=""
 for i in 1 2 3; do
-  mk_prefix "D$i" $(( D_TOKEN_TARGET * 2 / 6 + 240 )) "$OUTDIR/d-$i-prompt.txt"
-  chat "$OUTDIR/d-$i-t0.json" "$OUTDIR/d-$i-prompt.txt" d0 64 true >/dev/null \
-    || INCONC "D T0 request $i failed"
+  attempt=0
+  while :; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -eq 1 ]; then
+      # target chars = target tokens x (chars/token) x 1.25 headroom, at least
+      # the old 240 words of body filler so the prompt is a real prefix.
+      # (r33 fix: computed ONCE -- a rebuild must SCALE D_NWORDS, not have it
+      # reset by this formula every loop iteration.)
+      D_NWORDS=$(( (D_TOKEN_TARGET * PER_TOK * 5 / 4) / 6 + 240 ))
+    fi
+    mk_prefix "D$i-$attempt" "$D_NWORDS" "$OUTDIR/d-$i-prompt.txt"
+    chat "$OUTDIR/d-$i-t0.json" "$OUTDIR/d-$i-prompt.txt" d0 64 true >/dev/null \
+      || INCONC "D T0 request $i failed"
+    _pt="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("prompt_tokens") or 0)' "$OUTDIR/d-$i-t0.json")"
+    if [ "${_pt:-0}" -ge $(( D_TOKEN_TARGET * 11 / 10 )) ]; then
+      break
+    fi
+    if [ "$attempt" -ge 2 ]; then
+      INCONC "D prompt $i is undersized after a rebuild: got ${_pt} prompt_tokens, target $D_TOKEN_TARGET ($D_TARGET_SRC) -- the prompt is NOT longer than the window (recovery is not exercised), D cannot be validated"
+    fi
+    echo "  D prompt $i undersized (got ${_pt}, target $D_TOKEN_TARGET) -- rebuilding once"
+    _div="${_pt:-0}"; [ "$_div" -gt 0 ] || _div=1
+    D_NWORDS=$(( D_NWORDS * (D_TOKEN_TARGET * 12 / 10) / _div + 240 ))
+  done
   chat "$OUTDIR/d-$i-t1.json" "$OUTDIR/d-$i-prompt.txt" d1 64 true >/dev/null \
     || INCONC "D T1 request $i failed"
-  _pt="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("prompt_tokens") or 0)' "$OUTDIR/d-$i-t0.json")"
   D_PTS="$D_PTS $_pt"
 done
 echo "  warm-up done; waiting for L2 store events (up to 120s)..."
-# r32.1 R2: the FULL expected number of successful stores must be seen, not
-# merely "> 0" -- every warm-up request (1 probe + C_ROUNDS prefixes + 3 D T0
-# + 3 D T1) is unique and must land one successful L2 store.
-WARMUP_EXPECT=$(( C_ROUNDS + 7 ))
+# r32.1 R2/r33 R3: the FULL expected number of successful stores must be seen,
+# not merely "> 0". T1 re-sends the T0 prompt and may NOT produce a new store
+# (prefix already in L2), so only UNIQUE prompts count: 1 probe + C_ROUNDS
+# prefixes + 3 D T0. T1 is intentionally NOT counted.
+WARMUP_EXPECT=$(( C_ROUNDS + 4 ))
 STORES=0
 for w in $(seq 1 24); do
   STORES="$(l2_stores_ok "$W_MARK")"
@@ -480,7 +522,7 @@ for w in $(seq 1 24); do
   sleep 5
 done
 echo "  L2 store success events after warm-up: $STORES"
-[ "${STORES:-0}" -ge "$WARMUP_EXPECT" ] || INCONC "only $STORES of $WARMUP_EXPECT expected L2 store events after the warm-up -- the warmup is INCOMPLETE, disk retrieve cannot be proven later"
+[ "${STORES:-0}" -ge "$WARMUP_EXPECT" ] || INCONC "only $STORES of $WARMUP_EXPECT expected L2 store events after the warm-up -- the warmup is INCOMPLETE, disk retrieve cannot be proven later (note: if LMCACHE_LOG_LEVEL is not DEBUG the store-completion lines may not appear in the log at all -- check that first)"
 # ---- ONE full restart (R1) -- after it the prefixes live on DISK only -----
 echo "== FULL RESTART (engine first, then cache -- round 46 order) =="
 if [ "${PR_CHECKS_SKIP_RESTART:-0}" = "1" ]; then
@@ -529,13 +571,19 @@ C_TOTAL=$(( C_ROUNDS * 4 ))
 C_LINES="$(wc -l < "$AF" 2>/dev/null | tr -d ' ')"
 # r32.2 R3: an abort is EARLY only when it closed BEFORE the first byte AND
 # within its deadline tolerance -- `late=1` lines are stripped from the count.
-C_EARLY="$(grep '^ABRT before_first_byte=1 ' "$AF" 2>/dev/null | grep -c ' late=0$' || true)"
+C_EARLY="$(grep '^ABRT before_first_byte=1 ' "$AF" 2>/dev/null | grep -c ' late=0 ' || true)"
 C_EARLY="${C_EARLY:-0}"
-C_LATE="$(grep -c ' late=1$' "$AF" 2>/dev/null || true)"
+C_LATE="$(grep -c ' late=1 ' "$AF" 2>/dev/null || true)"
 C_LATE="${C_LATE:-0}"
+# r33 R2: both shares are reported -- "early" counts aborts with ZERO body
+# bytes before close; "headers seen" counts aborts whose response headers
+# arrived (headers alone say nothing -- Starlette sends them before the first
+# SSE chunk).
+C_HDRSEEN="$(grep -c ' headers_seen=1$' "$AF" 2>/dev/null || true)"
+C_HDRSEEN="${C_HDRSEEN:-0}"
 C_DIST=0
 [ "$C_TOTAL" -gt 0 ] && C_DIST=$(( C_EARLY * 100 / C_TOTAL ))
-echo "  abort lines: $C_LINES/$C_TOTAL, early (before first byte): $C_EARLY ($C_DIST%), late (missed deadline): $C_LATE"
+echo "  abort lines: $C_LINES/$C_TOTAL, early (no body byte yet): $C_EARLY ($C_DIST%), headers seen: $C_HDRSEEN, late (missed deadline): $C_LATE"
 C_READS="$(l2_reads "$C_MARK")"
 echo "  L2 disk-read events during C: $C_READS"
 echo "  waiting ${C_SETTLE}s for any stuck request to settle..."
@@ -673,7 +721,7 @@ SHA_5972="$(grep -A 10 '## PR #5972' "$ROOT/vendor/patches/lmcache/SOURCES.md" 2
   # r32.1 R7: TEST MODE is the ACTUAL first line of the report (before the
   # title), so nobody can mistake a test run for a hardware proof at a glance.
   if [ -n "$TEST_MODE_VARS" ]; then
-    echo "TEST MODE:$(for _v in $TEST_MODE_VARS; do printf ' %s' "$_v"; done) set -- this run is NOT a hardware proof"
+    echo "TEST MODE:$(for _v in $TEST_MODE_VARS; do printf ' %s' "$_v"; done) set — this run is NOT a hardware proof"
   fi
   echo "# PR #4136 / #5972 hardware checks"
   echo

@@ -12,7 +12,38 @@ kv-persistence 的所有重要变更，最新的在前。此处仅保留最近 3
 针对上游 PR #4136 与 #5972 的下游补丁，见 `docs/lmcache-build.zh.md`）；
 原先固定的 **LMCache 0.5.6** 已被此自定义构建取代。
 `requirements-lmcache.txt` 现在指向派生镜像。
-### 第 32.2 轮（最终追加评审：中止截止时间在所有阶段强制执行；报告名原子化）
+### 第 33 轮（D 提示词校准、「首字节」=正文首字节、预热门、chunk-size grep、空报告 trap、本地挂起连接）
+**评审（2026 年 11 月 27 日，kv 4ef6a8d / recipes 273506d）：** r32 遗留
+两个阻塞项（D 提示词不足额；early = 到响应头而非到正文首字节）加 R3–R6
+事务性问题。仅改动 `test-pr-checks.sh` 与测试。
+* **R1（阻塞项——D 提示词校准）：** D 提示词改用与 C 前缀相同的 `PER_TOK`
+  校准；每次按真实 `usage.prompt_tokens` 验收，首次低于目标（≥1.1×）则
+  重建一次，第二次仍未达标 → INCONCLUSIVE 并给出两个数字。干净克隆运行
+  不再提前结束 D。更正 C 尺寸处过时的「2x」注释。
+* **R2（阻塞项——到正文首字节为止）：** `early=1` 仅当关闭前正文零字节
+  （Starlette 在首个 SSE 块前发送 `http.response.start`，单独的响应
+  头对 retrieve 窗口毫无意义）。ABRT 行携带 `headers_seen=0|1`；C 报告
+  分列两种比例；迟到的中止（r32.2）仍撤销早期标记。
+* **R3（预热门）：** 期望 store 数 = `C_ROUNDS + 4`（探针 + C 前缀 +
+  3 个 D T0）；T1 重发 T0 前缀，真实 LMCache 可能不产生新 store——T1
+  不再计入。（展示 T1 是否产出新 `L2 store completed` 的真实日志片段
+  留待硬件运行；若有，此门可安全放宽。）
+* **R4（chunk-size grep）：** grep 替换内加 `|| true`，`-Eeuo pipefail`
+  下无任何 `*.env` 的运行会落到常规 INCONCLUSIVE（退出 5），不再以
+  退出 2 静默死掉。
+* **R5（空报告 trap）：** `trap ... EXIT` 在提前退出时删除仍为空的
+  `pr-checks-report-*.md`（r32.2 的原子预留在报告块之前创建了占位文件）。
+* **R6（本地挂起连接）：** 网络依赖测试不再拨打 `10.255.255.1`（无路由
+  主机上 ENETUNREACH 立即失败），改为饱和本地监听器的 accept 队列；
+  若内核无法让本地 connect 挂起，测试 SKIP 并说明原因——有无默认路由
+  表现一致。
+* 琐碎：TEST MODE 横幅 `--` → `—`，`stop_rc` 声明为 `local`，零事件预热
+  文案提及 `LMCACHE_LOG_LEVEL` DEBUG。
+* 测试：新建 `tests/unit/test_r33_regression.py`（7 个测试）覆盖 R1–R5；
+  r32.2 的 R3 测试容差收紧（300 ms 窗口上限 550 ms）。突变体 M1–M5
+  （D 无 PER_TOK、early 按响应头、含 T1 计数、去掉 `|| true`、去掉
+EXIT-trap）全部为红。
+* 硬件运行尚未执行——「已在硬件验证」在运行落地之前有意不写入。
 **最终追加评审（2026 年 11 月 27 日）：** r32.1 的修复被接受；这里关闭两个
 窄问题，不改动 R1/R2/R6/R7。
 * **R3（截止时间执行）：** `abort_stream` 现在使用 `time.monotonic()`（绝不
